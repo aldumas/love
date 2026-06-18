@@ -92,4 +92,31 @@ puts "  (a * b) composition             -> #{(a * b).class}"
 puts "  is_affine_2d_transform          -> #{t.is_affine_2d_transform}"
 
 puts
+puts "=" * 40
+puts "Love::Filesystem  (real physfs backend)"
+puts "=" * 40
+
+# Bootstrap physfs: init with the executable path, then pick a save identity.
+# Love::ARG0 is provided by the harness (mirrors main(argv[0])).
+Love::Filesystem.init(arg0: Love::ARG0)
+Love::Filesystem.set_identity(name: "love_mrb_harness")
+puts "save directory          -> #{Love::Filesystem.get_save_directory}"
+
+Love::Filesystem.write(name: "greeting.txt", data: "hello\nfrom mruby\n")
+puts "exists(greeting.txt)    -> #{Love::Filesystem.exists(path: 'greeting.txt')}"
+puts "get_info                -> #{Love::Filesystem.get_info(path: 'greeting.txt').inspect}"
+puts "read                    -> #{Love::Filesystem.read(name: 'greeting.txt').inspect}"
+puts "lines                   -> #{Love::Filesystem.lines(name: 'greeting.txt').inspect}"
+
+# A File object with keyword-arg methods.
+f = Love::Filesystem.open_file(name: "greeting.txt", mode: "r")
+puts
+puts "open_file(...)          -> #{f.class} (mode=#{f.get_mode}, size=#{f.get_size})"
+puts "  f.read(bytes: 5)      -> #{f.read(bytes: 5).inspect}"
+f.close
+
+# Clean up so re-runs start fresh.
+Love::Filesystem.remove(name: "greeting.txt")
+
+puts
 puts "Try editing this file (testing/mruby/sample.rb) and re-running!"

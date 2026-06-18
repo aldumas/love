@@ -31,8 +31,9 @@ extern "C" {
 #include <string>
 #include <vector>
 
-namespace love { namespace timer { extern "C" void mrb_love_timer_init(mrb_state *mrb); } }
-namespace love { namespace math  { extern "C" void mrb_love_math_init(mrb_state *mrb);  } }
+namespace love { namespace timer      { extern "C" void mrb_love_timer_init(mrb_state *mrb); } }
+namespace love { namespace math       { extern "C" void mrb_love_math_init(mrb_state *mrb);  } }
+namespace love { namespace filesystem { extern "C" void mrb_love_filesystem_init(mrb_state *mrb); } }
 
 static bool read_file(const char *path, std::string &out)
 {
@@ -80,10 +81,16 @@ int main(int argc, char **argv)
 	}
 
 	// Top-level namespace that all LÖVE modules live under.
-	mrb_define_module(mrb, "Love");
+	struct RClass *love = mrb_define_module(mrb, "Love");
+
+	// Expose the executable path so scripts can bootstrap the filesystem module
+	// (Love::Filesystem.init(arg0: Love::ARG0)), mirroring what love.cpp passes
+	// from main(argv[0]) in the real engine.
+	mrb_define_const(mrb, love, "ARG0", mrb_str_new_cstr(mrb, argv[0]));
 
 	love::timer::mrb_love_timer_init(mrb);
 	love::math::mrb_love_math_init(mrb);
+	love::filesystem::mrb_love_filesystem_init(mrb);
 
 	mrbc_context *ctx = mrbc_context_new(mrb);
 	mrbc_filename(mrb, ctx, path.c_str());

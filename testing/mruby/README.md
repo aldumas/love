@@ -13,12 +13,15 @@ arguments**.
 | Runtime layer (`mrbx_*` helpers, Object/Type binding, module registration) | `src/common/mrb_runtime.{h,cpp}` |
 | Ported module: timer (module functions) | `src/modules/timer/wrap_Timer_mrb.cpp` |
 | Ported module: math (functions + RandomGenerator, BezierCurve, Transform object types) | `src/modules/math/wrap_Math_mrb.cpp` |
+| Ported module: filesystem (functions + File, FileData; real physfs backend) | `src/modules/filesystem/wrap_Filesystem_mrb.cpp` |
 | Standalone demo harness | `testing/mruby/harness.cpp` |
 | nanosleep/deprecation stubs (avoid linking SDL for the demo) | `testing/mruby/delay_stub.cpp` |
 | Build (`make`, `make run`, `make mruby`) | `testing/mruby/Makefile` |
 
 The full `love` executable can't link until all 74 module wrappers are ported,
-so this harness exercises the ported modules (`timer`, `math`) end-to-end.
+so this harness exercises the ported modules (`timer`, `math`, `filesystem`)
+end-to-end. The filesystem module links the bundled physfs library (compiled as
+C) and SDL3 (`/usr/local/lib`), so the harness now depends on `libSDL3`.
 
 ## API shape
 
@@ -67,10 +70,14 @@ Makefile and call its `mrb_love_<name>_init` from `harness.cpp`.
 
 ## Remaining work (per-module template established by this slice)
 
-1. Port the other 72 `wrap_*.cpp` files to the `wrap_*_mrb.cpp` pattern, one
+1. Port the other 71 `wrap_*.cpp` files to the `wrap_*_mrb.cpp` pattern, one
    module at a time, converting positional params to keyword args. The timer
-   slice covers module functions; the math slice covers object types with
-   instance methods (`mrbx_register_type` / `mrbx_pushtype`).
+   slice covers module functions; math covers object types with instance
+   methods (`mrbx_register_type` / `mrbx_pushtype`); filesystem covers an
+   abstract module with a real backend (physfs), returning Hashes/arrays and
+   wrapping File/FileData objects.
+   Deferred within filesystem: the Lua-loader functions (load, require paths),
+   CommonPath mounting, symlinks, fused/android settings, Data-based mounting.
 2. Replace the embedded Lua boot scripts (`src/modules/love/boot.lua`,
    `callbacks.lua`, `arg.lua`) with Ruby equivalents; map the Lua coroutine
    boot loop onto mruby `Fiber`.

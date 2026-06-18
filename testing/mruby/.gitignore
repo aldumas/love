@@ -1,3 +1,2 @@
-# Build artifact produced by the build command in README.md.
-# It is ~3.5 MB and statically linked; rebuild rather than version it.
 love_mrb_harness
+.obj/
