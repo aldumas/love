@@ -34,6 +34,8 @@ CXX      ?= g++
 CXXSTD   ?= c++17
 CXXFLAGS ?= -std=$(CXXSTD) -O2 -Wall
 INCLUDES := -I$(LOVE_SRC) -I$(LOVE_SRC)/modules -I$(MRUBY_INC) -I$(MRUBY_GEN)
+# So the harness can locate the ported boot scripts (arg.rb/callbacks.rb/boot.rb).
+CXXFLAGS += -DLOVE_SRC_DIR='"$(LOVE_SRC)"'
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
 LDLIBS   := -lmruby -lSDL3 -lpthread -lm
 
