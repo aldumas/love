@@ -25,9 +25,11 @@
 # Love.respond_to?(:name). (Note: `load` collides with the private Kernel#load,
 # but respond_to? only sees it once the game defines a *public* Love.load.)
 #
-# Modules not yet ported (event, graphics, window, ...) are detected with
+# Modules not yet ported (graphics, window, ...) are detected with
 # const_defined? and their branches skipped, exactly as the Lua version guards
-# with `if love.event` etc.
+# with `if love.graphics` etc. The event module IS ported: when present, the run
+# loop pumps and polls Love::Event, dispatching each [:name, *args] through the
+# handler table (and honoring :quit with the love.quit veto).
 
 module Love
   class << self
@@ -46,15 +48,22 @@ module Love
     @quit_requested ||= false
   end
 
+  # Forwards an event named :foo to the game's Love.foo callback if it defines
+  # one. Used to build the handler table without repeating the respond_to? dance.
+  def self.forward(name)
+    ->(*a) { Love.send(name, *a) if Love.respond_to?(name) }
+  end
+
   def self.create_handlers
-    # The full handler table forwards window/input events to user callbacks.
-    # Only the events reachable without the event module are wired up here;
-    # the rest are placeholders that forward when the relevant modules land.
-    @handlers = Hash.new { |_h, name| raise "Unknown event: #{name}" }
-    @handlers[:quit] = ->(*) { }
-    @handlers[:keypressed]  = ->(*a) { Love.keypressed(*a)  if Love.respond_to?(:keypressed) }
-    @handlers[:keyreleased] = ->(*a) { Love.keyreleased(*a) if Love.respond_to?(:keyreleased) }
-    @handlers[:resize]      = ->(*a) { Love.resize(*a)      if Love.respond_to?(:resize) }
+    # The handler table forwards window/input events to the matching user
+    # callback. :quit is handled specially in the run loop (it can be vetoed),
+    # so its entry is just a no-op. Unknown events (anything without an entry)
+    # are ignored -- the SDL backend can emit more than we forward.
+    @handlers = {}
+    @handlers[:quit]          = ->(*) { }
+    [:keypressed, :keyreleased, :textinput,
+     :mousepressed, :mousereleased, :mousemoved, :wheelmoved,
+     :focus, :resize].each { |name| @handlers[name] = forward(name) }
   end
 
   # Default main loop. Returns a callable run once per frame by the boot Fiber:
@@ -66,9 +75,28 @@ module Love
     Timer.step if const_defined?(:Timer)
 
     lambda do
-      # Process events. The event module isn't ported yet, so we only honor the
-      # Love.quit! stand-in. With the event module this becomes event.poll.
-      if quit_requested?
+      # Process events. With love.event ported, pump the OS queue and dispatch
+      # each event through the handler table; :quit can be vetoed by Love.quit.
+      # Without it, fall back to the Love.quit! stand-in.
+      if const_defined?(:Event)
+        Event.pump
+        # Collect an exit code rather than `return`ing from inside the block:
+        # a block's `return` targets its defining method, which has already
+        # exited by the time the boot Fiber calls this lambda.
+        exit_code = nil
+        Event.poll.each do |name, *args|
+          if name == :quit
+            unless Love.respond_to?(:quit) && Love.quit
+              exit_code = args[0] || 0
+              break
+            end
+          else
+            h = @handlers[name]
+            h.call(*args) if h
+          end
+        end
+        return exit_code unless exit_code.nil?
+      elsif quit_requested?
         vetoed = Love.respond_to?(:quit) && Love.quit
         return 0 unless vetoed
         @quit_requested = false # quit was vetoed by the game

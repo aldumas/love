@@ -34,6 +34,7 @@ extern "C" {
 namespace love { namespace timer      { extern "C" void mrb_love_timer_init(mrb_state *mrb); } }
 namespace love { namespace math       { extern "C" void mrb_love_math_init(mrb_state *mrb);  } }
 namespace love { namespace filesystem { extern "C" void mrb_love_filesystem_init(mrb_state *mrb); } }
+namespace love { namespace event      { extern "C" void mrb_love_event_init(mrb_state *mrb); } }
 
 static bool read_file(const char *path, std::string &out)
 {
@@ -143,6 +144,7 @@ int main(int argc, char **argv)
 	love::timer::mrb_love_timer_init(mrb);
 	love::math::mrb_love_math_init(mrb);
 	love::filesystem::mrb_love_filesystem_init(mrb);
+	love::event::mrb_love_event_init(mrb);
 
 	int rc;
 	if (boot)

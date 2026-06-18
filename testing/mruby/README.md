@@ -14,15 +14,17 @@ arguments**.
 | Ported module: timer (module functions) | `src/modules/timer/wrap_Timer_mrb.cpp` |
 | Ported module: math (functions + RandomGenerator, BezierCurve, Transform object types) | `src/modules/math/wrap_Math_mrb.cpp` |
 | Ported module: filesystem (functions + File, FileData; real physfs backend) | `src/modules/filesystem/wrap_Filesystem_mrb.cpp` |
+| Ported module: event (queue + lean window-independent SDL backend) | `src/modules/event/wrap_Event_mrb.cpp` |
 | Ported boot scripts (arg/callbacks/boot) | `src/modules/love/{arg,callbacks,boot}.rb` |
 | Standalone demo harness | `testing/mruby/harness.cpp` |
 | nanosleep/deprecation stubs (avoid linking SDL for the demo) | `testing/mruby/delay_stub.cpp` |
 | Build (`make`, `make run`, `make mruby`) | `testing/mruby/Makefile` |
 
 The full `love` executable can't link until all 74 module wrappers are ported,
-so this harness exercises the ported modules (`timer`, `math`, `filesystem`)
-end-to-end. The filesystem module links the bundled physfs library (compiled as
-C) and SDL3 (`/usr/local/lib`), so the harness now depends on `libSDL3`.
+so this harness exercises the ported modules (`timer`, `math`, `filesystem`,
+`event`) end-to-end. The filesystem module links the bundled physfs library
+(compiled as C) and SDL3 (`/usr/local/lib`), so the harness depends on `libSDL3`
+(also used by the event backend).
 
 ## API shape
 
@@ -90,7 +92,9 @@ Makefile and call its `mrb_love_<name>_init` from `harness.cpp`.
 - `callbacks.rb` — the default `Love.run` main loop, the event-handler table,
   and `Love.error_handler`. Game callbacks are public singleton methods on
   `Love` (`def Love.load(args, raw)`, `def Love.update(dt)`, `def Love.draw`,
-  `def Love.quit`), detected with `Love.respond_to?`.
+  `def Love.quit`), detected with `Love.respond_to?`. The loop pumps and polls
+  `Love::Event` (now ported): each `[:name, *args]` event is dispatched through
+  the handler table, and `:quit` is routed through `Love.quit` (which may veto).
 - `boot.rb` — `Love.boot` (filesystem init + identity) and `Love.init` (config,
   `Love.conf`, first timestep, load the game), then the **root coroutine**: an
   mruby `Fiber` (`$LOVE_MAIN`) that runs boot/init/run inside an error boundary
@@ -98,10 +102,11 @@ Makefile and call its `mrb_love_<name>_init` from `harness.cpp`.
   the same resume-until-done loop `love.cpp` runs against the Lua boot coroutine.
 
 Adaptations for mruby / the current module set: `Fiber` replaces the Lua
-coroutine; modules not yet ported (event, graphics, window) are detected with
-`const_defined?` and their branches skipped (so `draw` is called directly and a
-`Love.quit!` flag stands in for an event-module "quit"); the game's main file is
-`eval`'d (mruby has no file-level `Kernel#load`).
+coroutine; modules not yet ported (graphics, window) are detected with
+`const_defined?` and their branches skipped (so `draw` is called directly); the
+game's main file is `eval`'d (mruby has no file-level `Kernel#load`). The event
+module is wired up — a `Love.quit!` stand-in remains only as the fallback when
+`love.event` is absent.
 
 ## Remaining work (per-module template established by this slice)
 
@@ -115,8 +120,12 @@ coroutine; modules not yet ported (event, graphics, window) are detected with
    CommonPath mounting, symlinks, fused/android settings, Data-based mounting.
 2. DONE: the Lua boot scripts (`boot.lua`, `callbacks.lua`, `arg.lua`) are
    ported to Ruby (`boot.rb`, `callbacks.rb`, `arg.rb`) with the coroutine boot
-   loop mapped onto mruby `Fiber`. Still to do as more modules land: wire the
-   real event/graphics/window branches and the graphics-backed error screen.
+   loop mapped onto mruby `Fiber`, and the run loop now pumps/polls the ported
+   `love.event`. Still to do as more modules land: wire the graphics/window
+   branches and the graphics-backed error screen. The event backend
+   (`HarnessEvent`) is intentionally lean — it converts only window-independent
+   SDL events; swap it for the full `event/sdl/Event.cpp` once window + the
+   input modules (keyboard/mouse/joystick/touch) are ported.
 3. Swap the object/proxy system: the Lua weak-table identity map needs an mruby
    equivalent so the same C++ object always maps to the same Ruby object.
 4. Wire CMake (`CMakeLists.txt`) to build `libmruby.a` and link it instead of

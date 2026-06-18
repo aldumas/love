@@ -20,6 +20,7 @@
 
 #include "mrb_runtime.h"
 #include "Module.h"
+#include "Variant.h"
 
 #include <unordered_map>
 
@@ -182,6 +183,118 @@ love::Object *mrbx_checktype(mrb_state *mrb, mrb_value v, const love::Type &type
 		mrb_raisef(mrb, E_TYPE_ERROR, "expected a %s", type.getName());
 
 	return o;
+}
+
+// Finds the love::Type a wrapped Ruby object was created with, by reverse
+// lookup of its class in the type->class map. Returns nullptr if v isn't a
+// wrapped love::Object.
+static love::Type *mrbx_typeof(mrb_state *mrb, mrb_value v)
+{
+	if (mrb_data_check_get_ptr(mrb, v, &mrbx_object_data_type) == nullptr)
+		return nullptr;
+
+	struct RClass *cls = mrb_obj_class(mrb, v);
+	for (const auto &pair : typeClasses)
+	{
+		if (pair.second == cls)
+			return const_cast<love::Type *>(pair.first);
+	}
+	return nullptr;
+}
+
+// --- Variant <-> Ruby ----------------------------------------------------
+
+mrb_value mrbx_pushvariant(mrb_state *mrb, const Variant &v)
+{
+	const Variant::Data &data = v.getData();
+
+	switch (v.getType())
+	{
+	case Variant::BOOLEAN:
+		return mrb_bool_value(data.boolean);
+	case Variant::NUMBER:
+		return mrb_float_value(mrb, data.number);
+	case Variant::STRING:
+		return mrb_str_new(mrb, data.string->str, data.string->len);
+	case Variant::SMALLSTRING:
+		return mrb_str_new(mrb, data.smallstring.str, data.smallstring.len);
+	case Variant::LOVEOBJECT:
+		return mrbx_pushtype(mrb, *data.objectproxy.type, data.objectproxy.object);
+	case Variant::TABLE:
+	{
+		mrb_value hash = mrb_hash_new(mrb);
+		for (const auto &kv : data.table->pairs)
+			mrb_hash_set(mrb, hash, mrbx_pushvariant(mrb, kv.first), mrbx_pushvariant(mrb, kv.second));
+		return hash;
+	}
+	case Variant::LUSERDATA:
+		// Light userdata (raw pointers, e.g. touch ids) has no safe Ruby
+		// representation; surface it as an integer address.
+		return mrb_fixnum_value((mrb_int)(intptr_t) data.userdata);
+	case Variant::NIL:
+	case Variant::UNKNOWN:
+	default:
+		return mrb_nil_value();
+	}
+}
+
+Variant mrbx_checkvariant(mrb_state *mrb, mrb_value v)
+{
+	switch (mrb_type(v))
+	{
+	case MRB_TT_FALSE:
+		// MRB_TT_FALSE covers both nil and false; distinguish by value.
+		return mrb_nil_p(v) ? Variant() : Variant(false);
+	case MRB_TT_TRUE:
+		return Variant(true);
+	case MRB_TT_INTEGER:
+		return Variant((double) mrb_integer(v));
+	case MRB_TT_FLOAT:
+		return Variant(mrb_float(v));
+	case MRB_TT_STRING:
+		return Variant(RSTRING_PTR(v), RSTRING_LEN(v));
+	case MRB_TT_SYMBOL:
+	{
+		mrb_int len = 0;
+		const char *name = mrb_sym_name_len(mrb, mrb_symbol(v), &len);
+		return Variant(name, (size_t) len);
+	}
+	case MRB_TT_ARRAY:
+	{
+		// Map an Array to a table with 1-based integer keys (Lua convention),
+		// so round-tripping through native code matches LÖVE's table semantics.
+		Variant::SharedTable *table = new Variant::SharedTable();
+		mrb_int n = RARRAY_LEN(v);
+		table->pairs.reserve(n);
+		for (mrb_int i = 0; i < n; i++)
+			table->pairs.emplace_back(Variant((double)(i + 1)), mrbx_checkvariant(mrb, mrb_ary_ref(mrb, v, i)));
+		// Variant takes ownership of the table's initial reference.
+		return Variant(table);
+	}
+	case MRB_TT_HASH:
+	{
+		Variant::SharedTable *table = new Variant::SharedTable();
+		mrb_value keys = mrb_hash_keys(mrb, v);
+		mrb_int n = RARRAY_LEN(keys);
+		table->pairs.reserve(n);
+		for (mrb_int i = 0; i < n; i++)
+		{
+			mrb_value k = mrb_ary_ref(mrb, keys, i);
+			table->pairs.emplace_back(mrbx_checkvariant(mrb, k), mrbx_checkvariant(mrb, mrb_hash_get(mrb, v, k)));
+		}
+		// Variant takes ownership of the table's initial reference.
+		return Variant(table);
+	}
+	case MRB_TT_DATA:
+	{
+		love::Type *type = mrbx_typeof(mrb, v);
+		if (type != nullptr)
+			return Variant(type, (love::Object *) mrb_data_check_get_ptr(mrb, v, &mrbx_object_data_type));
+		return Variant::unknown();
+	}
+	default:
+		return Variant::unknown();
+	}
 }
 
 // --- Module registration -------------------------------------------------

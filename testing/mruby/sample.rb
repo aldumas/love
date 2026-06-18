@@ -118,5 +118,22 @@ f.close
 # Clean up so re-runs start fresh.
 Love::Filesystem.remove(name: "greeting.txt")
 
+# --- event ----------------------------------------------------------------
+# Push custom events onto the queue, then drain them. poll returns an Array of
+# [:name, *args]; the name is a Symbol and the args round-trip through Variant.
+puts
+puts "=== Love::Event ==="
+Love::Event.push(name: "score", args: [42, "ada"])
+Love::Event.push(name: "ping")
+Love::Event.quit(code: 7)
+
+Love::Event.poll.each do |name, *args|
+  puts "  event #{name.inspect} args=#{args.inspect}"
+end
+
+# pump drains real OS events; headless there are none, so the queue is empty.
+Love::Event.pump
+puts "after pump, poll          -> #{Love::Event.poll.inspect}"
+
 puts
 puts "Try editing this file (testing/mruby/sample.rb) and re-running!"

@@ -91,7 +91,10 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/data/ByteData.cpp \
 	$(LOVE_SRC)/modules/thread/threads.cpp \
 	$(LOVE_SRC)/modules/thread/sdl/threads.cpp \
-	$(LOVE_SRC)/modules/thread/sdl/Thread.cpp
+	$(LOVE_SRC)/modules/thread/sdl/Thread.cpp \
+	$(LOVE_SRC)/modules/event/wrap_Event_mrb.cpp \
+	$(LOVE_SRC)/modules/event/Event.cpp \
+	$(LOVE_SRC)/common/Variant.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 

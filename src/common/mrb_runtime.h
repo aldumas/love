@@ -48,6 +48,7 @@ namespace love
 {
 
 class Module;
+class Variant;
 
 /**
  * mruby replacement for the Lua-era WrappedModule. Describes a LÖVE module to
@@ -117,6 +118,21 @@ mrb_value mrbx_number (mrb_state *mrb, double n);
 mrb_value mrbx_integer(mrb_state *mrb, int n);
 mrb_value mrbx_boolean(mrb_state *mrb, bool b);
 mrb_value mrbx_string (mrb_state *mrb, const std::string &s);
+
+/**
+ * --- Variant <-> Ruby ----------------------------------------------------
+ *
+ * LÖVE's Variant is the type-erased value used for data that crosses the
+ * scripting boundary outside the normal argument path: event-queue messages,
+ * thread channels, etc. These convert between a Variant and an mrb_value.
+ *
+ * Scalars map directly (nil/bool/number/string). A LOVEOBJECT becomes the
+ * wrapped Ruby object (via mrbx_pushtype); a table becomes a Ruby Hash (and a
+ * Ruby Hash or Array converts back to a table). Values that can't be stored
+ * safely become Variant::UNKNOWN.
+ **/
+mrb_value mrbx_pushvariant(mrb_state *mrb, const Variant &v);
+Variant   mrbx_checkvariant(mrb_state *mrb, mrb_value v);
 
 /**
  * The single mruby data type used to wrap every love::Object. The Ruby class

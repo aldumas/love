@@ -22,12 +22,21 @@ end
 def Love.update(dt)
   @frame += 1
   @elapsed += dt
-  # Ask the loop to stop after 5 frames (stands in for an event-module quit).
-  Love.quit! if @frame >= 5
+  # Push a real quit event through love.event after 5 frames. The run loop pumps
+  # and polls it, then routes :quit through Love.quit (which may veto).
+  Love::Event.quit(code: 0) if @frame >= 5
 end
 
 def Love.draw
   puts format("[draw]   frame %d  (t=%.3fs)", @frame, @elapsed)
+end
+
+# Input callbacks: with love.event ported, these fire when the queue carries
+# matching events. (Headless there's no window, so they're quiet here, but the
+# wiring is exercised the moment window lands.)
+def Love.keypressed(key, scancode, isrepeat)
+  puts "[key]    #{key} pressed"
+  Love::Event.quit(code: 0) if key == "escape"
 end
 
 def Love.quit
