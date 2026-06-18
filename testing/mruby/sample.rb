@@ -135,5 +135,40 @@ end
 Love::Event.pump
 puts "after pump, poll          -> #{Love::Event.poll.inspect}"
 
+# --- window ----------------------------------------------------------------
+# Love::Window is only defined when a display is available (the lean backend
+# needs SDL video). Guard with const_defined? like the boot loop does.
+puts
+puts "=== Love::Window ==="
+if Love.const_defined?(:Window)
+  w = Love::Window
+  puts "displays                -> #{w.get_display_count}"
+  puts "desktop dimensions      -> #{w.get_desktop_dimensions(display: 1).inspect}"
+  puts "system theme            -> #{w.get_system_theme}"
+
+  # set_mode flattens the old settings table into keyword arguments.
+  ok = w.set_mode(width: 640, height: 480, resizable: true, centered: true)
+  w.set_title(title: "mruby harness window")
+  puts "set_mode(640x480)       -> #{ok}"
+  puts "is_open                 -> #{w.is_open}"
+  puts "get_title               -> #{w.get_title.inspect}"
+
+  mode = w.get_mode
+  puts "get_mode                -> #{mode[:width]}x#{mode[:height]} resizable=#{mode[:resizable]} display=#{mode[:display]}"
+  puts "get_position            -> #{w.get_position.inspect}"
+  puts "has_focus               -> #{w.has_focus}"
+  puts "dpi scale               -> #{w.get_dpi_scale}"
+
+  # Pump a few frames so the window actually appears and OS events flow through
+  # the (lean) event backend; move/click the window to see events here.
+  3.times do
+    Love::Event.pump
+    Love::Event.poll.each { |name, *a| puts "  window event #{name.inspect} #{a.inspect}" }
+    Love::Timer.sleep(seconds: 0.05)
+  end
+else
+  puts "(no display available -- Love::Window not registered)"
+end
+
 puts
 puts "Try editing this file (testing/mruby/sample.rb) and re-running!"

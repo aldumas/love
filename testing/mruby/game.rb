@@ -10,13 +10,18 @@
 
 def Love.conf(t)
   t[:title] = "mruby boot demo"
-  puts "[conf]   title set to #{t[:title].inspect}"
+  t[:window] = { width: 640, height: 480, resizable: true }
+  puts "[conf]   title set to #{t[:title].inspect}, window #{t[:window].inspect}"
 end
 
 def Love.load(args, raw)
   @frame = 0
   @elapsed = 0.0
   puts "[load]   game starting (parsed args: #{args.inspect})"
+  if Love.const_defined?(:Window)
+    m = Love::Window.get_mode
+    puts "[load]   window open=#{Love::Window.is_open} #{m[:width]}x#{m[:height]} title=#{Love::Window.get_title.inspect}"
+  end
 end
 
 def Love.update(dt)

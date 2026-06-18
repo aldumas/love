@@ -94,7 +94,9 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/thread/sdl/Thread.cpp \
 	$(LOVE_SRC)/modules/event/wrap_Event_mrb.cpp \
 	$(LOVE_SRC)/modules/event/Event.cpp \
-	$(LOVE_SRC)/common/Variant.cpp
+	$(LOVE_SRC)/common/Variant.cpp \
+	$(LOVE_SRC)/modules/window/wrap_Window_mrb.cpp \
+	$(LOVE_SRC)/modules/window/Window.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 

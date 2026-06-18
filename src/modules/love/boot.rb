@@ -80,6 +80,18 @@ module Love
     # which ones are present. (Real boot.lua require()s each enabled module.)
     create_handlers
 
+    # Create the window from the config, like love.window.setMode in boot.lua.
+    # Guarded by const_defined? so headless runs (no Love::Window) just skip it.
+    if const_defined?(:Window) && (c[:modules].nil? || c[:modules][:window] != false)
+      win = c[:window] || {}
+      Window.set_mode(width: win[:width] || 800, height: win[:height] || 600,
+        fullscreen: win.fetch(:fullscreen, false),
+        resizable: win.fetch(:resizable, false),
+        borderless: win.fetch(:borderless, false),
+        centered: win.fetch(:centered, true))
+      Window.set_title(title: c[:title]) if c[:title]
+    end
+
     # First timestep -- window creation / load happen around here in real LÖVE.
     Timer.step if const_defined?(:Timer)
 
