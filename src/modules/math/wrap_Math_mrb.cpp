@@ -36,8 +36,11 @@
 #include "common/config.h"
 #include "common/mrb_runtime.h"
 #include "common/Vector.h"
+#include "common/Matrix.h"
 #include "MathModule.h"
 #include "RandomGenerator.h"
+#include "BezierCurve.h"
+#include "Transform.h"
 
 #include <vector>
 #include <cmath>
@@ -93,6 +96,25 @@ static RandomGenerator::Seed seedFromValue(mrb_value v)
 	RandomGenerator::Seed s;
 	s.b64 = (uint64) mrb_integer(v);
 	return s;
+}
+
+// Returns a flat Ruby array [x0,y0,x1,y1,...] from a Vector2 list.
+static mrb_value pushVector2Array(mrb_state *mrb, const std::vector<Vector2> &points)
+{
+	mrb_value arr = mrb_ary_new_capa(mrb, (mrb_int) points.size() * 2);
+	for (const Vector2 &p : points)
+	{
+		mrb_ary_push(mrb, arr, mrbx_number(mrb, p.x));
+		mrb_ary_push(mrb, arr, mrbx_number(mrb, p.y));
+	}
+	return arr;
+}
+
+// Returns a Ruby array [x, y].
+static mrb_value pushPoint(mrb_state *mrb, const Vector2 &p)
+{
+	mrb_value xy[2] = { mrbx_number(mrb, p.x), mrbx_number(mrb, p.y) };
+	return mrb_ary_new_from_values(mrb, 2, xy);
 }
 
 // =========================================================================
@@ -159,6 +181,365 @@ static const MrbReg rg_functions[] =
 	{ "get_seed",      rg_getSeed,      MRB_ARGS_NONE() },
 	{ "set_state",     rg_setState,     MRB_ARGS_KEY(1, 0) },
 	{ "get_state",     rg_getState,     MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::BezierCurve instance methods
+//
+// Control points are 0-indexed here (Ruby convention), unlike the 1-indexed
+// Lua API.
+// =========================================================================
+
+static mrb_value bc_getDegree(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, (int) mrbx_checktype<BezierCurve>(mrb, self)->getDegree());
+}
+
+static mrb_value bc_getControlPointCount(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, (int) mrbx_checktype<BezierCurve>(mrb, self)->getControlPointCount());
+}
+
+static mrb_value bc_getDerivative(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *deriv = new BezierCurve(mrbx_checktype<BezierCurve>(mrb, self)->getDerivative());
+	mrb_value out = mrbx_pushtype(mrb, deriv);
+	deriv->release();
+	return out;
+}
+
+static mrb_value bc_getControlPoint(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *curve = mrbx_checktype<BezierCurve>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"i"}, 1, v);
+	int i = mrbx_checkint(mrb, v[0]);
+	mrb_value out = mrb_nil_value();
+	bool err = mrbx_catchexcept(mrb, [&]() { out = pushPoint(mrb, curve->getControlPoint(i)); });
+	return err ? mrb_nil_value() : out;
+}
+
+static mrb_value bc_setControlPoint(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *curve = mrbx_checktype<BezierCurve>(mrb, self);
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"i", "x", "y"}, 3, v);
+	int i = mrbx_checkint(mrb, v[0]);
+	Vector2 p(mrbx_checkfloat(mrb, v[1]), mrbx_checkfloat(mrb, v[2]));
+	mrbx_catchexcept(mrb, [&]() { curve->setControlPoint(i, p); });
+	return self;
+}
+
+static mrb_value bc_insertControlPoint(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *curve = mrbx_checktype<BezierCurve>(mrb, self);
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"x", "y", "position"}, 2, v);
+	Vector2 p(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]));
+	int pos = mrbx_optint(mrb, v[2], -1);
+	mrbx_catchexcept(mrb, [&]() { curve->insertControlPoint(p, pos); });
+	return self;
+}
+
+static mrb_value bc_removeControlPoint(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *curve = mrbx_checktype<BezierCurve>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"i"}, 1, v);
+	int i = mrbx_checkint(mrb, v[0]);
+	mrbx_catchexcept(mrb, [&]() { curve->removeControlPoint(i); });
+	return self;
+}
+
+static mrb_value bc_translate(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *curve = mrbx_checktype<BezierCurve>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"dx", "dy"}, 2, v);
+	curve->translate(Vector2(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1])));
+	return self;
+}
+
+static mrb_value bc_rotate(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *curve = mrbx_checktype<BezierCurve>(mrb, self);
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"angle", "ox", "oy"}, 1, v);
+	curve->rotate(mrbx_checknumber(mrb, v[0]), Vector2(mrbx_optfloat(mrb, v[1], 0), mrbx_optfloat(mrb, v[2], 0)));
+	return self;
+}
+
+static mrb_value bc_scale(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *curve = mrbx_checktype<BezierCurve>(mrb, self);
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"factor", "ox", "oy"}, 1, v);
+	curve->scale(mrbx_checknumber(mrb, v[0]), Vector2(mrbx_optfloat(mrb, v[1], 0), mrbx_optfloat(mrb, v[2], 0)));
+	return self;
+}
+
+static mrb_value bc_evaluate(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *curve = mrbx_checktype<BezierCurve>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"t"}, 1, v);
+	double t = mrbx_checknumber(mrb, v[0]);
+	mrb_value out = mrb_nil_value();
+	bool err = mrbx_catchexcept(mrb, [&]() { out = pushPoint(mrb, curve->evaluate(t)); });
+	return err ? mrb_nil_value() : out;
+}
+
+static mrb_value bc_getSegment(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *curve = mrbx_checktype<BezierCurve>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"from", "to"}, 2, v);
+	double t1 = mrbx_checknumber(mrb, v[0]);
+	double t2 = mrbx_checknumber(mrb, v[1]);
+	BezierCurve *seg = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { seg = curve->getSegment(t1, t2); });
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, seg);
+	seg->release();
+	return out;
+}
+
+static mrb_value bc_render(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *curve = mrbx_checktype<BezierCurve>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"accuracy"}, 0, v);
+	int accuracy = mrbx_optint(mrb, v[0], 4);
+	std::vector<Vector2> points;
+	bool err = mrbx_catchexcept(mrb, [&]() { points = curve->render(accuracy); });
+	return err ? mrb_nil_value() : pushVector2Array(mrb, points);
+}
+
+static mrb_value bc_renderSegment(mrb_state *mrb, mrb_value self)
+{
+	BezierCurve *curve = mrbx_checktype<BezierCurve>(mrb, self);
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"from", "to", "accuracy"}, 2, v);
+	double start = mrbx_checknumber(mrb, v[0]);
+	double end = mrbx_checknumber(mrb, v[1]);
+	int accuracy = mrbx_optint(mrb, v[2], 4);
+	std::vector<Vector2> points;
+	bool err = mrbx_catchexcept(mrb, [&]() { points = curve->renderSegment(start, end, accuracy); });
+	return err ? mrb_nil_value() : pushVector2Array(mrb, points);
+}
+
+static const MrbReg bc_functions[] =
+{
+	{ "get_degree",              bc_getDegree,            MRB_ARGS_NONE() },
+	{ "get_derivative",          bc_getDerivative,        MRB_ARGS_NONE() },
+	{ "get_control_point",       bc_getControlPoint,      MRB_ARGS_KEY(1, 0) },
+	{ "set_control_point",       bc_setControlPoint,      MRB_ARGS_KEY(3, 0) },
+	{ "insert_control_point",    bc_insertControlPoint,   MRB_ARGS_KEY(3, 0) },
+	{ "remove_control_point",    bc_removeControlPoint,   MRB_ARGS_KEY(1, 0) },
+	{ "get_control_point_count", bc_getControlPointCount, MRB_ARGS_NONE() },
+	{ "translate",               bc_translate,            MRB_ARGS_KEY(2, 0) },
+	{ "rotate",                  bc_rotate,               MRB_ARGS_KEY(3, 0) },
+	{ "scale",                   bc_scale,                MRB_ARGS_KEY(3, 0) },
+	{ "evaluate",                bc_evaluate,             MRB_ARGS_KEY(1, 0) },
+	{ "get_segment",             bc_getSegment,           MRB_ARGS_KEY(2, 0) },
+	{ "render",                  bc_render,               MRB_ARGS_KEY(1, 0) },
+	{ "render_segment",          bc_renderSegment,        MRB_ARGS_KEY(3, 0) },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::Transform instance methods
+//
+// Mutating methods return self so calls can be chained, matching the Lua API.
+// =========================================================================
+
+static mrb_value tf_clone(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self)->clone();
+	mrb_value out = mrbx_pushtype(mrb, t);
+	t->release();
+	return out;
+}
+
+static mrb_value tf_inverse(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self)->inverse();
+	mrb_value out = mrbx_pushtype(mrb, t);
+	t->release();
+	return out;
+}
+
+static mrb_value tf_apply(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"other"}, 1, v);
+	t->apply(mrbx_checktype<Transform>(mrb, v[0]));
+	return self;
+}
+
+static mrb_value tf_isAffine2DTransform(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, mrbx_checktype<Transform>(mrb, self)->getMatrix().isAffine2DTransform());
+}
+
+static mrb_value tf_translate(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 2, v);
+	t->translate(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]));
+	return self;
+}
+
+static mrb_value tf_rotate(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"angle"}, 1, v);
+	t->rotate(mrbx_checkfloat(mrb, v[0]));
+	return self;
+}
+
+static mrb_value tf_scale(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"sx", "sy"}, 1, v);
+	float sx = mrbx_checkfloat(mrb, v[0]);
+	t->scale(sx, mrbx_optfloat(mrb, v[1], sx));
+	return self;
+}
+
+static mrb_value tf_shear(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"kx", "ky"}, 2, v);
+	t->shear(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]));
+	return self;
+}
+
+static mrb_value tf_reset(mrb_state *mrb, mrb_value self)
+{
+	mrbx_checktype<Transform>(mrb, self)->reset();
+	return self;
+}
+
+static mrb_value tf_setTransformation(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self);
+	mrb_value v[9];
+	mrbx_get_kwargs(mrb, {"x", "y", "angle", "sx", "sy", "ox", "oy", "kx", "ky"}, 0, v);
+	float x  = mrbx_optfloat(mrb, v[0], 0.0f);
+	float y  = mrbx_optfloat(mrb, v[1], 0.0f);
+	float a  = mrbx_optfloat(mrb, v[2], 0.0f);
+	float sx = mrbx_optfloat(mrb, v[3], 1.0f);
+	float sy = mrbx_optfloat(mrb, v[4], sx);
+	float ox = mrbx_optfloat(mrb, v[5], 0.0f);
+	float oy = mrbx_optfloat(mrb, v[6], 0.0f);
+	float kx = mrbx_optfloat(mrb, v[7], 0.0f);
+	float ky = mrbx_optfloat(mrb, v[8], 0.0f);
+	t->setTransformation(x, y, a, sx, sy, ox, oy, kx, ky);
+	return self;
+}
+
+static mrb_value tf_getMatrix(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self);
+	const float *e = t->getMatrix().getElements();
+	// Returned in row-major order (stored column-major).
+	mrb_value arr = mrb_ary_new_capa(mrb, 16);
+	for (int row = 0; row < 4; row++)
+		for (int col = 0; col < 4; col++)
+			mrb_ary_push(mrb, arr, mrbx_number(mrb, e[col * 4 + row]));
+	return arr;
+}
+
+static mrb_value tf_setMatrix(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"elements", "layout"}, 1, v);
+
+	if (!mrb_array_p(v[0]) || RARRAY_LEN(v[0]) < 16)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "elements: must be an array of 16 numbers");
+
+	std::string layout = mrbx_optstring(mrb, v[1], "row");
+	bool columnmajor = layout == "column";
+
+	float in[16];
+	for (int i = 0; i < 16; i++)
+		in[i] = (float) mrb_as_float(mrb, mrb_ary_ref(mrb, v[0], i));
+
+	float e[16];
+	if (columnmajor)
+	{
+		for (int i = 0; i < 16; i++)
+			e[i] = in[i];
+	}
+	else
+	{
+		// Convert row-major input to column-major storage.
+		for (int col = 0; col < 4; col++)
+			for (int row = 0; row < 4; row++)
+				e[col * 4 + row] = in[row * 4 + col];
+	}
+
+	t->setMatrix(Matrix4(e));
+	return self;
+}
+
+static mrb_value tf_transformPoint(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 2, v);
+	Vector2 p = t->transformPoint(Vector2(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1])));
+	return pushPoint(mrb, p);
+}
+
+static mrb_value tf_inverseTransformPoint(mrb_state *mrb, mrb_value self)
+{
+	Transform *t = mrbx_checktype<Transform>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 2, v);
+	Vector2 p = t->inverseTransformPoint(Vector2(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1])));
+	return pushPoint(mrb, p);
+}
+
+// Transform * Transform -> Transform (composition). Positional, since it's an
+// operator: t1 * t2.
+static mrb_value tf_mul(mrb_state *mrb, mrb_value self)
+{
+	Transform *t1 = mrbx_checktype<Transform>(mrb, self);
+	mrb_value other;
+	mrb_get_args(mrb, "o", &other);
+	Transform *t2 = mrbx_checktype<Transform>(mrb, other);
+	Transform *t3 = new Transform(t1->getMatrix() * t2->getMatrix());
+	mrb_value out = mrbx_pushtype(mrb, t3);
+	t3->release();
+	return out;
+}
+
+static const MrbReg tf_functions[] =
+{
+	{ "clone",                   tf_clone,                MRB_ARGS_NONE() },
+	{ "inverse",                 tf_inverse,              MRB_ARGS_NONE() },
+	{ "apply",                   tf_apply,                MRB_ARGS_KEY(1, 0) },
+	{ "is_affine_2d_transform",  tf_isAffine2DTransform,  MRB_ARGS_NONE() },
+	{ "translate",               tf_translate,            MRB_ARGS_KEY(2, 0) },
+	{ "rotate",                  tf_rotate,               MRB_ARGS_KEY(1, 0) },
+	{ "scale",                   tf_scale,                MRB_ARGS_KEY(2, 0) },
+	{ "shear",                   tf_shear,                MRB_ARGS_KEY(2, 0) },
+	{ "reset",                   tf_reset,                MRB_ARGS_NONE() },
+	{ "set_transformation",      tf_setTransformation,    MRB_ARGS_KEY(9, 0) },
+	{ "set_matrix",              tf_setMatrix,            MRB_ARGS_KEY(2, 0) },
+	{ "get_matrix",              tf_getMatrix,            MRB_ARGS_NONE() },
+	{ "transform_point",         tf_transformPoint,       MRB_ARGS_KEY(2, 0) },
+	{ "inverse_transform_point", tf_inverseTransformPoint, MRB_ARGS_KEY(2, 0) },
+	{ "*",                       tf_mul,                  MRB_ARGS_REQ(1) },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -302,12 +683,44 @@ static mrb_value w_triangulate(mrb_state *mrb, mrb_value self)
 	return result;
 }
 
+static mrb_value w_newBezierCurve(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"points"}, 1, v);
+	std::vector<Vector2> points = checkVector2Array(mrb, v[0]);
+
+	BezierCurve *curve = instance()->newBezierCurve(points);
+	mrb_value out = mrbx_pushtype(mrb, curve);
+	curve->release();
+	return out;
+}
+
+static mrb_value w_newTransform(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[9];
+	mrbx_get_kwargs(mrb, {"x", "y", "angle", "sx", "sy", "ox", "oy", "kx", "ky"}, 0, v);
+
+	float sx = mrbx_optfloat(mrb, v[3], 1.0f);
+	Transform *t = instance()->newTransform(
+		mrbx_optfloat(mrb, v[0], 0.0f), mrbx_optfloat(mrb, v[1], 0.0f), mrbx_optfloat(mrb, v[2], 0.0f),
+		sx, mrbx_optfloat(mrb, v[4], sx), mrbx_optfloat(mrb, v[5], 0.0f), mrbx_optfloat(mrb, v[6], 0.0f),
+		mrbx_optfloat(mrb, v[7], 0.0f), mrbx_optfloat(mrb, v[8], 0.0f));
+
+	mrb_value out = mrbx_pushtype(mrb, t);
+	t->release();
+	return out;
+}
+
 static const MrbReg functions[] =
 {
 	{ "random",                w_random,             MRB_ARGS_KEY(2, 0) },
 	{ "random_normal",         w_randomNormal,       MRB_ARGS_KEY(2, 0) },
 	{ "set_random_seed",       w_setRandomSeed,      MRB_ARGS_KEY(1, 0) },
 	{ "new_random_generator",  w_newRandomGenerator, MRB_ARGS_KEY(1, 0) },
+	{ "new_bezier_curve",      w_newBezierCurve,     MRB_ARGS_KEY(1, 0) },
+	{ "new_transform",         w_newTransform,       MRB_ARGS_KEY(9, 0) },
 	{ "perlin_noise",          w_perlinNoise,        MRB_ARGS_KEY(4, 0) },
 	{ "simplex_noise",         w_simplexNoise,       MRB_ARGS_KEY(4, 0) },
 	{ "gamma_to_linear",       w_gammaToLinear,      MRB_ARGS_KEY(1, 0) },
@@ -335,6 +748,8 @@ extern "C" void mrb_love_math_init(mrb_state *mrb)
 
 	mrbx_register_module(mrb, w);
 	mrbx_register_type(mrb, RandomGenerator::type, rg_functions);
+	mrbx_register_type(mrb, BezierCurve::type, bc_functions);
+	mrbx_register_type(mrb, Transform::type, tf_functions);
 }
 
 } // math

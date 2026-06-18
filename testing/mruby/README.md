@@ -12,7 +12,7 @@ arguments**.
 | mruby build config (produces `libmruby.a`) | `../../../mruby/build_config/love.rb` |
 | Runtime layer (`mrbx_*` helpers, Object/Type binding, module registration) | `src/common/mrb_runtime.{h,cpp}` |
 | Ported module: timer (module functions) | `src/modules/timer/wrap_Timer_mrb.cpp` |
-| Ported module: math (module functions + the RandomGenerator object type) | `src/modules/math/wrap_Math_mrb.cpp` |
+| Ported module: math (functions + RandomGenerator, BezierCurve, Transform object types) | `src/modules/math/wrap_Math_mrb.cpp` |
 | Standalone demo harness | `testing/mruby/harness.cpp` |
 | nanosleep/deprecation stubs (avoid linking SDL for the demo) | `testing/mruby/delay_stub.cpp` |
 | Build (`make`, `make run`, `make mruby`) | `testing/mruby/Makefile` |

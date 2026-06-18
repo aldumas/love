@@ -69,4 +69,27 @@ tris = Love::Math.triangulate(points: square)
 puts "Love::Math.triangulate(points: square)      -> #{tris.length} triangles"
 
 puts
+puts "-" * 40
+puts "Love::BezierCurve and Love::Transform objects"
+puts "-" * 40
+
+# A quadratic Bezier curve from three control points (flat [x,y,...] list).
+curve = Love::Math.new_bezier_curve(points: [0, 0, 50, 100, 100, 0])
+puts "new_bezier_curve(...)             -> #{curve.class}, degree #{curve.get_degree}"
+puts "  evaluate(t: 0.5)                -> #{curve.evaluate(t: 0.5).inspect}"
+rendered = curve.render(accuracy: 2)
+puts "  render(accuracy: 2)            -> #{rendered.length / 2} points"
+
+# Transform objects: chainable mutators returning self, plus the * operator.
+t = Love::Math.new_transform.translate(x: 10, y: 20).scale(sx: 2, sy: 2)
+puts
+puts "new_transform.translate(...).scale(...) -> #{t.class}"
+puts "  transform_point(x: 5, y: 5)     -> #{t.transform_point(x: 5, y: 5).inspect}"
+
+a = Love::Math.new_transform.translate(x: 100, y: 0)
+b = Love::Math.new_transform.rotate(angle: 0)
+puts "  (a * b) composition             -> #{(a * b).class}"
+puts "  is_affine_2d_transform          -> #{t.is_affine_2d_transform}"
+
+puts
 puts "Try editing this file (testing/mruby/sample.rb) and re-running!"
