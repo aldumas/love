@@ -32,6 +32,7 @@ extern "C" {
 #include <vector>
 
 namespace love { namespace timer { extern "C" void mrb_love_timer_init(mrb_state *mrb); } }
+namespace love { namespace math  { extern "C" void mrb_love_math_init(mrb_state *mrb);  } }
 
 static bool read_file(const char *path, std::string &out)
 {
@@ -82,6 +83,7 @@ int main(int argc, char **argv)
 	mrb_define_module(mrb, "Love");
 
 	love::timer::mrb_love_timer_init(mrb);
+	love::math::mrb_love_math_init(mrb);
 
 	mrbc_context *ctx = mrbc_context_new(mrb);
 	mrbc_filename(mrb, ctx, path.c_str());

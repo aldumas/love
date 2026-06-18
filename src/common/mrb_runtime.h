@@ -164,6 +164,15 @@ struct RClass *mrbx_gettypeclass(mrb_state *mrb, const love::Type &type);
 void mrbx_register_module(mrb_state *mrb, const WrappedModule &m);
 
 /**
+ * Registers the Ruby class for an object type (e.g. RandomGenerator) under the
+ * Love namespace and defines its instance methods. Each MrbReg func is an
+ * instance method receiving the wrapped object as `self`; use
+ * mrbx_checktype<T>(mrb, self) inside to recover the C++ pointer.
+ * The functions array is terminated by a {nullptr, ...} entry.
+ **/
+void mrbx_register_type(mrb_state *mrb, const love::Type &type, const MrbReg *functions);
+
+/**
  * Runs func, translating any C++ love::Exception (or std::exception) into an
  * mruby RuntimeError. Returns true if an exception was caught and an mruby
  * error raised (in which case the caller should return mrb_nil_value()).

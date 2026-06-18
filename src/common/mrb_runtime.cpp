@@ -198,4 +198,12 @@ void mrbx_register_module(mrb_state *mrb, const WrappedModule &m)
 		mrb_define_module_function(mrb, mod, r->name, r->func, r->aspec);
 }
 
+void mrbx_register_type(mrb_state *mrb, const love::Type &type, const MrbReg *functions)
+{
+	struct RClass *cls = mrbx_gettypeclass(mrb, type);
+
+	for (const MrbReg *r = functions; r != nullptr && r->name != nullptr; r++)
+		mrb_define_method(mrb, cls, r->name, r->func, r->aspec);
+}
+
 } // love

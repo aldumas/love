@@ -46,7 +46,17 @@ CORE_SRCS := \
 # Append here as you port more modules (e.g. the math module).
 MODULE_SRCS := \
 	$(LOVE_SRC)/modules/timer/wrap_Timer_mrb.cpp \
-	$(LOVE_SRC)/modules/timer/Timer.cpp
+	$(LOVE_SRC)/modules/timer/Timer.cpp \
+	$(LOVE_SRC)/modules/math/wrap_Math_mrb.cpp \
+	$(LOVE_SRC)/modules/math/MathModule.cpp \
+	$(LOVE_SRC)/modules/math/RandomGenerator.cpp \
+	$(LOVE_SRC)/modules/math/BezierCurve.cpp \
+	$(LOVE_SRC)/modules/math/Transform.cpp \
+	$(LOVE_SRC)/common/Matrix.cpp \
+	$(LOVE_SRC)/common/Vector.cpp \
+	$(LOVE_SRC)/common/StringMap.cpp \
+	$(LOVE_SRC)/libraries/noise1234/noise1234.cpp \
+	$(LOVE_SRC)/libraries/noise1234/simplexnoise1234.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 
