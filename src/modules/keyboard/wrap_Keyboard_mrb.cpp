@@ -50,6 +50,8 @@ namespace love
 namespace keyboard
 {
 
+// TODO(mruby): lean backend — plain Module using SDL name lookups instead of
+// Keyboard.h enum tables; swap for keyboard/sdl/Keyboard.cpp (PORTING.md §B)
 class HarnessKeyboard : public love::Module
 {
 public:
@@ -87,6 +89,8 @@ public:
 		return name != nullptr ? name : "unknown";
 	}
 
+	// TODO(mruby): stored state only — lean event backend always forwards key
+	// repeats regardless of this flag (see PORTING.md §A)
 	void setKeyRepeat(bool enable) { keyRepeat = enable; }
 	bool hasKeyRepeat() const { return keyRepeat; }
 

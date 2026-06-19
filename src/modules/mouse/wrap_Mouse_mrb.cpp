@@ -48,6 +48,9 @@ namespace love
 namespace mouse
 {
 
+// TODO(mruby): lean backend — plain Module driving SDL state directly instead
+// of the real Mouse base (needs Cursor + image); swap for mouse/sdl/Mouse.cpp
+// (see PORTING.md §B)
 class HarnessMouse : public love::Module
 {
 public:
@@ -334,6 +337,8 @@ static const MrbReg functions[] =
 	{ "grabbed?",             w_grabbed,             MRB_ARGS_NONE() },
 	{ "set_relative_mode",    w_set_relative_mode,   MRB_ARGS_KEY(1, 0) },
 	{ "relative_mode?",       w_relative_mode,       MRB_ARGS_NONE() },
+	// TODO(mruby): cursor object family deferred — new_cursor (needs image),
+	// get_system_cursor, set_cursor, get_cursor (need a Cursor Type). PORTING.md §A
 	{ nullptr, nullptr, 0 }
 };
 

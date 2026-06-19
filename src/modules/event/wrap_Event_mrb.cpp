@@ -61,6 +61,8 @@ namespace event
 // Lean, window-independent SDL backend
 // =========================================================================
 
+// TODO(mruby): lean backend — window-independent SDL event conversion only;
+// swap for event/sdl/Event.cpp once joystick/touch/sensor land (PORTING.md §B)
 class HarnessEvent : public love::event::Event
 {
 public:

@@ -125,6 +125,11 @@ active — so `--boot game.rb` opens a real window and renders a moving rectangl
 
 ## Remaining work (per-module template established by this slice)
 
+The actionable checklist of everything deferred, stubbed, or temporarily
+implemented lives in **`PORTING.md`** (the ledger); every entry there has a
+matching `// TODO(mruby): …` marker in the code (`grep -rn "TODO(mruby)" src/`).
+The section below is the narrative overview.
+
 1. Port the other 71 `wrap_*.cpp` files to the `wrap_*_mrb.cpp` pattern, one
    module at a time, converting positional params to keyword args. The timer
    slice covers module functions; math covers object types with instance

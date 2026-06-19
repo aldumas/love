@@ -54,6 +54,11 @@ namespace graphics
 // =========================================================================
 // Lean immediate-mode OpenGL backend
 // =========================================================================
+//
+// TODO(mruby): temporary scaffolding — this whole class is fixed-function
+// immediate-mode GL standing in for the real shader-based batched renderer.
+// No textures, shaders, transforms beyond origin, blend/stencil, or fonts.
+// Swap for graphics/opengl|vulkan|metal once ported. (see PORTING.md §B)
 
 class HarnessGraphics : public love::Module
 {

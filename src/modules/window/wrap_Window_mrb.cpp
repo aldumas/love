@@ -68,6 +68,8 @@ void setHighDPIAllowedImplementation(bool /*enable*/)
 // Lean, graphics-independent SDL window backend
 // =========================================================================
 
+// TODO(mruby): lean backend — real SDL window, no renderer/graphics context;
+// swap for window/sdl/Window.cpp (see PORTING.md §B)
 class HarnessWindow : public love::window::Window
 {
 public:
@@ -279,6 +281,7 @@ public:
 	const std::string &getWindowTitle() const override { return title; }
 
 	// --- icon (needs the image module; stubbed in the lean backend) -------
+	// TODO(mruby): set_icon/get_icon need the image module (see PORTING.md §A)
 
 	bool setIcon(love::image::ImageData * /*imgd*/) override { return false; }
 	love::image::ImageData *getIcon() override { return nullptr; }
@@ -327,6 +330,7 @@ public:
 	int getPixelHeight() const override { return pixelHeight; }
 
 	// --- coordinate transforms (identity: DPI scale fixed at 1.0) ---------
+	// TODO(mruby): HiDPI transforms — DPI pinned to 1.0 (see PORTING.md §A)
 
 	void clampPositionInWindow(double *wx, double *wy) const override
 	{
@@ -384,6 +388,7 @@ public:
 
 	void showFileDialog(const FileDialogData &, FileDialogCallback callback, void *context) override
 	{
+		// TODO(mruby): show_file_dialog needs Ruby callback plumbing (PORTING.md §A)
 		// Not supported in the lean backend; report so via the callback.
 		if (callback != nullptr)
 			callback(context, std::vector<std::string>(), nullptr, "File dialogs are not supported in the mruby harness window backend.");
@@ -851,6 +856,7 @@ static const MrbReg functions[] =
 	{ "request_attention",         w_request_attention,         MRB_ARGS_KEY(1, 0) },
 	{ "get_system_theme",          w_get_system_theme,          MRB_ARGS_NONE() },
 	{ "show_message_box",          w_show_message_box,          MRB_ARGS_KEY(4, 0) },
+	// TODO(mruby): not yet exposed — update_mode, get_pointer (see PORTING.md §A)
 	{ nullptr, nullptr, 0 }
 };
 
