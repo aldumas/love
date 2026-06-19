@@ -37,7 +37,7 @@ INCLUDES := -I$(LOVE_SRC) -I$(LOVE_SRC)/modules -I$(MRUBY_INC) -I$(MRUBY_GEN)
 # So the harness can locate the ported boot scripts (arg.rb/callbacks.rb/boot.rb).
 CXXFLAGS += -DLOVE_SRC_DIR='"$(LOVE_SRC)"'
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
-LDLIBS   := -lmruby -lSDL3 -lpthread -lm
+LDLIBS   := -lmruby -lSDL3 -lGL -lpthread -lm
 
 # --- physfs (compiled as C into a static archive) ------------------------
 PHYSFS_DIR  := $(LOVE_SRC)/libraries/physfs
@@ -96,7 +96,8 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/event/Event.cpp \
 	$(LOVE_SRC)/common/Variant.cpp \
 	$(LOVE_SRC)/modules/window/wrap_Window_mrb.cpp \
-	$(LOVE_SRC)/modules/window/Window.cpp
+	$(LOVE_SRC)/modules/window/Window.cpp \
+	$(LOVE_SRC)/modules/graphics/wrap_Graphics_mrb.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 

@@ -106,16 +106,17 @@ module Love
       dt = const_defined?(:Timer) ? Timer.step : 0.0
       Love.update(dt) if Love.respond_to?(:update)
 
-      # Draw. Real LÖVE gates this behind love.graphics.isActive(); with no
-      # graphics module ported, we call draw directly so the loop is observable.
-      if const_defined?(:Graphics)
+      # Draw. Real LÖVE gates this behind love.graphics.isActive(). When the
+      # graphics module is present and active, clear to the background color,
+      # run the game's draw, and present; clear with no args uses the background
+      # color. Without graphics (or when inactive), call draw directly so the
+      # loop is still observable.
+      if const_defined?(:Graphics) && Love::Graphics.active?
         g = Love::Graphics
-        if g.active?
-          g.origin
-          g.clear(*g.background_color)
-          Love.draw if Love.respond_to?(:draw)
-          g.present
-        end
+        g.origin
+        g.clear
+        Love.draw if Love.respond_to?(:draw)
+        g.present
       elsif Love.respond_to?(:draw)
         Love.draw
       end

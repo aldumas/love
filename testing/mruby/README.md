@@ -16,6 +16,7 @@ arguments**.
 | Ported module: filesystem (functions + File, FileData; real physfs backend) | `src/modules/filesystem/wrap_Filesystem_mrb.cpp` |
 | Ported module: event (queue + lean window-independent SDL backend) | `src/modules/event/wrap_Event_mrb.cpp` |
 | Ported module: window (lean graphics-independent SDL backend) | `src/modules/window/wrap_Window_mrb.cpp` |
+| Ported module: graphics (thin slice: clear/color/rectangle/present, immediate-mode GL) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
 | Ported boot scripts (arg/callbacks/boot) | `src/modules/love/{arg,callbacks,boot}.rb` |
 | Standalone demo harness | `testing/mruby/harness.cpp` |
 | nanosleep/deprecation stubs (avoid linking SDL for the demo) | `testing/mruby/delay_stub.cpp` |
@@ -23,9 +24,10 @@ arguments**.
 
 The full `love` executable can't link until all 74 module wrappers are ported,
 so this harness exercises the ported modules (`timer`, `math`, `filesystem`,
-`event`, `window`) end-to-end. The filesystem module links the bundled physfs
-library (compiled as C) and SDL3 (`/usr/local/lib`), so the harness depends on
-`libSDL3` (also used by the event and window backends).
+`event`, `window`, `graphics`) end-to-end. The filesystem module links the
+bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
+harness depends on `libSDL3` (also used by the event and window backends); the
+graphics slice additionally links `libGL` for immediate-mode OpenGL.
 
 ## API shape
 
@@ -108,13 +110,16 @@ Makefile and call its `mrb_love_<name>_init` from `harness.cpp`.
   the same resume-until-done loop `love.cpp` runs against the Lua boot coroutine.
 
 Adaptations for mruby / the current module set: `Fiber` replaces the Lua
-coroutine; modules not yet ported (graphics) — or unavailable at runtime, like
-`window` on a headless machine — are detected with `const_defined?` and their
-branches skipped (so `draw` is called directly); the game's main file is
-`eval`'d (mruby has no file-level `Kernel#load`). The event module is wired up —
-a `Love.quit!` stand-in remains only as the fallback when `love.event` is
-absent. `Love.init` now creates the window from the `t.window` config (via
-`Love::Window.set_mode`) when `window` is present, just like `boot.lua`.
+coroutine; modules unavailable at runtime — e.g. `window`/`graphics` on a
+headless machine — are detected with `const_defined?` (and, for graphics,
+`Love::Graphics.active?`) and their branches skipped (so `draw` is called
+directly and prints instead of rendering); the game's main file is `eval`'d
+(mruby has no file-level `Kernel#load`). The event module is wired up — a
+`Love.quit!` stand-in remains only as the fallback when `love.event` is absent.
+`Love.init` creates the window from the `t.window` config (via
+`Love::Window.set_mode`) when `window` is present, just like `boot.lua`, and the
+run loop's draw branch clears/draws/presents through `Love::Graphics` when it's
+active — so `--boot game.rb` opens a real window and renders a moving rectangle.
 
 ## Remaining work (per-module template established by this slice)
 
@@ -129,19 +134,24 @@ absent. `Love.init` now creates the window from the `t.window` config (via
 2. DONE: the Lua boot scripts (`boot.lua`, `callbacks.lua`, `arg.lua`) are
    ported to Ruby (`boot.rb`, `callbacks.rb`, `arg.rb`) with the coroutine boot
    loop mapped onto mruby `Fiber`, and the run loop now pumps/polls the ported
-   `love.event`, and `Love.init` opens the config window via `love.window`.
-   Still to do as more modules land: wire the graphics branch and the
-   graphics-backed error screen. Both the event backend (`HarnessEvent`) and the
-   window backend (`HarnessWindow`) are intentionally lean. `HarnessEvent`
-   converts only window-independent SDL events; `HarnessWindow` creates a real
-   SDL window but no renderer context (the full `window/sdl/Window.cpp` builds an
-   OpenGL/Metal/Vulkan context and drives the `love.graphics` backbuffer, pulling
-   in the whole graphics subsystem). Swap both for the full SDL backends once
-   graphics + the input modules (keyboard/mouse/joystick/touch) are ported -- the
-   Ruby-facing APIs are unchanged. Deferred within window: `update_mode`,
-   `set_icon`/`get_icon` (need the image module), `show_file_dialog` (needs Ruby
-   callback plumbing), `get_pointer`, and the HiDPI coordinate transforms (the
-   lean backend fixes DPI scale at 1.0).
+   `love.event`, `Love.init` opens the config window via `love.window`, and the
+   run loop clears/draws/presents through `love.graphics` when active. The event
+   (`HarnessEvent`), window (`HarnessWindow`), and graphics (`HarnessGraphics`)
+   backends are all intentionally lean. `HarnessEvent` converts only
+   window-independent SDL events; `HarnessWindow` creates a real SDL window but
+   no renderer context; `HarnessGraphics` is a standalone `love::Module` (not
+   `love::graphics::Graphics`) that creates a legacy GL context on the window and
+   draws with immediate-mode OpenGL. The full SDL/graphics backends
+   (`window/sdl/Window.cpp`, `graphics/opengl|vulkan|metal`) build a real
+   renderer context, shader pipeline, and batched renderer -- ~8000 lines that
+   pull in the whole graphics subsystem. Swap the lean trio for them once the
+   graphics object/shader system is ported; the Ruby-facing APIs are unchanged.
+   Deferred within window: `update_mode`, `set_icon`/`get_icon` (need the image
+   module), `show_file_dialog` (needs Ruby callback plumbing), `get_pointer`, and
+   the HiDPI coordinate transforms (the lean backend fixes DPI scale at 1.0).
+   The graphics slice covers only `clear` / `set_color` / `set_background_color`
+   / `rectangle` / `origin` / `present` / dimensions -- no textures, shaders,
+   transforms beyond `origin`, blend/stencil state, fonts, or batched drawing.
 3. Swap the object/proxy system: the Lua weak-table identity map needs an mruby
    equivalent so the same C++ object always maps to the same Ruby object.
 4. Wire CMake (`CMakeLists.txt`) to build `libmruby.a` and link it instead of

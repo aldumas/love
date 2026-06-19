@@ -170,5 +170,33 @@ else
   puts "(no display available -- Love::Window not registered)"
 end
 
+# --- graphics --------------------------------------------------------------
+# A thin slice: clear the screen, draw a couple of rectangles, present. The
+# lean backend creates a GL context on the window above, so active? is only
+# true once a window exists. Colors are 0..1 floats; origin is top-left.
+puts
+puts "=== Love::Graphics ==="
+if Love.const_defined?(:Graphics) && Love::Graphics.active?
+  g = Love::Graphics
+  puts "dimensions              -> #{g.get_dimensions.inspect}"
+  g.set_background_color(r: 0.16, g: 0.18, b: 0.25)
+
+  # Draw ~30 frames of two rectangles so the window shows something on screen.
+  30.times do |i|
+    Love::Event.pump
+    g.origin
+    g.clear
+    g.set_color(r: 0.9, g: 0.5, b: 0.2)
+    g.rectangle(mode: "fill", x: 40 + i * 4, y: 60, width: 120, height: 90)
+    g.set_color(r: 0.4, g: 0.8, b: 1.0)
+    g.rectangle(mode: "line", x: 200, y: 200, width: 160, height: 120)
+    g.present
+    Love::Timer.sleep(seconds: 0.016)
+  end
+  puts "drew 30 frames (clear + fill/line rectangles + present)"
+else
+  puts "(graphics not active -- needs a window)"
+end
+
 puts
 puts "Try editing this file (testing/mruby/sample.rb) and re-running!"

@@ -22,18 +22,31 @@ def Love.load(args, raw)
     m = Love::Window.get_mode
     puts "[load]   window open=#{Love::Window.is_open} #{m[:width]}x#{m[:height]} title=#{Love::Window.get_title.inspect}"
   end
+  # A dark blue background, like the classic LÖVE default screen.
+  Love::Graphics.set_background_color(r: 0.16, g: 0.18, b: 0.25) if Love.const_defined?(:Graphics)
 end
 
 def Love.update(dt)
   @frame += 1
   @elapsed += dt
-  # Push a real quit event through love.event after 5 frames. The run loop pumps
-  # and polls it, then routes :quit through Love.quit (which may veto).
-  Love::Event.quit(code: 0) if @frame >= 5
+  # Push a real quit event through love.event after a couple of seconds. The run
+  # loop pumps and polls it, then routes :quit through Love.quit (may veto).
+  Love::Event.quit(code: 0) if @frame >= 120
 end
 
 def Love.draw
-  puts format("[draw]   frame %d  (t=%.3fs)", @frame, @elapsed)
+  # With the (lean) graphics module active, draw a rectangle that slides across
+  # the window. callbacks.rb has already cleared to the background color.
+  if Love.const_defined?(:Graphics) && Love::Graphics.active?
+    g = Love::Graphics
+    w = g.get_width
+    h = g.get_height
+    x = (@frame * 4) % (w - 80)
+    g.set_color(r: 0.9, g: 0.5, b: 0.2)
+    g.rectangle(mode: "fill", x: x, y: h / 2 - 40, width: 80, height: 80)
+  else
+    puts format("[draw]   frame %d  (t=%.3fs)", @frame, @elapsed)
+  end
 end
 
 # Input callbacks: with love.event ported, these fire when the queue carries

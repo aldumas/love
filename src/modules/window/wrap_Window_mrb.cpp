@@ -97,7 +97,9 @@ public:
 		if (s == nullptr)
 			s = &defaults;
 
-		Uint32 flags = 0;
+		// Always request an OpenGL-capable window so the (lean) graphics module
+		// can create a GL context on it. Harmless when graphics is unused.
+		Uint32 flags = SDL_WINDOW_OPENGL;
 		if (s->resizable)  flags |= SDL_WINDOW_RESIZABLE;
 		if (s->borderless) flags |= SDL_WINDOW_BORDERLESS;
 		if (s->fullscreen) flags |= SDL_WINDOW_FULLSCREEN;
