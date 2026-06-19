@@ -40,6 +40,7 @@ namespace love { namespace graphics   { extern "C" void mrb_love_graphics_init(m
 namespace love { namespace keyboard   { extern "C" void mrb_love_keyboard_init(mrb_state *mrb); } }
 namespace love { namespace mouse      { extern "C" void mrb_love_mouse_init(mrb_state *mrb); } }
 namespace love { namespace system     { extern "C" void mrb_love_system_init(mrb_state *mrb); } }
+namespace love { namespace data       { extern "C" void mrb_love_data_init(mrb_state *mrb); } }
 
 static bool read_file(const char *path, std::string &out)
 {
@@ -155,6 +156,7 @@ int main(int argc, char **argv)
 	love::keyboard::mrb_love_keyboard_init(mrb);
 	love::mouse::mrb_love_mouse_init(mrb);
 	love::system::mrb_love_system_init(mrb);
+	love::data::mrb_love_data_init(mrb);
 
 	int rc;
 	if (boot)

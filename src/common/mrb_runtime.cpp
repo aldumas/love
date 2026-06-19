@@ -143,6 +143,18 @@ struct RClass *mrbx_gettypeclass(mrb_state *mrb, const love::Type &type)
 
 	struct RClass *love = mrb_module_get(mrb, "Love");
 
+	// Mirror the love::Type hierarchy in the Ruby class hierarchy: a type's Ruby
+	// superclass is its parent type's Ruby class (recursively), bottoming out at
+	// love::Object::type, which maps to Ruby's Object. This gives real Ruby
+	// inheritance — e.g. a ByteData is_a?(Love::Data) — so base-class methods
+	// (the Data instance methods) can be registered once on the base and are
+	// inherited by every subclass, and mrbx_checktype's kind_of check accepts
+	// subtypes.
+	struct RClass *super = mrb->object_class;
+	love::Type *parent = type.getParent();
+	if (parent != nullptr && parent != &love::Object::type)
+		super = mrbx_gettypeclass(mrb, *parent);
+
 	// type.getName() may be a dotted path (e.g. love.graphics.Image); use the
 	// last component as the Ruby class name.
 	std::string name = type.getName();
@@ -150,7 +162,7 @@ struct RClass *mrbx_gettypeclass(mrb_state *mrb, const love::Type &type)
 	if (dot != std::string::npos)
 		name = name.substr(dot + 1);
 
-	struct RClass *cls = mrb_define_class_under(mrb, love, name.c_str(), mrb->object_class);
+	struct RClass *cls = mrb_define_class_under(mrb, love, name.c_str(), super);
 	MRB_SET_INSTANCE_TT(cls, MRB_TT_DATA);
 
 	typeClasses[&type] = cls;
@@ -177,9 +189,12 @@ love::Object *mrbx_checktype(mrb_state *mrb, mrb_value v, const love::Type &type
 
 	love::Object *o = (love::Object *) p;
 
-	// Verify the concrete type derives from the requested one.
-	auto it = typeClasses.find(&type);
-	if (it != typeClasses.end() && !mrb_obj_is_kind_of(mrb, v, it->second))
+	// Verify the concrete type derives from the requested one. Ensuring the
+	// requested type's class exists (rather than only checking if it happens to
+	// be registered) makes the check sound even when the base class hasn't been
+	// touched yet — e.g. mrbx_checktype<Data> before any Data subtype is pushed.
+	struct RClass *cls = mrbx_gettypeclass(mrb, type);
+	if (!mrb_obj_is_kind_of(mrb, v, cls))
 		mrb_raisef(mrb, E_TYPE_ERROR, "expected a %s", type.getName());
 
 	return o;

@@ -20,6 +20,7 @@ arguments**.
 | Ported module: keyboard (lean SDL state queries, no enum maps) | `src/modules/keyboard/wrap_Keyboard_mrb.cpp` |
 | Ported module: mouse (lean SDL state queries; cursor objects deferred) | `src/modules/mouse/wrap_Mouse_mrb.cpp` |
 | Ported module: system (OS/CPU/memory/clipboard/power/locale; real SDL backend) | `src/modules/system/wrap_System_mrb.cpp` |
+| Ported module: data (Data/ByteData/DataView/CompressedData; compress/encode/hash) | `src/modules/data/wrap_DataModule_mrb.cpp` |
 | Ported boot scripts (arg/callbacks/boot) | `src/modules/love/{arg,callbacks,boot}.rb` |
 | Standalone demo harness | `testing/mruby/harness.cpp` |
 | nanosleep/deprecation stubs (avoid linking SDL for the demo) | `testing/mruby/delay_stub.cpp` |
@@ -27,7 +28,7 @@ arguments**.
 
 The full `love` executable can't link until all 74 module wrappers are ported,
 so this harness exercises the ported modules (`timer`, `math`, `filesystem`,
-`event`, `window`, `graphics`, `keyboard`, `mouse`, `system`) end-to-end. The filesystem module links the
+`event`, `window`, `graphics`, `keyboard`, `mouse`, `system`, `data`) end-to-end. The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the
 graphics slice additionally links `libGL` for immediate-mode OpenGL.
@@ -57,6 +58,16 @@ Object types (e.g. `Love::RandomGenerator`) map to Ruby classes via
 `mrbx_pushtype`/`mrbx_checktype`; their instance methods are registered with
 `mrbx_register_type`. The C++ object is retained while a Ruby object references
 it and released on garbage collection.
+
+The Ruby class hierarchy mirrors the `love::Type` hierarchy: a type's Ruby
+superclass is its parent type's Ruby class (bottoming out at `love::Object`,
+which maps to Ruby's `Object`). So `Love::ByteData < Love::Data`, a
+`ByteData.is_a?(Love::Data)` is true, and base-class methods (e.g. the `Data`
+instance methods) are registered once on the base and inherited by every
+subtype. `mrbx_checktype<Base>` therefore accepts any registered subtype. The
+`data` module's functions are a special case: because the module name "Data"
+would collide with the `Data` type's class, they are registered as **class
+methods** on `Love::Data` (call syntax is unchanged, e.g. `Love::Data.compress`).
 
 Missing required keywords raise `ArgumentError`; omitted optional keywords
 arrive as mruby `undef` and are handled by the `mrbx_opt*` helpers.

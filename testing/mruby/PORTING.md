@@ -26,7 +26,7 @@ Legend: `[ ]` not started · `[~]` partial / stubbed · `[x]` done
 ## Modules ported so far
 
 timer · math · filesystem · event · window · graphics (slice) · keyboard · mouse
-· system · boot pipeline (arg/callbacks/boot)
+· system · data · boot pipeline (arg/callbacks/boot)
 
 ---
 
@@ -56,6 +56,16 @@ timer · math · filesystem · event · window · graphics (slice) · keyboard �
 - [ ] (#mouse-cursor) cursor object family: `new_cursor` (needs **image** /
       `ImageData`), `get_system_cursor`, `set_cursor`, `get_cursor` — all need
       a `Cursor` Type
+
+### data
+The module's functions are class methods on `Love::Data` (the module name "Data"
+collides with the `Data` type; a Ruby class doubling as the namespace resolves
+it). Base `Data` instance methods are registered once and inherited by every
+`Data` subtype via the runtime's love::Type-mirrored class hierarchy.
+- [ ] (#data-pack) `pack` / `unpack` / `get_packed_size` — depend on Lua 5.3's
+      `lstrlib` (`string.pack`); need a native binary-pack implementation.
+- [ ] (#data-ffi-atomic) `Data#get_pointer` / `#get_ffi_pointer` (raw/FFI
+      pointers) and `Data#perform_atomic` (mutex + block) — not exposed.
 
 ---
 

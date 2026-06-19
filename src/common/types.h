@@ -43,6 +43,9 @@ public:
 	uint32 getId();
 	const char *getName() const;
 
+	// The type this one derives from, or nullptr for a root type (Object).
+	Type *getParent() const { return parent; }
+
 	bool isa(const uint32 &other)
 	{
 		if (!inited)

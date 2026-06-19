@@ -37,7 +37,7 @@ INCLUDES := -I$(LOVE_SRC) -I$(LOVE_SRC)/modules -I$(MRUBY_INC) -I$(MRUBY_GEN)
 # So the harness can locate the ported boot scripts (arg.rb/callbacks.rb/boot.rb).
 CXXFLAGS += -DLOVE_SRC_DIR='"$(LOVE_SRC)"'
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
-LDLIBS   := -lmruby -lSDL3 -lGL -lpthread -lm
+LDLIBS   := -lmruby -lSDL3 -lGL -lpthread -lm -lz
 
 # --- physfs (compiled as C into a static archive) ------------------------
 PHYSFS_DIR  := $(LOVE_SRC)/libraries/physfs
@@ -50,6 +50,12 @@ PHYSFS_SRCS := \
 	$(wildcard $(PHYSFS_DIR)/physfs_archiver_*.c)
 PHYSFS_OBJS := $(patsubst $(PHYSFS_DIR)/%.c,$(OBJ_DIR)/physfs_%.o,$(PHYSFS_SRCS))
 PHYSFS_A    := $(OBJ_DIR)/libphysfs.a
+
+# --- lz4 (compiled as C for the data module's Compressor) ----------------
+LZ4_DIR  := $(LOVE_SRC)/libraries/lz4
+LZ4_SRCS := $(LZ4_DIR)/lz4.c $(LZ4_DIR)/lz4hc.c
+LZ4_OBJS := $(patsubst $(LZ4_DIR)/%.c,$(OBJ_DIR)/lz4_%.o,$(LZ4_SRCS))
+LZ4_A    := $(OBJ_DIR)/liblz4.a
 
 # --- C++ sources ---------------------------------------------------------
 CORE_SRCS := \
@@ -102,7 +108,13 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/mouse/wrap_Mouse_mrb.cpp \
 	$(LOVE_SRC)/modules/system/wrap_System_mrb.cpp \
 	$(LOVE_SRC)/modules/system/System.cpp \
-	$(LOVE_SRC)/modules/system/sdl/System.cpp
+	$(LOVE_SRC)/modules/system/sdl/System.cpp \
+	$(LOVE_SRC)/modules/data/wrap_DataModule_mrb.cpp \
+	$(LOVE_SRC)/modules/data/DataModule.cpp \
+	$(LOVE_SRC)/modules/data/DataView.cpp \
+	$(LOVE_SRC)/modules/data/CompressedData.cpp \
+	$(LOVE_SRC)/modules/data/Compressor.cpp \
+	$(LOVE_SRC)/modules/data/HashFunction.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 
@@ -125,14 +137,20 @@ install-hooks:
 	chmod +x "$$hooks/pre-commit"; \
 	echo "installed pre-commit hook -> $$hooks/pre-commit"
 
-$(BIN): $(SRCS) $(MRUBY_A) $(PHYSFS_A)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRCS) $(PHYSFS_A) $(LDFLAGS) $(LDLIBS) -o $@
+$(BIN): $(SRCS) $(MRUBY_A) $(PHYSFS_A) $(LZ4_A)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRCS) $(PHYSFS_A) $(LZ4_A) $(LDFLAGS) $(LDLIBS) -o $@
 
 $(OBJ_DIR)/physfs_%.o: $(PHYSFS_DIR)/%.c | $(OBJ_DIR)
 	$(CC) -O2 -I$(PHYSFS_DIR) -c $< -o $@
 
 $(PHYSFS_A): $(PHYSFS_OBJS)
 	ar rcs $@ $(PHYSFS_OBJS)
+
+$(OBJ_DIR)/lz4_%.o: $(LZ4_DIR)/%.c | $(OBJ_DIR)
+	$(CC) -O2 -I$(LZ4_DIR) -c $< -o $@
+
+$(LZ4_A): $(LZ4_OBJS)
+	ar rcs $@ $(LZ4_OBJS)
 
 $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)
