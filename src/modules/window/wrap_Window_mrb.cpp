@@ -355,8 +355,10 @@ public:
 	int getPixelWidth()  const override { return pixelWidth; }
 	int getPixelHeight() const override { return pixelHeight; }
 
-	// --- coordinate transforms (identity: DPI scale fixed at 1.0) ---------
-	// TODO(mruby) #win-dpi: HiDPI transforms — DPI pinned to 1.0 (PORTING.md §A)
+	// --- coordinate transforms (HiDPI) ------------------------------------
+	// Faithful to window/sdl/Window.cpp: window<->pixel uses the tracked
+	// pixel/window size ratio (SDL_GetWindowSizeInPixels), and the DPI scale is
+	// SDL's display scale, honored only when the window opted into use_dpi_scale.
 
 	void clampPositionInWindow(double *wx, double *wy) const override
 	{
@@ -364,18 +366,57 @@ public:
 		if (wy) *wy = std::max(0.0, std::min(*wy, (double) windowHeight));
 	}
 
-	void windowToPixelCoords(double *, double *) const override {}
-	void pixelToWindowCoords(double *, double *) const override {}
-	void windowToDPICoords(double *, double *) const override {}
-	void DPIToWindowCoords(double *, double *) const override {}
+	void windowToPixelCoords(double *x, double *y) const override
+	{
+		if (x != nullptr) *x = (*x) * ((double) pixelWidth / (double) windowWidth);
+		if (y != nullptr) *y = (*y) * ((double) pixelHeight / (double) windowHeight);
+	}
 
-	double getDPIScale() const override { return 1.0; }
-	double getNativeDPIScale() const override { return 1.0; }
+	void pixelToWindowCoords(double *x, double *y) const override
+	{
+		if (x != nullptr) *x = (*x) * ((double) windowWidth / (double) pixelWidth);
+		if (y != nullptr) *y = (*y) * ((double) windowHeight / (double) pixelHeight);
+	}
 
-	double toPixels(double x) const override { return x; }
-	void toPixels(double wx, double wy, double &px, double &py) const override { px = wx; py = wy; }
-	double fromPixels(double x) const override { return x; }
-	void fromPixels(double px, double py, double &wx, double &wy) const override { wx = px; wy = py; }
+	void windowToDPICoords(double *x, double *y) const override
+	{
+		double px = x != nullptr ? *x : 0.0;
+		double py = y != nullptr ? *y : 0.0;
+		windowToPixelCoords(&px, &py);
+		double dpix = 0.0, dpiy = 0.0;
+		fromPixels(px, py, dpix, dpiy);
+		if (x != nullptr) *x = dpix;
+		if (y != nullptr) *y = dpiy;
+	}
+
+	void DPIToWindowCoords(double *x, double *y) const override
+	{
+		double dpix = x != nullptr ? *x : 0.0;
+		double dpiy = y != nullptr ? *y : 0.0;
+		double px = 0.0, py = 0.0;
+		toPixels(dpix, dpiy, px, py);
+		pixelToWindowCoords(&px, &py);
+		if (x != nullptr) *x = px;
+		if (y != nullptr) *y = py;
+	}
+
+	double getDPIScale() const override { return settings.usedpiscale ? getNativeDPIScale() : 1.0; }
+	double getNativeDPIScale() const override { return window != nullptr ? SDL_GetWindowDisplayScale(window) : 1.0; }
+
+	double toPixels(double x) const override { return x * getDPIScale(); }
+	void toPixels(double wx, double wy, double &px, double &py) const override
+	{
+		double scale = getDPIScale();
+		px = wx * scale;
+		py = wy * scale;
+	}
+	double fromPixels(double x) const override { return x / getDPIScale(); }
+	void fromPixels(double px, double py, double &wx, double &wy) const override
+	{
+		double scale = getDPIScale();
+		wx = px / scale;
+		wy = py / scale;
+	}
 
 	void *getHandle() const override { return window; }
 
@@ -810,6 +851,42 @@ static mrb_value w_is_occluded(mrb_state *mrb, mrb_value self) { (void) self; re
 static mrb_value w_get_dpi_scale(mrb_state *mrb, mrb_value self) { (void) self; return mrbx_number(mrb, instance()->getDPIScale()); }
 static mrb_value w_get_native_dpi_scale(mrb_state *mrb, mrb_value self) { (void) self; return mrbx_number(mrb, instance()->getNativeDPIScale()); }
 
+// to_pixels(x:) -> Number, or to_pixels(x:, y:) -> Hash {x:, y:}. Converts
+// density-independent units to pixels using the window's DPI scale.
+static mrb_value w_to_pixels(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 1, v);
+	double wx = mrbx_checknumber(mrb, v[0]);
+	if (mrb_undef_p(v[1]))
+		return mrbx_number(mrb, instance()->toPixels(wx));
+	double px = 0.0, py = 0.0;
+	instance()->toPixels(wx, mrbx_checknumber(mrb, v[1]), px, py);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "x", mrbx_number(mrb, px));
+	hset(mrb, out, "y", mrbx_number(mrb, py));
+	return out;
+}
+
+// from_pixels(x:) -> Number, or from_pixels(x:, y:) -> Hash {x:, y:}. Inverse of
+// to_pixels: converts pixels back to density-independent units.
+static mrb_value w_from_pixels(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 1, v);
+	double px = mrbx_checknumber(mrb, v[0]);
+	if (mrb_undef_p(v[1]))
+		return mrbx_number(mrb, instance()->fromPixels(px));
+	double wx = 0.0, wy = 0.0;
+	instance()->fromPixels(px, mrbx_checknumber(mrb, v[1]), wx, wy);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "x", mrbx_number(mrb, wx));
+	hset(mrb, out, "y", mrbx_number(mrb, wy));
+	return out;
+}
+
 static mrb_value w_request_attention(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
@@ -1025,6 +1102,8 @@ static const MrbReg functions[] =
 	{ "is_occluded",               w_is_occluded,               MRB_ARGS_NONE() },
 	{ "get_dpi_scale",             w_get_dpi_scale,             MRB_ARGS_NONE() },
 	{ "get_native_dpi_scale",      w_get_native_dpi_scale,      MRB_ARGS_NONE() },
+	{ "to_pixels",                 w_to_pixels,                 MRB_ARGS_KEY(2, 0) },
+	{ "from_pixels",               w_from_pixels,               MRB_ARGS_KEY(2, 0) },
 	{ "request_attention",         w_request_attention,         MRB_ARGS_KEY(1, 0) },
 	{ "get_system_theme",          w_get_system_theme,          MRB_ARGS_NONE() },
 	{ "show_message_box",          w_show_message_box,          MRB_ARGS_KEY(4, 0) },

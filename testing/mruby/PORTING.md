@@ -52,8 +52,11 @@ timer · math · filesystem · event · window · graphics (slice) · keyboard �
       `multi_select:`/`attach_to_window:`). The Ruby callback plumbing is real;
       hosting a native dialog moves to the #win-backend swap (the lean backend
       resolves the block with an "unsupported" error, like a user cancel).
-- [~] (#win-dpi) HiDPI coordinate transforms — DPI scale pinned to 1.0,
-      transforms identity
+- [x] (#win-dpi) HiDPI coordinate transforms — done; faithful to
+      window/sdl/Window.cpp: window<->pixel uses the tracked pixel/window size
+      ratio and the DPI scale is SDL's display scale, honored only when the
+      window opted into `use_dpi_scale`. `to_pixels`/`from_pixels` are now exposed
+      too (single value -> Number, `x:`+`y:` -> Hash {x:, y:})
 
 ### keyboard
 - [~] (#kbd-keyrepeat) `set_key_repeat` — stored state only; the lean event

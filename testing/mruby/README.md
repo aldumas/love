@@ -169,14 +169,17 @@ narrative overview.
    renderer context, shader pipeline, and batched renderer -- ~8000 lines that
    pull in the whole graphics subsystem. Swap the lean trio for them once the
    graphics object/shader system is ported; the Ruby-facing APIs are unchanged.
-   Deferred within window: the HiDPI coordinate transforms (the lean backend
-   fixes DPI scale at 1.0). `set_icon`/`get_icon`, `update_mode`, `get_pointer`,
-   and `show_file_dialog` are now exposed (`update_mode` re-applies the mode with
-   every keyword optional; `get_pointer` returns the native handle as a TT_CPTR
-   value; `show_file_dialog` takes a `{ |files, filter_name, err| ... }` result
-   block plus the dialog kwargs -- the Ruby callback plumbing is real, while
-   hosting a native dialog waits on the full window-backend swap, so the lean
-   backend resolves the block with an "unsupported" error).
+   The window module is fully exposed: `set_icon`/`get_icon`, `update_mode`,
+   `get_pointer`, `show_file_dialog`, and the HiDPI transforms
+   (`to_pixels`/`from_pixels`/`get_dpi_scale`) are all wired up. `update_mode`
+   re-applies the mode with every keyword optional; `get_pointer` returns the
+   native handle as a TT_CPTR value; `show_file_dialog` takes a
+   `{ |files, filter_name, err| ... }` result block plus the dialog kwargs (the
+   Ruby callback plumbing is real, while hosting a native dialog waits on the
+   full window-backend swap, so the lean backend resolves the block with an
+   "unsupported" error); the DPI transforms mirror window/sdl/Window.cpp (the
+   pixel/window size ratio plus SDL's display scale, honored only when the window
+   set `use_dpi_scale`).
    The graphics slice covers only `clear` / `set_color` / `set_background_color`
    / `rectangle` / `origin` / `present` / dimensions -- no textures, shaders,
    transforms beyond `origin`, blend/stencil state, fonts, or batched drawing.
