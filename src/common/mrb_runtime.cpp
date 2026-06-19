@@ -181,6 +181,13 @@ mrb_value mrbx_pushtype(mrb_state *mrb, love::Type &type, love::Object *object)
 	return mrb_obj_value(data);
 }
 
+bool mrbx_istype(mrb_state *mrb, mrb_value v, const love::Type &type)
+{
+	if (mrb_data_check_get_ptr(mrb, v, &mrbx_object_data_type) == nullptr)
+		return false;
+	return mrb_obj_is_kind_of(mrb, v, mrbx_gettypeclass(mrb, type));
+}
+
 love::Object *mrbx_checktype(mrb_state *mrb, mrb_value v, const love::Type &type)
 {
 	void *p = mrb_data_check_get_ptr(mrb, v, &mrbx_object_data_type);

@@ -33,7 +33,7 @@ CC       ?= gcc
 CXX      ?= g++
 CXXSTD   ?= c++17
 CXXFLAGS ?= -std=$(CXXSTD) -O2 -Wall
-INCLUDES := -I$(LOVE_SRC) -I$(LOVE_SRC)/modules -I$(MRUBY_INC) -I$(MRUBY_GEN)
+INCLUDES := -I$(LOVE_SRC) -I$(LOVE_SRC)/modules -I$(LOVE_SRC)/libraries -I$(MRUBY_INC) -I$(MRUBY_GEN)
 # So the harness can locate the ported boot scripts (arg.rb/callbacks.rb/boot.rb).
 CXXFLAGS += -DLOVE_SRC_DIR='"$(LOVE_SRC)"'
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
@@ -114,7 +114,26 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/data/DataView.cpp \
 	$(LOVE_SRC)/modules/data/CompressedData.cpp \
 	$(LOVE_SRC)/modules/data/Compressor.cpp \
-	$(LOVE_SRC)/modules/data/HashFunction.cpp
+	$(LOVE_SRC)/modules/data/HashFunction.cpp \
+	$(LOVE_SRC)/common/pixelformat.cpp \
+	$(LOVE_SRC)/common/floattypes.cpp \
+	$(LOVE_SRC)/libraries/lodepng/lodepng.cpp \
+	$(LOVE_SRC)/libraries/ddsparse/ddsparse.cpp \
+	$(LOVE_SRC)/modules/image/wrap_Image_mrb.cpp \
+	$(LOVE_SRC)/modules/image/Image.cpp \
+	$(LOVE_SRC)/modules/image/ImageData.cpp \
+	$(LOVE_SRC)/modules/image/ImageDataBase.cpp \
+	$(LOVE_SRC)/modules/image/CompressedImageData.cpp \
+	$(LOVE_SRC)/modules/image/CompressedSlice.cpp \
+	$(LOVE_SRC)/modules/image/FormatHandler.cpp \
+	$(LOVE_SRC)/modules/image/magpie/PNGHandler.cpp \
+	$(LOVE_SRC)/modules/image/magpie/STBHandler.cpp \
+	$(LOVE_SRC)/modules/image/magpie/EXRHandler.cpp \
+	$(LOVE_SRC)/modules/image/magpie/ddsHandler.cpp \
+	$(LOVE_SRC)/modules/image/magpie/PVRHandler.cpp \
+	$(LOVE_SRC)/modules/image/magpie/KTXHandler.cpp \
+	$(LOVE_SRC)/modules/image/magpie/PKMHandler.cpp \
+	$(LOVE_SRC)/modules/image/magpie/ASTCHandler.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 

@@ -21,6 +21,7 @@ arguments**.
 | Ported module: mouse (lean SDL state queries; cursor objects deferred) | `src/modules/mouse/wrap_Mouse_mrb.cpp` |
 | Ported module: system (OS/CPU/memory/clipboard/power/locale; real SDL backend) | `src/modules/system/wrap_System_mrb.cpp` |
 | Ported module: data (Data/ByteData/DataView/CompressedData; compress/encode/hash) | `src/modules/data/wrap_DataModule_mrb.cpp` |
+| Ported module: image (ImageData decode/encode/pixels; real lodepng/stb/exr backend) | `src/modules/image/wrap_Image_mrb.cpp` |
 | Ported boot scripts (arg/callbacks/boot) | `src/modules/love/{arg,callbacks,boot}.rb` |
 | Standalone demo harness | `testing/mruby/harness.cpp` |
 | nanosleep/deprecation stubs (avoid linking SDL for the demo) | `testing/mruby/delay_stub.cpp` |
@@ -28,7 +29,7 @@ arguments**.
 
 The full `love` executable can't link until all 74 module wrappers are ported,
 so this harness exercises the ported modules (`timer`, `math`, `filesystem`,
-`event`, `window`, `graphics`, `keyboard`, `mouse`, `system`, `data`) end-to-end. The filesystem module links the
+`event`, `window`, `graphics`, `keyboard`, `mouse`, `system`, `data`, `image`) end-to-end. The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the
 graphics slice additionally links `libGL` for immediate-mode OpenGL.

@@ -53,15 +53,6 @@ namespace data
 
 // --- shared helpers ------------------------------------------------------
 
-// Non-raising "is this Ruby value a wrapped love::Object of (a subtype of) the
-// given type?" — for the overloaded inputs that accept Data-or-something-else.
-static bool mrbx_is(mrb_state *mrb, mrb_value v, const love::Type &type)
-{
-	if (mrb_data_check_get_ptr(mrb, v, &mrbx_object_data_type) == nullptr)
-		return false;
-	return mrb_obj_is_kind_of(mrb, v, mrbx_gettypeclass(mrb, type));
-}
-
 static ContainerType getcontainer(mrb_state *mrb, mrb_value v)
 {
 	std::string s = mrb_undef_p(v) ? std::string("string") : mrbx_checkstring(mrb, v);
@@ -439,7 +430,7 @@ static mrb_value w_decompress(mrb_state *mrb, mrb_value self)
 	char *rawbytes = nullptr;
 	size_t rawsize = 0;
 
-	if (!mrb_undef_p(v[0]) && mrbx_is(mrb, v[0], CompressedData::type))
+	if (!mrb_undef_p(v[0]) && mrbx_istype(mrb, v[0], CompressedData::type))
 	{
 		CompressedData *data = mrbx_checktype<CompressedData>(mrb, v[0]);
 		rawsize = data->getDecompressedSize();

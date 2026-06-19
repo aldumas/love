@@ -167,6 +167,19 @@ T *mrbx_checktype(mrb_state *mrb, mrb_value v)
 }
 
 /**
+ * Non-raising counterpart of mrbx_checktype: true if v wraps a love::Object
+ * that is (or derives from) the given type. Mirrors the Lua-era luax_istype.
+ * Use it to disambiguate arguments that accept an object or something else.
+ **/
+bool mrbx_istype(mrb_state *mrb, mrb_value v, const love::Type &type);
+
+template <typename T>
+bool mrbx_istype(mrb_state *mrb, mrb_value v)
+{
+	return mrbx_istype(mrb, v, T::type);
+}
+
+/**
  * Registers a Ruby class for the given love::Type (creating it lazily) under
  * the Love namespace, and returns it. Used both for modules-as-objects and for
  * regular object types.
