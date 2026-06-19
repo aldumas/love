@@ -97,7 +97,8 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/common/Variant.cpp \
 	$(LOVE_SRC)/modules/window/wrap_Window_mrb.cpp \
 	$(LOVE_SRC)/modules/window/Window.cpp \
-	$(LOVE_SRC)/modules/graphics/wrap_Graphics_mrb.cpp
+	$(LOVE_SRC)/modules/graphics/wrap_Graphics_mrb.cpp \
+	$(LOVE_SRC)/modules/keyboard/wrap_Keyboard_mrb.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 

@@ -24,28 +24,39 @@ def Love.load(args, raw)
   end
   # A dark blue background, like the classic LÖVE default screen.
   Love::Graphics.set_background_color(r: 0.16, g: 0.18, b: 0.25) if Love.const_defined?(:Graphics)
+  @x = 280.0
+  @y = 200.0
 end
 
 def Love.update(dt)
   @frame += 1
   @elapsed += dt
-  # Push a real quit event through love.event after a couple of seconds. The run
-  # loop pumps and polls it, then routes :quit through Love.quit (may veto).
-  Love::Event.quit(code: 0) if @frame >= 120
+
+  # Move the square with the arrow keys (or WASD), polling held keys via
+  # love.keyboard.down?. Speed is framerate-independent thanks to dt.
+  if Love.const_defined?(:Keyboard)
+    k = Love::Keyboard
+    speed = 240.0 * dt
+    @x -= speed if k.down?(key: ["left", "a"])
+    @x += speed if k.down?(key: ["right", "d"])
+    @y -= speed if k.down?(key: ["up", "w"])
+    @y += speed if k.down?(key: ["down", "s"])
+  end
+
+  # Auto-quit after ~10s so the demo terminates on its own; press escape (see
+  # Love.keypressed) to quit sooner. Raise this to play with it longer.
+  Love::Event.quit(code: 0) if @frame >= 600
 end
 
 def Love.draw
-  # With the (lean) graphics module active, draw a rectangle that slides across
-  # the window. callbacks.rb has already cleared to the background color.
+  # With the (lean) graphics module active, draw the player square at @x,@y.
+  # callbacks.rb has already cleared to the background color.
   if Love.const_defined?(:Graphics) && Love::Graphics.active?
     g = Love::Graphics
-    w = g.get_width
-    h = g.get_height
-    x = (@frame * 4) % (w - 80)
     g.set_color(r: 0.9, g: 0.5, b: 0.2)
-    g.rectangle(mode: "fill", x: x, y: h / 2 - 40, width: 80, height: 80)
+    g.rectangle(mode: "fill", x: @x, y: @y, width: 80, height: 80)
   else
-    puts format("[draw]   frame %d  (t=%.3fs)", @frame, @elapsed)
+    puts format("[draw]   frame %d  (t=%.3fs)  pos=(%.0f,%.0f)", @frame, @elapsed, @x, @y)
   end
 end
 

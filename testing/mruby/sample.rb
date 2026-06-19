@@ -198,5 +198,20 @@ else
   puts "(graphics not active -- needs a window)"
 end
 
+# --- keyboard --------------------------------------------------------------
+# State queries via SDL: down? polls currently-held keys (a String or an Array
+# of names, true if any is held), and the name<->scancode helpers round-trip
+# through SDL. Names match those the event module reports in keypressed.
+puts
+puts "=== Love::Keyboard ==="
+k = Love::Keyboard
+puts "down?(key: 'a')                   -> #{k.down?(key: 'a')}  (nothing held in a flat script)"
+puts "down?(key: ['lctrl', 'space'])    -> #{k.down?(key: ['lctrl', 'space'])}"
+puts "get_scancode_from_key(key: 'a')   -> #{k.get_scancode_from_key(key: 'a').inspect}"
+puts "get_key_from_scancode(scancode: 'space') -> #{k.get_key_from_scancode(scancode: 'space').inspect}"
+puts "modifier_active?(key: 'capslock') -> #{k.modifier_active?(key: 'capslock')}"
+puts "modifier_active?(key: 'shift')    -> #{k.modifier_active?(key: 'shift')}"
+puts "has_screen_keyboard?              -> #{k.has_screen_keyboard?}"
+
 puts
 puts "Try editing this file (testing/mruby/sample.rb) and re-running!"

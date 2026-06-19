@@ -37,6 +37,7 @@ namespace love { namespace filesystem { extern "C" void mrb_love_filesystem_init
 namespace love { namespace event      { extern "C" void mrb_love_event_init(mrb_state *mrb); } }
 namespace love { namespace window     { extern "C" void mrb_love_window_init(mrb_state *mrb); } }
 namespace love { namespace graphics   { extern "C" void mrb_love_graphics_init(mrb_state *mrb); } }
+namespace love { namespace keyboard   { extern "C" void mrb_love_keyboard_init(mrb_state *mrb); } }
 
 static bool read_file(const char *path, std::string &out)
 {
@@ -149,6 +150,7 @@ int main(int argc, char **argv)
 	love::event::mrb_love_event_init(mrb);
 	love::window::mrb_love_window_init(mrb);
 	love::graphics::mrb_love_graphics_init(mrb);
+	love::keyboard::mrb_love_keyboard_init(mrb);
 
 	int rc;
 	if (boot)
