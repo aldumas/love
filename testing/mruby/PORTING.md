@@ -46,8 +46,12 @@ timer · math · filesystem · event · window · graphics (slice) · keyboard �
       `get_pointer` returns the native window handle as a TT_CPTR value
 - [x] (#win-icon) `set_icon` / `get_icon` — done; the lean window backend builds
       an SDL window icon from the ImageData's RGBA8 pixels and retains it
-- [ ] (#win-filedialog) `show_file_dialog` — needs Ruby callback plumbing;
-      currently stubbed to call back with an error
+- [x] (#win-filedialog) `show_file_dialog` — done; takes a result block
+      `{ |files, filter_name, err| ... }` and the dialog kwargs (`type:` required,
+      `title:`/`accept_label:`/`cancel_label:`/`default_name:`/`filters:`/
+      `multi_select:`/`attach_to_window:`). The Ruby callback plumbing is real;
+      hosting a native dialog moves to the #win-backend swap (the lean backend
+      resolves the block with an "unsupported" error, like a user cancel).
 - [~] (#win-dpi) HiDPI coordinate transforms — DPI scale pinned to 1.0,
       transforms identity
 

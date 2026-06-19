@@ -414,8 +414,11 @@ public:
 
 	void showFileDialog(const FileDialogData &, FileDialogCallback callback, void *context) override
 	{
-		// TODO(mruby) #win-filedialog: show_file_dialog needs Ruby callback plumbing (PORTING.md §A)
-		// Not supported in the lean backend; report so via the callback.
+		// The lean backend doesn't host a native file dialog -- that needs the
+		// async SDL-event delivery built into the real window/sdl/Window.cpp
+		// (folded into the #win-backend swap). The Ruby callback plumbing is
+		// real, though: report "unsupported" through it so a game's block runs
+		// and can handle the error path, exactly as it would a user cancel.
 		if (callback != nullptr)
 			callback(context, std::vector<std::string>(), nullptr, "File dialogs are not supported in the mruby harness window backend.");
 	}
@@ -864,6 +867,98 @@ static mrb_value w_get_icon(mrb_state *mrb, mrb_value self)
 	return mrbx_pushtype(mrb, instance()->getIcon());
 }
 
+// Carries the Ruby block from w_show_file_dialog down to the C callback the
+// Window backend invokes when the dialog resolves. The lean backend calls back
+// synchronously (still within w_show_file_dialog), so the block stays referenced
+// on the C stack and needs no separate GC root; a future async backend would
+// pin it instead.
+struct FileDialogContext
+{
+	mrb_state *mrb;
+	mrb_value block;
+};
+
+static void mrbFileDialogCallback(void *context, const std::vector<std::string> &files,
+	const char *filtername, const char *err)
+{
+	auto ctx = (FileDialogContext *) context;
+	mrb_state *mrb = ctx->mrb;
+
+	mrb_value filesary = mrb_ary_new_capa(mrb, (mrb_int) files.size());
+	for (const std::string &f : files)
+		mrb_ary_push(mrb, filesary, mrbx_string(mrb, f));
+
+	mrb_value argv[3] = {
+		filesary,
+		filtername != nullptr ? mrbx_string(mrb, filtername) : mrb_nil_value(),
+		err != nullptr ? mrbx_string(mrb, err) : mrb_nil_value(),
+	};
+	mrb_yield_argv(mrb, ctx->block, 3, argv);
+}
+
+// Love::Window.show_file_dialog(type:, ...) { |files, filter_name, err| ... }
+// The trailing block is the result callback (Lua passed it as the 2nd arg). It
+// receives the selected paths (Array), the matched filter name (or nil), and an
+// error string (or nil) -- the same triple love.window.showFileDialog yields.
+static mrb_value w_show_file_dialog(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+
+	// Grab the keyword arguments and the result block together. "type" is the
+	// only required keyword; omitting it raises ArgumentError via mrb_get_args.
+	mrb_value blk = mrb_nil_value();
+	mrb_value kv[8];
+	mrb_sym names[8] = {
+		mrb_intern_lit(mrb, "type"),
+		mrb_intern_lit(mrb, "title"),
+		mrb_intern_lit(mrb, "accept_label"),
+		mrb_intern_lit(mrb, "cancel_label"),
+		mrb_intern_lit(mrb, "default_name"),
+		mrb_intern_lit(mrb, "filters"),
+		mrb_intern_lit(mrb, "multi_select"),
+		mrb_intern_lit(mrb, "attach_to_window"),
+	};
+	const mrb_kwargs kw = { 8, 1, names, kv, nullptr };
+	mrb_get_args(mrb, ":&", &kw, &blk);
+
+	if (mrb_nil_p(blk))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "show_file_dialog requires a block to receive the result");
+
+	Window::FileDialogData data = {};
+
+	std::string typestr = mrbx_checkstring(mrb, kv[0]);
+	if (!Window::getConstant(typestr.c_str(), data.type))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid file dialog type: %s", typestr.c_str());
+
+	if (!mrb_undef_p(kv[1])) data.title       = mrbx_checkstring(mrb, kv[1]);
+	if (!mrb_undef_p(kv[2])) data.acceptLabel = mrbx_checkstring(mrb, kv[2]);
+	if (!mrb_undef_p(kv[3])) data.cancelLabel = mrbx_checkstring(mrb, kv[3]);
+	if (!mrb_undef_p(kv[4])) data.defaultName = mrbx_checkstring(mrb, kv[4]);
+
+	// filters: a Hash mapping a filter name to its pattern, e.g.
+	//   filters: { "Images" => "png;jpg", "All" => "*" }
+	if (!mrb_undef_p(kv[5]))
+	{
+		mrb_value fh = kv[5];
+		mrb_value keys = mrb_hash_keys(mrb, fh);
+		for (mrb_int i = 0; i < RARRAY_LEN(keys); i++)
+		{
+			mrb_value k = mrb_ary_ref(mrb, keys, i);
+			Window::FileDialogFilter filter = {};
+			filter.name = mrbx_checkstring(mrb, k);
+			filter.pattern = mrbx_checkstring(mrb, mrb_hash_get(mrb, fh, k));
+			data.filters.push_back(filter);
+		}
+	}
+
+	data.multiSelect    = mrbx_optboolean(mrb, kv[6], false);
+	data.attachToWindow = mrbx_optboolean(mrb, kv[7], false);
+
+	FileDialogContext ctx = { mrb, blk };
+	mrbx_catchexcept(mrb, [&]() { instance()->showFileDialog(data, mrbFileDialogCallback, &ctx); });
+	return mrb_nil_value();
+}
+
 // Re-apply the window mode. Like set_mode but every keyword is optional: any
 // omitted key (including width/height) keeps the current window's value, so a
 // game can tweak a single setting without restating the whole mode.
@@ -935,6 +1030,7 @@ static const MrbReg functions[] =
 	{ "show_message_box",          w_show_message_box,          MRB_ARGS_KEY(4, 0) },
 	{ "set_icon",                  w_set_icon,                  MRB_ARGS_KEY(1, 0) },
 	{ "get_icon",                  w_get_icon,                  MRB_ARGS_NONE() },
+	{ "show_file_dialog",          w_show_file_dialog,          MRB_ARGS_KEY(8, 0) | MRB_ARGS_BLOCK() },
 	{ "update_mode",               w_update_mode,               MRB_ARGS_KEY(17, 0) },
 	{ "get_pointer",               w_get_pointer,               MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
