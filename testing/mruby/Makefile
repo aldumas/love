@@ -104,9 +104,23 @@ MODULE_SRCS := \
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 
 # --- Targets -------------------------------------------------------------
-.PHONY: all run mruby clean
+.PHONY: all run mruby clean check-ledger install-hooks
 
 all: $(BIN)
+
+# Reconcile the deferral ledger (PORTING.md) against inline // TODO(mruby)
+# markers. Run standalone or via the pre-commit hook (see install-hooks).
+check-ledger:
+	$(HERE)check_porting_ledger.sh
+
+# Install the pre-commit hook that runs check-ledger. .git/hooks is not version
+# controlled, so each clone runs this once.
+install-hooks:
+	@hooks="$$(git -C $(LOVE_ROOT) rev-parse --absolute-git-dir)/hooks"; \
+	mkdir -p "$$hooks"; \
+	printf '#!/bin/sh\nexec "%scheck_porting_ledger.sh"\n' '$(HERE)' > "$$hooks/pre-commit"; \
+	chmod +x "$$hooks/pre-commit"; \
+	echo "installed pre-commit hook -> $$hooks/pre-commit"
 
 $(BIN): $(SRCS) $(MRUBY_A) $(PHYSFS_A)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRCS) $(PHYSFS_A) $(LDFLAGS) $(LDLIBS) -o $@

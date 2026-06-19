@@ -126,9 +126,12 @@ active — so `--boot game.rb` opens a real window and renders a moving rectangl
 ## Remaining work (per-module template established by this slice)
 
 The actionable checklist of everything deferred, stubbed, or temporarily
-implemented lives in **`PORTING.md`** (the ledger); every entry there has a
-matching `// TODO(mruby): …` marker in the code (`grep -rn "TODO(mruby)" src/`).
-The section below is the narrative overview.
+implemented lives in **`PORTING.md`** (the ledger). Each item with a code site
+carries a stable tag (e.g. `#win-icon`) that also appears in a
+`// TODO(mruby) #win-icon: …` marker at the deferral site. A pre-commit hook
+keeps the two in sync — install it once per clone with `make install-hooks`
+(or run the check directly with `make check-ledger`). The section below is the
+narrative overview.
 
 1. Port the other 71 `wrap_*.cpp` files to the `wrap_*_mrb.cpp` pattern, one
    module at a time, converting positional params to keyword args. The timer

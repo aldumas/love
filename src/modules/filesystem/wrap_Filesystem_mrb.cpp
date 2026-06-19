@@ -36,7 +36,7 @@
 // (lines) return arrays. Lua-loader-specific functions (load, require paths),
 // CommonPath mounting, symlinks, fused/android settings are intentionally left
 // for later passes.
-// TODO(mruby): deferred — Lua-loader/require paths, CommonPath mounting,
+// TODO(mruby) #fs-deferred: Lua-loader/require paths, CommonPath mounting,
 // symlinks, fused/android settings, Data-based mounting (see PORTING.md §A)
 
 #include "common/config.h"
