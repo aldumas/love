@@ -99,7 +99,10 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/window/Window.cpp \
 	$(LOVE_SRC)/modules/graphics/wrap_Graphics_mrb.cpp \
 	$(LOVE_SRC)/modules/keyboard/wrap_Keyboard_mrb.cpp \
-	$(LOVE_SRC)/modules/mouse/wrap_Mouse_mrb.cpp
+	$(LOVE_SRC)/modules/mouse/wrap_Mouse_mrb.cpp \
+	$(LOVE_SRC)/modules/system/wrap_System_mrb.cpp \
+	$(LOVE_SRC)/modules/system/System.cpp \
+	$(LOVE_SRC)/modules/system/sdl/System.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 

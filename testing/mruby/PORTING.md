@@ -26,7 +26,7 @@ Legend: `[ ]` not started · `[~]` partial / stubbed · `[x]` done
 ## Modules ported so far
 
 timer · math · filesystem · event · window · graphics (slice) · keyboard · mouse
-· boot pipeline (arg/callbacks/boot)
+· system · boot pipeline (arg/callbacks/boot)
 
 ---
 
