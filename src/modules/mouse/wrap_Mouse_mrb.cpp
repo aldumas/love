@@ -28,20 +28,24 @@
 //   love.mouse.isVisible()           -> Love::Mouse.visible?
 //
 // Backend note: like the keyboard module, this is a LEAN backend. The real
-// mouse/sdl/Mouse.cpp depends on the Cursor object type and the image module
-// (newCursor takes ImageData). HarnessMouse is instead a plain love::Module
-// that drives SDL's mouse state directly. The cursor object family
-// (new_cursor / get_system_cursor / set_cursor / get_cursor) is DEFERRED until
-// the image module and a Cursor Type are ported -- symmetric with how the lean
-// window backend deferred set_icon/get_icon for the same reason. Everything
-// else (position, buttons, visibility, grab, relative mode) is here.
+// mouse/sdl/Mouse.cpp is a full love::mouse::Mouse; HarnessMouse is instead a
+// plain love::Module that drives SDL's mouse state directly. The cursor object
+// family (new_cursor / get_system_cursor / set_cursor / get_cursor) is wired up
+// here using the real love::mouse::sdl::Cursor type (now that the image module
+// is ported), so this lean backend manages cursors itself. Everything else
+// (position, buttons, visibility, grab, relative mode) is here too.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
 #include "common/Module.h"
 #include "window/Window.h"
+#include "image/ImageData.h"
+#include "sdl/Cursor.h"
 
 #include <SDL3/SDL.h>
+
+#include <map>
+#include <vector>
 
 namespace love
 {
@@ -158,7 +162,42 @@ public:
 		return w != nullptr && SDL_GetWindowRelativeMouseMode(w);
 	}
 
+	// --- cursors (real love::mouse::sdl::Cursor, managed by this backend) --
+
+	love::mouse::Cursor *newCursor(const std::vector<image::ImageData *> &data, int hotx, int hoty)
+	{
+		return new sdl::Cursor(data, hotx, hoty);
+	}
+
+	love::mouse::Cursor *getSystemCursor(Cursor::SystemCursor type)
+	{
+		auto it = systemCursors.find(type);
+		if (it != systemCursors.end())
+			return it->second.get();
+
+		love::mouse::Cursor *cursor = new sdl::Cursor(type);
+		systemCursors[type].set(cursor, Acquire::NORETAIN);
+		return cursor;
+	}
+
+	void setCursor(love::mouse::Cursor *cursor)
+	{
+		curCursor.set(cursor);
+		SDL_SetCursor((SDL_Cursor *) cursor->getHandle());
+	}
+
+	void setCursor()
+	{
+		curCursor.set(nullptr);
+		SDL_SetCursor(SDL_GetDefaultCursor());
+	}
+
+	love::mouse::Cursor *getCursor() const { return curCursor.get(); }
+
 private:
+
+	StrongRef<love::mouse::Cursor> curCursor;
+	std::map<love::mouse::Cursor::SystemCursor, StrongRef<love::mouse::Cursor>> systemCursors;
 
 	static SDL_Window *windowHandle()
 	{
@@ -320,6 +359,73 @@ static mrb_value w_relative_mode(mrb_state *mrb, mrb_value self)
 	return mrbx_boolean(mrb, instance()->getRelativeMode());
 }
 
+// Love::Mouse.new_cursor(image_data:, hotx: 0, hoty: 0) — image_data is a single
+// ImageData or an Array of them (alternate DPI representations).
+static mrb_value w_new_cursor(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"image_data", "hotx", "hoty"}, 1, v);
+
+	std::vector<image::ImageData *> data;
+	if (mrb_array_p(v[0]))
+	{
+		mrb_int n = RARRAY_LEN(v[0]);
+		for (mrb_int i = 0; i < n; i++)
+			data.push_back(mrbx_checktype<image::ImageData>(mrb, mrb_ary_ref(mrb, v[0], i)));
+	}
+	else
+		data.push_back(mrbx_checktype<image::ImageData>(mrb, v[0]));
+
+	int hotx = mrbx_optint(mrb, v[1], 0);
+	int hoty = mrbx_optint(mrb, v[2], 0);
+
+	Cursor *cursor = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { cursor = instance()->newCursor(data, hotx, hoty); }))
+		return mrb_nil_value();
+
+	mrb_value r = mrbx_pushtype(mrb, cursor);
+	cursor->release();
+	return r;
+}
+
+static mrb_value w_get_system_cursor(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"type"}, 1, v);
+
+	std::string str = mrbx_checkstring(mrb, v[0]);
+	Cursor::SystemCursor systemCursor;
+	if (!Cursor::getConstant(str.c_str(), systemCursor))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "invalid system cursor type: %s", str.c_str());
+
+	Cursor *cursor = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { cursor = instance()->getSystemCursor(systemCursor); }))
+		return mrb_nil_value();
+	return mrbx_pushtype(mrb, cursor);
+}
+
+// Love::Mouse.set_cursor(cursor: <Cursor>) — omit/nil reverts to the default.
+static mrb_value w_set_cursor(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"cursor"}, 0, v);
+
+	if (mrb_undef_p(v[0]) || mrb_nil_p(v[0]))
+		instance()->setCursor();
+	else
+		instance()->setCursor(mrbx_checktype<Cursor>(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_get_cursor(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	return mrbx_pushtype(mrb, instance()->getCursor());
+}
+
 static const MrbReg functions[] =
 {
 	{ "get_x",                w_get_x,               MRB_ARGS_NONE() },
@@ -337,8 +443,34 @@ static const MrbReg functions[] =
 	{ "grabbed?",             w_grabbed,             MRB_ARGS_NONE() },
 	{ "set_relative_mode",    w_set_relative_mode,   MRB_ARGS_KEY(1, 0) },
 	{ "relative_mode?",       w_relative_mode,       MRB_ARGS_NONE() },
-	// TODO(mruby) #mouse-cursor: cursor object family deferred — new_cursor (needs
-	// image), get_system_cursor, set_cursor, get_cursor (need a Cursor Type). §A
+	{ "new_cursor",           w_new_cursor,          MRB_ARGS_KEY(3, 0) },
+	{ "get_system_cursor",    w_get_system_cursor,   MRB_ARGS_KEY(1, 0) },
+	{ "set_cursor",           w_set_cursor,          MRB_ARGS_KEY(1, 0) },
+	{ "get_cursor",           w_get_cursor,          MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// --- Love::Cursor object type --------------------------------------------
+
+static mrb_value cursor_getType(mrb_state *mrb, mrb_value self)
+{
+	Cursor *cursor = mrbx_checktype<Cursor>(mrb, self);
+	Cursor::CursorType ctype = cursor->getType();
+	const char *typestr = nullptr;
+
+	if (ctype == Cursor::CURSORTYPE_IMAGE)
+		Cursor::getConstant(ctype, typestr);
+	else if (ctype == Cursor::CURSORTYPE_SYSTEM)
+		Cursor::getConstant(cursor->getSystemType(), typestr);
+
+	if (typestr == nullptr)
+		mrb_raise(mrb, E_RUNTIME_ERROR, "Unknown cursor type.");
+	return mrbx_string(mrb, typestr);
+}
+
+static const MrbReg cursorFunctions[] =
+{
+	{ "get_type", cursor_getType, MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -357,6 +489,7 @@ extern "C" void mrb_love_mouse_init(mrb_state *mrb)
 	w.functions = functions;
 
 	mrbx_register_module(mrb, w);
+	mrbx_register_type(mrb, Cursor::type, cursorFunctions);
 }
 
 } // mouse

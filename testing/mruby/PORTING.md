@@ -54,10 +54,9 @@ timer · math · filesystem · event · window · graphics (slice) · keyboard �
       backend always forwards key repeats regardless
 
 ### mouse
-- [ ] (#mouse-cursor) cursor object family: `new_cursor`, `get_system_cursor`,
-      `set_cursor`, `get_cursor` — `ImageData` now exists (image module ported);
-      remaining work is a `Cursor` object type + cursor support in the lean mouse
-      backend
+- [x] (#mouse-cursor) cursor object family: `new_cursor`, `get_system_cursor`,
+      `set_cursor`, `get_cursor` and the `Love::Cursor` type — done; the lean
+      mouse backend manages cursors using the real `love::mouse::sdl::Cursor`
 
 ### image
 ImageData ported with a real backend (decode via lodepng/stb/tinyexr/ddsparse,
@@ -99,8 +98,8 @@ them changes when we swap.
       instead of the 621-line `Keyboard.h` enum tables. Swap for
       `keyboard/sdl/Keyboard.cpp` once the key-constant tables are ported.
 - [~] (#mouse-backend) **mouse** — plain `love::Module` driving SDL state
-      directly instead of the real `Mouse` base (which needs Cursor + image).
-      Swap for `mouse/sdl/Mouse.cpp`.
+      directly instead of the real `Mouse` base (it manages cursors itself via
+      the real `sdl::Cursor`). Swap for `mouse/sdl/Mouse.cpp`.
 
 ---
 

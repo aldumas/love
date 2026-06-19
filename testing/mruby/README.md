@@ -183,10 +183,11 @@ narrative overview.
    `HarnessMouse` follows the same lean pattern: a plain `love::Module` driving
    SDL's mouse state directly (position, buttons, visibility, grab, relative
    mode). Button indices keep LÖVE's convention (1 left, 2 right, 3 middle),
-   remapped onto SDL's order. Deferred within mouse: the cursor object family
-   (`new_cursor` / `get_system_cursor` / `set_cursor` / `get_cursor`), which
-   needs the image module (`new_cursor` takes `ImageData`) and a `Cursor` Type
-   -- symmetric with how the window backend deferred `set_icon`/`get_icon`.
+   remapped onto SDL's order. The cursor object family (`new_cursor` /
+   `get_system_cursor` / `set_cursor` / `get_cursor` and the `Love::Cursor` type)
+   is wired up now that the image module is ported -- the lean backend manages
+   cursors itself via the real `love::mouse::sdl::Cursor` (symmetric with the
+   window backend's `set_icon`/`get_icon`).
    The rest of the input family (`joystick`, `touch`, `sensor`) is still to
    come; once they land, the lean event backend can be swapped for the full
    `event/sdl/Event.cpp`.
