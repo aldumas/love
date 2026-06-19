@@ -37,12 +37,14 @@
 // graphics is ported, HarnessWindow creates a real SDL window (no renderer
 // context) so an actual window appears on screen and real keyboard/mouse events
 // flow through the (also lean) HarnessEvent pump. Graphics-dependent methods
-// (setGraphics, setIcon, the renderer context) are no-ops/stubs. Swap this for
+// (setGraphics, the renderer context) are no-ops/stubs. Swap this for
 // window/sdl/Window.cpp once graphics lands -- the Ruby-facing API is unchanged.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
+#include "common/pixelformat.h"
 #include "Window.h"
+#include "image/ImageData.h"
 
 #include <SDL3/SDL.h>
 
@@ -280,11 +282,35 @@ public:
 
 	const std::string &getWindowTitle() const override { return title; }
 
-	// --- icon (needs the image module; stubbed in the lean backend) -------
-	// TODO(mruby) #win-icon: set_icon/get_icon need the image module (PORTING.md §A)
+	// --- icon -------------------------------------------------------------
 
-	bool setIcon(love::image::ImageData * /*imgd*/) override { return false; }
-	love::image::ImageData *getIcon() override { return nullptr; }
+	bool setIcon(love::image::ImageData *imgd) override
+	{
+		if (imgd == nullptr)
+			return false;
+
+		if (imgd->getFormat() != PIXELFORMAT_RGBA8_UNORM)
+			throw love::Exception("setIcon only accepts 32-bit RGBA images.");
+
+		icon.set(imgd);
+
+		if (window == nullptr)
+			return false;
+
+		int w = imgd->getWidth();
+		int h = imgd->getHeight();
+		int pitch = w * (int) getPixelFormatBlockSize(imgd->getFormat());
+
+		SDL_Surface *sdlicon = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_ABGR8888, imgd->getData(), pitch);
+		if (sdlicon == nullptr)
+			return false;
+
+		SDL_SetWindowIcon(window, sdlicon);
+		SDL_DestroySurface(sdlicon);
+		return true;
+	}
+
+	love::image::ImageData *getIcon() override { return icon.get(); }
 
 	// --- vsync (no renderer context, so just remembered) ------------------
 
@@ -472,6 +498,7 @@ private:
 	bool mouseGrabbed = false;
 	WindowSettings settings;
 	SDL_Window *window = nullptr;
+	StrongRef<love::image::ImageData> icon;
 
 }; // HarnessWindow
 
@@ -820,6 +847,23 @@ static mrb_value w_show_message_box(mrb_state *mrb, mrb_value self)
 	return mrbx_boolean(mrb, success);
 }
 
+static mrb_value w_set_icon(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"image_data"}, 1, v);
+	love::image::ImageData *imgd = mrbx_checktype<love::image::ImageData>(mrb, v[0]);
+	bool success = false;
+	mrbx_catchexcept(mrb, [&]() { success = instance()->setIcon(imgd); });
+	return mrbx_boolean(mrb, success);
+}
+
+static mrb_value w_get_icon(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	return mrbx_pushtype(mrb, instance()->getIcon());
+}
+
 static const MrbReg functions[] =
 {
 	{ "set_mode",                  w_set_mode,                  MRB_ARGS_KEY(17, 0) },
@@ -856,6 +900,8 @@ static const MrbReg functions[] =
 	{ "request_attention",         w_request_attention,         MRB_ARGS_KEY(1, 0) },
 	{ "get_system_theme",          w_get_system_theme,          MRB_ARGS_NONE() },
 	{ "show_message_box",          w_show_message_box,          MRB_ARGS_KEY(4, 0) },
+	{ "set_icon",                  w_set_icon,                  MRB_ARGS_KEY(1, 0) },
+	{ "get_icon",                  w_get_icon,                  MRB_ARGS_NONE() },
 	// TODO(mruby) #win-omitted: not yet exposed — update_mode, get_pointer (PORTING.md §A)
 	{ nullptr, nullptr, 0 }
 };

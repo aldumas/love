@@ -42,9 +42,8 @@ timer · math · filesystem · event · window · graphics (slice) · keyboard �
 
 ### window
 - [ ] (#win-omitted) `update_mode` and `get_pointer` — not yet exposed
-- [ ] (#win-icon) `set_icon` / `get_icon` — `ImageData` now exists (image module
-      ported); remaining work is wiring it through the lean window backend (SDL
-      window icon from pixels)
+- [x] (#win-icon) `set_icon` / `get_icon` — done; the lean window backend builds
+      an SDL window icon from the ImageData's RGBA8 pixels and retains it
 - [ ] (#win-filedialog) `show_file_dialog` — needs Ruby callback plumbing;
       currently stubbed to call back with an error
 - [~] (#win-dpi) HiDPI coordinate transforms — DPI scale pinned to 1.0,
