@@ -43,6 +43,13 @@ def Love.update(dt)
     @y += speed if k.down?(key: ["down", "s"])
   end
 
+  # Hold the left mouse button to snap the square (centered) to the cursor.
+  if Love.const_defined?(:Mouse) && Love::Mouse.down?(button: 1)
+    p = Love::Mouse.get_position
+    @x = p[:x] - 40
+    @y = p[:y] - 40
+  end
+
   # Auto-quit after ~10s so the demo terminates on its own; press escape (see
   # Love.keypressed) to quit sooner. Raise this to play with it longer.
   Love::Event.quit(code: 0) if @frame >= 600

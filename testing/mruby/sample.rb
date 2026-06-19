@@ -213,5 +213,23 @@ puts "modifier_active?(key: 'capslock') -> #{k.modifier_active?(key: 'capslock')
 puts "modifier_active?(key: 'shift')    -> #{k.modifier_active?(key: 'shift')}"
 puts "has_screen_keyboard?              -> #{k.has_screen_keyboard?}"
 
+# --- mouse -----------------------------------------------------------------
+# State queries via SDL: position, held buttons, visibility, grab, and
+# relative mode. Button indices follow LÖVE's convention (1 left, 2 right,
+# 3 middle). The cursor object family (new_cursor/get_system_cursor/
+# set_cursor) is deferred until the image module + a Cursor Type land.
+puts
+puts "=== Love::Mouse ==="
+m = Love::Mouse
+puts "get_position                      -> #{m.get_position.inspect}"
+puts "get_x / get_y                     -> #{m.get_x.round(1)}, #{m.get_y.round(1)}"
+puts "get_global_position               -> #{m.get_global_position.inspect}"
+puts "down?(button: 1)                  -> #{m.down?(button: 1)}  (nothing held in a flat script)"
+puts "down?(button: [1, 2])            -> #{m.down?(button: [1, 2])}"
+puts "visible?                          -> #{m.visible?}"
+puts "cursor_supported?                 -> #{m.cursor_supported?}"
+puts "grabbed?                          -> #{m.grabbed?}"
+puts "relative_mode?                    -> #{m.relative_mode?}"
+
 puts
 puts "Try editing this file (testing/mruby/sample.rb) and re-running!"

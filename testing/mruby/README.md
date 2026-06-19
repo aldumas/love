@@ -18,6 +18,7 @@ arguments**.
 | Ported module: window (lean graphics-independent SDL backend) | `src/modules/window/wrap_Window_mrb.cpp` |
 | Ported module: graphics (thin slice: clear/color/rectangle/present, immediate-mode GL) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
 | Ported module: keyboard (lean SDL state queries, no enum maps) | `src/modules/keyboard/wrap_Keyboard_mrb.cpp` |
+| Ported module: mouse (lean SDL state queries; cursor objects deferred) | `src/modules/mouse/wrap_Mouse_mrb.cpp` |
 | Ported boot scripts (arg/callbacks/boot) | `src/modules/love/{arg,callbacks,boot}.rb` |
 | Standalone demo harness | `testing/mruby/harness.cpp` |
 | nanosleep/deprecation stubs (avoid linking SDL for the demo) | `testing/mruby/delay_stub.cpp` |
@@ -25,7 +26,7 @@ arguments**.
 
 The full `love` executable can't link until all 74 module wrappers are ported,
 so this harness exercises the ported modules (`timer`, `math`, `filesystem`,
-`event`, `window`, `graphics`, `keyboard`) end-to-end. The filesystem module links the
+`event`, `window`, `graphics`, `keyboard`, `mouse`) end-to-end. The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the
 graphics slice additionally links `libGL` for immediate-mode OpenGL.
@@ -158,9 +159,16 @@ active — so `--boot game.rb` opens a real window and renders a moving rectangl
    rather than the 621-line `Keyboard.h` enum tables -- symmetric with the lean
    event backend, which emits those same SDL names. `set_key_repeat` is stored
    state only for now (the lean event backend always forwards key repeats).
-   `mouse` and the rest of the input family (`joystick`, `touch`, `sensor`) are
-   still to come; once they land, the lean event backend can be swapped for the
-   full `event/sdl/Event.cpp`.
+   `HarnessMouse` follows the same lean pattern: a plain `love::Module` driving
+   SDL's mouse state directly (position, buttons, visibility, grab, relative
+   mode). Button indices keep LÖVE's convention (1 left, 2 right, 3 middle),
+   remapped onto SDL's order. Deferred within mouse: the cursor object family
+   (`new_cursor` / `get_system_cursor` / `set_cursor` / `get_cursor`), which
+   needs the image module (`new_cursor` takes `ImageData`) and a `Cursor` Type
+   -- symmetric with how the window backend deferred `set_icon`/`get_icon`.
+   The rest of the input family (`joystick`, `touch`, `sensor`) is still to
+   come; once they land, the lean event backend can be swapped for the full
+   `event/sdl/Event.cpp`.
 3. Swap the object/proxy system: the Lua weak-table identity map needs an mruby
    equivalent so the same C++ object always maps to the same Ruby object.
 4. Wire CMake (`CMakeLists.txt`) to build `libmruby.a` and link it instead of
