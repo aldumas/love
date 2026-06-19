@@ -864,6 +864,39 @@ static mrb_value w_get_icon(mrb_state *mrb, mrb_value self)
 	return mrbx_pushtype(mrb, instance()->getIcon());
 }
 
+// Re-apply the window mode. Like set_mode but every keyword is optional: any
+// omitted key (including width/height) keeps the current window's value, so a
+// game can tweak a single setting without restating the whole mode.
+static mrb_value w_update_mode(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[17];
+	mrbx_get_kwargs(mrb, {"width", "height", "fullscreen", "fullscreen_type",
+		"vsync", "msaa", "stencil", "depth", "resizable", "min_width",
+		"min_height", "borderless", "centered", "display", "use_dpi_scale",
+		"x", "y"}, 0, v);
+
+	int w, h;
+	WindowSettings settings;
+	instance()->getWindow(w, h, settings);
+
+	w = mrbx_optint(mrb, v[0], w);
+	h = mrbx_optint(mrb, v[1], h);
+	readWindowSettings(mrb, v, settings);
+
+	bool success = false;
+	mrbx_catchexcept(mrb, [&]() { success = instance()->setWindow(w, h, &settings); });
+	return mrbx_boolean(mrb, success);
+}
+
+// The native window handle as an opaque pointer (Lua returned a lightuserdata;
+// the mruby analog is a TT_CPTR value). For native/FFI interop only.
+static mrb_value w_get_pointer(mrb_state *mrb, mrb_value self)
+{
+	(void) self; (void) mrb;
+	return mrb_cptr_value(mrb, instance()->getHandle());
+}
+
 static const MrbReg functions[] =
 {
 	{ "set_mode",                  w_set_mode,                  MRB_ARGS_KEY(17, 0) },
@@ -902,7 +935,8 @@ static const MrbReg functions[] =
 	{ "show_message_box",          w_show_message_box,          MRB_ARGS_KEY(4, 0) },
 	{ "set_icon",                  w_set_icon,                  MRB_ARGS_KEY(1, 0) },
 	{ "get_icon",                  w_get_icon,                  MRB_ARGS_NONE() },
-	// TODO(mruby) #win-omitted: not yet exposed — update_mode, get_pointer (PORTING.md §A)
+	{ "update_mode",               w_update_mode,               MRB_ARGS_KEY(17, 0) },
+	{ "get_pointer",               w_get_pointer,               MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
 };
 

@@ -41,7 +41,9 @@ timer · math · filesystem · event · window · graphics (slice) · keyboard �
   - Data-based mounting (mount a FileData/ByteData)
 
 ### window
-- [ ] (#win-omitted) `update_mode` and `get_pointer` — not yet exposed
+- [x] (#win-omitted) `update_mode` and `get_pointer` — done; `update_mode`
+      re-applies the mode with every keyword (incl. width/height) optional, and
+      `get_pointer` returns the native window handle as a TT_CPTR value
 - [x] (#win-icon) `set_icon` / `get_icon` — done; the lean window backend builds
       an SDL window icon from the ImageData's RGBA8 pixels and retains it
 - [ ] (#win-filedialog) `show_file_dialog` — needs Ruby callback plumbing;

@@ -169,9 +169,11 @@ narrative overview.
    renderer context, shader pipeline, and batched renderer -- ~8000 lines that
    pull in the whole graphics subsystem. Swap the lean trio for them once the
    graphics object/shader system is ported; the Ruby-facing APIs are unchanged.
-   Deferred within window: `update_mode`, `set_icon`/`get_icon` (need the image
-   module), `show_file_dialog` (needs Ruby callback plumbing), `get_pointer`, and
+   Deferred within window: `show_file_dialog` (needs Ruby callback plumbing) and
    the HiDPI coordinate transforms (the lean backend fixes DPI scale at 1.0).
+   `set_icon`/`get_icon`, `update_mode`, and `get_pointer` are now exposed
+   (`update_mode` re-applies the mode with every keyword optional; `get_pointer`
+   returns the native handle as a TT_CPTR value).
    The graphics slice covers only `clear` / `set_color` / `set_background_color`
    / `rectangle` / `origin` / `present` / dimensions -- no textures, shaders,
    transforms beyond `origin`, blend/stencil state, fonts, or batched drawing.
