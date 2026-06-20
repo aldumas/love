@@ -39,7 +39,10 @@ INCLUDES += $(shell pkg-config --cflags freetype2 harfbuzz)
 # So the harness can locate the ported boot scripts (arg.rb/callbacks.rb/boot.rb).
 CXXFLAGS += -DLOVE_SRC_DIR='"$(LOVE_SRC)"'
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
-LDLIBS   := -lmruby -lSDL3 -lGL -lpthread -lm -lz -lfreetype -lharfbuzz
+# The sound module's lullaby backend links system libvorbis + libmodplug (the
+# Wave/FLAC/MP3 decoders are bundled — Wuff and dr_flac/dr_mp3, built below).
+LDLIBS   := -lmruby -lSDL3 -lGL -lpthread -lm -lz -lfreetype -lharfbuzz \
+            -lvorbisfile -lvorbis -logg -lmodplug
 
 # --- physfs (compiled as C into a static archive) ------------------------
 PHYSFS_DIR  := $(LOVE_SRC)/libraries/physfs
@@ -58,6 +61,16 @@ LZ4_DIR  := $(LOVE_SRC)/libraries/lz4
 LZ4_SRCS := $(LZ4_DIR)/lz4.c $(LZ4_DIR)/lz4hc.c
 LZ4_OBJS := $(patsubst $(LZ4_DIR)/%.c,$(OBJ_DIR)/lz4_%.o,$(LZ4_SRCS))
 LZ4_A    := $(OBJ_DIR)/liblz4.a
+
+# --- Wuff (compiled as C for the sound module's WaveDecoder) --------------
+WUFF_DIR  := $(LOVE_SRC)/libraries/Wuff
+WUFF_SRCS := \
+	$(WUFF_DIR)/wuff.c \
+	$(WUFF_DIR)/wuff_convert.c \
+	$(WUFF_DIR)/wuff_internal.c \
+	$(WUFF_DIR)/wuff_memory.c
+WUFF_OBJS := $(patsubst $(WUFF_DIR)/%.c,$(OBJ_DIR)/wuff_%.o,$(WUFF_SRCS))
+WUFF_A    := $(OBJ_DIR)/libwuff.a
 
 # --- C++ sources ---------------------------------------------------------
 CORE_SRCS := \
@@ -153,7 +166,18 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/font/GenericShaper.cpp \
 	$(LOVE_SRC)/modules/font/freetype/Font.cpp \
 	$(LOVE_SRC)/modules/font/freetype/TrueTypeRasterizer.cpp \
-	$(LOVE_SRC)/modules/font/freetype/HarfbuzzShaper.cpp
+	$(LOVE_SRC)/modules/font/freetype/HarfbuzzShaper.cpp \
+	$(LOVE_SRC)/modules/data/DataStream.cpp \
+	$(LOVE_SRC)/modules/sound/wrap_Sound_mrb.cpp \
+	$(LOVE_SRC)/modules/sound/Sound.cpp \
+	$(LOVE_SRC)/modules/sound/SoundData.cpp \
+	$(LOVE_SRC)/modules/sound/Decoder.cpp \
+	$(LOVE_SRC)/modules/sound/lullaby/Sound.cpp \
+	$(LOVE_SRC)/modules/sound/lullaby/WaveDecoder.cpp \
+	$(LOVE_SRC)/modules/sound/lullaby/FLACDecoder.cpp \
+	$(LOVE_SRC)/modules/sound/lullaby/VorbisDecoder.cpp \
+	$(LOVE_SRC)/modules/sound/lullaby/MP3Decoder.cpp \
+	$(LOVE_SRC)/modules/sound/lullaby/ModPlugDecoder.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 
@@ -176,8 +200,8 @@ install-hooks:
 	chmod +x "$$hooks/pre-commit"; \
 	echo "installed pre-commit hook -> $$hooks/pre-commit"
 
-$(BIN): $(SRCS) $(MRUBY_A) $(PHYSFS_A) $(LZ4_A)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRCS) $(PHYSFS_A) $(LZ4_A) $(LDFLAGS) $(LDLIBS) -o $@
+$(BIN): $(SRCS) $(MRUBY_A) $(PHYSFS_A) $(LZ4_A) $(WUFF_A)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRCS) $(PHYSFS_A) $(LZ4_A) $(WUFF_A) $(LDFLAGS) $(LDLIBS) -o $@
 
 $(OBJ_DIR)/physfs_%.o: $(PHYSFS_DIR)/%.c | $(OBJ_DIR)
 	$(CC) -O2 -I$(PHYSFS_DIR) -c $< -o $@
@@ -190,6 +214,12 @@ $(OBJ_DIR)/lz4_%.o: $(LZ4_DIR)/%.c | $(OBJ_DIR)
 
 $(LZ4_A): $(LZ4_OBJS)
 	ar rcs $@ $(LZ4_OBJS)
+
+$(OBJ_DIR)/wuff_%.o: $(WUFF_DIR)/%.c | $(OBJ_DIR)
+	$(CC) -O2 -I$(WUFF_DIR) -c $< -o $@
+
+$(WUFF_A): $(WUFF_OBJS)
+	ar rcs $@ $(WUFF_OBJS)
 
 $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)

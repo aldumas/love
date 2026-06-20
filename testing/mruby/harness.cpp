@@ -44,6 +44,7 @@ namespace love { namespace data       { extern "C" void mrb_love_data_init(mrb_s
 namespace love { namespace image      { extern "C" void mrb_love_image_init(mrb_state *mrb); } }
 namespace love { namespace font       { extern "C" void mrb_love_font_init(mrb_state *mrb); } }
 namespace love { namespace thread     { extern "C" void mrb_love_thread_init(mrb_state *mrb); } }
+namespace love { namespace sound      { extern "C" void mrb_love_sound_init(mrb_state *mrb); } }
 
 // Set by the thread module (LuaThread.h); the harness installs open_love so a
 // thread's fresh mrb_state gets the same Love:: modules as the main VM.
@@ -77,6 +78,7 @@ static void open_love(mrb_state *mrb)
 	love::image::mrb_love_image_init(mrb);
 	love::font::mrb_love_font_init(mrb);
 	love::thread::mrb_love_thread_init(mrb);
+	love::sound::mrb_love_sound_init(mrb);
 }
 
 static bool read_file(const char *path, std::string &out)

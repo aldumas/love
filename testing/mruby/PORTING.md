@@ -26,7 +26,7 @@ Legend: `[ ]` not started · `[~]` partial / stubbed · `[x]` done
 ## Modules ported so far
 
 timer · math · filesystem · event · window · graphics (slice) · keyboard · mouse
-· system · data · image · font · thread · boot pipeline (arg/callbacks/boot)
+· system · data · image · font · thread · sound · boot pipeline (arg/callbacks/boot)
 
 ---
 
@@ -109,6 +109,24 @@ Required a runtime fix: `mrbx_gettypeclass`'s type->class cache is now keyed per
 single-state cache handed a thread VM the main VM's stale classes. Also,
 Variant->Ruby now reconstructs a contiguous 1-based integer table as an Array
 (so arrays round-trip as arrays through channels/threads/events). No deferrals.
+
+### sound
+Fully ported with the **real** lullaby decode backend. `Love::Sound` exposes
+`new_decoder` and `new_sound_data`, plus the `Love::Decoder` and
+`Love::SoundData` object types (`SoundData` is-a `Data`, inheriting the Data
+instance methods via the class hierarchy — the data module must init first). All
+five upstream decoders are linked: Wave (bundled Wuff), FLAC + MP3 (bundled
+dr_flac / dr_mp3 compiled into their decoder cpps), Vorbis (system libvorbis),
+and ModPlug (system libmodplug). `new_decoder(file:)` resolves a filename String
+(opened via the filesystem module), a `Data` object, or a `Stream` into a
+`love::Stream`; the default `stream_source: "file"` streams from disk, `"memory"`
+reads the whole file into a `data::DataStream`. `new_sound_data` has three forms:
+`samples:`/`sample_rate:`/`bit_depth:`/`channels:` (empty buffer), `decoder:`
+(fully decode a Decoder), or `file:` (decode a file). `get_sample`/`set_sample`
+take an optional 1-based `channel:`; `slice`/`copy_from`/`clone` are exposed.
+Note the FFI fast path in `wrap_SoundData.lua` (a per-object pointer cache) is a
+LuaJIT-only optimization and is intentionally dropped — the mruby binding calls
+the C++ `getSample`/`setSample` directly. No deferrals.
 
 ### data
 The module's functions are class methods on `Love::Data` (the module name "Data"
