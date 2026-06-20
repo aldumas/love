@@ -187,6 +187,13 @@ bool mrbx_istype(mrb_state *mrb, mrb_value v)
 struct RClass *mrbx_gettypeclass(mrb_state *mrb, const love::Type &type);
 
 /**
+ * Drops the cached type->class entries for a closing mrb_state. Call right
+ * before mrb_close on a per-thread state so a later state reusing the same
+ * address is never handed a stale RClass from this one.
+ **/
+void mrbx_forgetstate(mrb_state *mrb);
+
+/**
  * Registers a LÖVE module as Love::<Name> with its keyword-argument methods.
  * The module instance is retained and stored so wrapper functions can reach it.
  **/

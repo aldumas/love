@@ -26,7 +26,7 @@ Legend: `[ ]` not started · `[~]` partial / stubbed · `[x]` done
 ## Modules ported so far
 
 timer · math · filesystem · event · window · graphics (slice) · keyboard · mouse
-· system · data · image · font · boot pipeline (arg/callbacks/boot)
+· system · data · image · font · thread · boot pipeline (arg/callbacks/boot)
 
 ---
 
@@ -92,6 +92,23 @@ routes through `getGlyphDataForIndex`, which constructs `GlyphData(0, …)` sinc
 it only has the freetype glyph index, not the codepoint. (The graphics-side
 `TextShaper` / harfbuzz shaping is compiled in but exposed via the unported
 graphics `Font`, not love.font.)
+
+### thread
+Fully ported with the **real** SDL thread backend. A thread runs an mruby
+script in its own `mrb_state` (mruby states aren't shareable across threads):
+`LuaThread.cpp` is swapped for `LuaThread_mrb.cpp`, which spins up the state,
+opens the Love:: modules via a host-installed opener (`g_threadVMOpener`, set by
+the harness to the same routine it uses for the main VM), and runs the code.
+start() arguments reach the script as the global `$LOVE_THREAD_ARGS` array (the
+mruby analog of the Lua chunk's `...`). Like the data module, the "Thread"
+module-name/type-name collision is resolved by hanging the module functions as
+class methods on the `Love::Thread` type class. Channels round-trip values via
+the runtime's Variant<->Ruby conversion; `perform_atomic` takes a block.
+Required a runtime fix: `mrbx_gettypeclass`'s type->class cache is now keyed per
+`mrb_state` (with `mrbx_forgetstate` cleanup on thread exit) -- the old
+single-state cache handed a thread VM the main VM's stale classes. Also,
+Variant->Ruby now reconstructs a contiguous 1-based integer table as an Array
+(so arrays round-trip as arrays through channels/threads/events). No deferrals.
 
 ### data
 The module's functions are class methods on `Love::Data` (the module name "Data"

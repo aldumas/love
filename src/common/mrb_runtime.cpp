@@ -22,7 +22,9 @@
 #include "Module.h"
 #include "Variant.h"
 
+#include <map>
 #include <unordered_map>
+#include <utility>
 
 namespace love
 {
@@ -131,13 +133,16 @@ static void mrbx_object_free(mrb_state *mrb, void *p)
 const mrb_data_type mrbx_object_data_type = { "love::Object", mrbx_object_free };
 
 // Maps each love::Type to its lazily-created Ruby class under Love::.
-// Single-state foundation; a per-mrb_state map would be needed for multiple
-// concurrently live states (threads), which is future work.
-static std::unordered_map<const love::Type *, RClass *> typeClasses;
+// Maps a love::Type to its Ruby class, per mrb_state. The state is part of the
+// key because each thread runs its own mrb_state (and an RClass belongs to one
+// state); without it a thread VM would get back the main VM's stale class.
+// Entries for a state are dropped by mrbx_forgetstate when that state closes.
+static std::map<std::pair<mrb_state *, const love::Type *>, RClass *> typeClasses;
 
 struct RClass *mrbx_gettypeclass(mrb_state *mrb, const love::Type &type)
 {
-	auto it = typeClasses.find(&type);
+	auto key = std::make_pair(mrb, &type);
+	auto it = typeClasses.find(key);
 	if (it != typeClasses.end())
 		return it->second;
 
@@ -165,8 +170,21 @@ struct RClass *mrbx_gettypeclass(mrb_state *mrb, const love::Type &type)
 	struct RClass *cls = mrb_define_class_under(mrb, love, name.c_str(), super);
 	MRB_SET_INSTANCE_TT(cls, MRB_TT_DATA);
 
-	typeClasses[&type] = cls;
+	typeClasses[key] = cls;
 	return cls;
+}
+
+// Drop all cached type->class entries for a closing mrb_state, so a later state
+// reusing the same address can't be handed a stale RClass. Call before mrb_close.
+void mrbx_forgetstate(mrb_state *mrb)
+{
+	for (auto it = typeClasses.begin(); it != typeClasses.end(); )
+	{
+		if (it->first.first == mrb)
+			it = typeClasses.erase(it);
+		else
+			++it;
+	}
 }
 
 mrb_value mrbx_pushtype(mrb_state *mrb, love::Type &type, love::Object *object)
@@ -218,8 +236,8 @@ static love::Type *mrbx_typeof(mrb_state *mrb, mrb_value v)
 	struct RClass *cls = mrb_obj_class(mrb, v);
 	for (const auto &pair : typeClasses)
 	{
-		if (pair.second == cls)
-			return const_cast<love::Type *>(pair.first);
+		if (pair.first.first == mrb && pair.second == cls)
+			return const_cast<love::Type *>(pair.first.second);
 	}
 	return nullptr;
 }
@@ -244,8 +262,29 @@ mrb_value mrbx_pushvariant(mrb_state *mrb, const Variant &v)
 		return mrbx_pushtype(mrb, *data.objectproxy.type, data.objectproxy.object);
 	case Variant::TABLE:
 	{
+		const auto &pairs = data.table->pairs;
+
+		// Reconstruct an Array when the table is a contiguous 1-based integer
+		// sequence -- the exact shape mrbx_checkvariant produces for a Ruby
+		// Array -- so arrays round-trip as arrays; otherwise build a Hash.
+		bool sequence = !pairs.empty();
+		for (size_t i = 0; i < pairs.size() && sequence; i++)
+		{
+			const Variant &k = pairs[i].first;
+			if (k.getType() != Variant::NUMBER || k.getData().number != (double)(i + 1))
+				sequence = false;
+		}
+
+		if (sequence)
+		{
+			mrb_value arr = mrb_ary_new_capa(mrb, (mrb_int) pairs.size());
+			for (const auto &kv : pairs)
+				mrb_ary_push(mrb, arr, mrbx_pushvariant(mrb, kv.second));
+			return arr;
+		}
+
 		mrb_value hash = mrb_hash_new(mrb);
-		for (const auto &kv : data.table->pairs)
+		for (const auto &kv : pairs)
 			mrb_hash_set(mrb, hash, mrbx_pushvariant(mrb, kv.first), mrbx_pushvariant(mrb, kv.second));
 		return hash;
 	}

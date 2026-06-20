@@ -31,10 +31,18 @@
 #include "common/Variant.h"
 #include "threads.h"
 
+struct mrb_state;
+
 namespace love
 {
 namespace thread
 {
+
+// mruby port: the host installs an opener that registers the Love:: modules into
+// a thread's fresh mrb_state (see LuaThread_mrb.cpp / the harness). Declared here
+// so the host can set it; null by default.
+typedef void (*ThreadVMOpener)(struct mrb_state *);
+extern ThreadVMOpener g_threadVMOpener;
 
 class LuaThread : public Threadable
 {

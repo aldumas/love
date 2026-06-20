@@ -43,6 +43,41 @@ namespace love { namespace system     { extern "C" void mrb_love_system_init(mrb
 namespace love { namespace data       { extern "C" void mrb_love_data_init(mrb_state *mrb); } }
 namespace love { namespace image      { extern "C" void mrb_love_image_init(mrb_state *mrb); } }
 namespace love { namespace font       { extern "C" void mrb_love_font_init(mrb_state *mrb); } }
+namespace love { namespace thread     { extern "C" void mrb_love_thread_init(mrb_state *mrb); } }
+
+// Set by the thread module (LuaThread.h); the harness installs open_love so a
+// thread's fresh mrb_state gets the same Love:: modules as the main VM.
+namespace love { namespace thread {
+typedef void (*ThreadVMOpener)(struct mrb_state *);
+extern ThreadVMOpener g_threadVMOpener;
+} }
+
+// argv[0], stashed so the module opener (also used for thread VMs) can expose it
+// as Love::ARG0 without threading it through every call.
+static std::string g_arg0;
+
+// Registers the Love namespace and every ported module into an mrb_state. Run
+// for the main VM and again for each thread's VM (module init reuses the shared
+// native singletons, only rebuilding the per-state Ruby bindings).
+static void open_love(mrb_state *mrb)
+{
+	struct RClass *love = mrb_define_module(mrb, "Love");
+	mrb_define_const(mrb, love, "ARG0", mrb_str_new_cstr(mrb, g_arg0.c_str()));
+
+	love::timer::mrb_love_timer_init(mrb);
+	love::math::mrb_love_math_init(mrb);
+	love::filesystem::mrb_love_filesystem_init(mrb);
+	love::event::mrb_love_event_init(mrb);
+	love::window::mrb_love_window_init(mrb);
+	love::graphics::mrb_love_graphics_init(mrb);
+	love::keyboard::mrb_love_keyboard_init(mrb);
+	love::mouse::mrb_love_mouse_init(mrb);
+	love::system::mrb_love_system_init(mrb);
+	love::data::mrb_love_data_init(mrb);
+	love::image::mrb_love_image_init(mrb);
+	love::font::mrb_love_font_init(mrb);
+	love::thread::mrb_love_thread_init(mrb);
+}
 
 static bool read_file(const char *path, std::string &out)
 {
@@ -141,26 +176,15 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	// Top-level namespace that all LÖVE modules live under.
-	struct RClass *love = mrb_define_module(mrb, "Love");
-
 	// Expose the executable path so scripts can bootstrap the filesystem module
 	// (Love::Filesystem.init(arg0: Love::ARG0)), mirroring what love.cpp passes
-	// from main(argv[0]) in the real engine.
-	mrb_define_const(mrb, love, "ARG0", mrb_str_new_cstr(mrb, argv[0]));
+	// from main(argv[0]) in the real engine. open_love reads it via g_arg0.
+	g_arg0 = argv[0];
 
-	love::timer::mrb_love_timer_init(mrb);
-	love::math::mrb_love_math_init(mrb);
-	love::filesystem::mrb_love_filesystem_init(mrb);
-	love::event::mrb_love_event_init(mrb);
-	love::window::mrb_love_window_init(mrb);
-	love::graphics::mrb_love_graphics_init(mrb);
-	love::keyboard::mrb_love_keyboard_init(mrb);
-	love::mouse::mrb_love_mouse_init(mrb);
-	love::system::mrb_love_system_init(mrb);
-	love::data::mrb_love_data_init(mrb);
-	love::image::mrb_love_image_init(mrb);
-	love::font::mrb_love_font_init(mrb);
+	// Register the Love namespace and every ported module, and install the same
+	// routine as the thread VM opener so spawned threads see the same modules.
+	open_love(mrb);
+	love::thread::g_threadVMOpener = open_love;
 
 	int rc;
 	if (boot)

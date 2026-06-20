@@ -100,6 +100,10 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/thread/threads.cpp \
 	$(LOVE_SRC)/modules/thread/sdl/threads.cpp \
 	$(LOVE_SRC)/modules/thread/sdl/Thread.cpp \
+	$(LOVE_SRC)/modules/thread/ThreadModule.cpp \
+	$(LOVE_SRC)/modules/thread/Channel.cpp \
+	$(LOVE_SRC)/modules/thread/LuaThread_mrb.cpp \
+	$(LOVE_SRC)/modules/thread/wrap_ThreadModule_mrb.cpp \
 	$(LOVE_SRC)/modules/event/wrap_Event_mrb.cpp \
 	$(LOVE_SRC)/modules/event/Event.cpp \
 	$(LOVE_SRC)/common/Variant.cpp \
