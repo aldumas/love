@@ -73,10 +73,12 @@ timer · math · filesystem · event · window · graphics (slice) · keyboard �
 ImageData ported with a real backend (decode via lodepng/stb/tinyexr/ddsparse,
 all magpie handlers compiled). ImageData is-a Data and inherits the Data instance
 methods through the runtime's class hierarchy.
-- [ ] (#img-compressed) `new_compressed_data` / `compressed?` and the
-      `CompressedImageData` object type — the C++ compiles in (the Image module
-      instantiates every format handler), but the Ruby type/functions are not yet
-      exposed.
+- [x] (#img-compressed) `new_compressed_data` / `compressed?` and the
+      `CompressedImageData` object type — done; `Love::CompressedImageData` is-a
+      `Love::Data` (inherits the Data methods via the class hierarchy) and exposes
+      clone / get_width / get_height / get_dimensions (optional 1-based `mipmap:`)
+      / get_mipmap_count / get_format / set_linear / linear?. Both module funcs
+      take `file:` (a Data object or a filename String read via the filesystem).
 
 ### data
 The module's functions are class methods on `Love::Data` (the module name "Data"

@@ -31,8 +31,9 @@
 //   Love::Image.new_image_data(file: <filename String or Data>)  # decode
 // Pixel colors are passed/returned as `[r, g, b, a]` arrays.
 //
-// The CompressedImageData family (new_compressed_data / compressed?) is deferred
-// (#img-compressed) — it needs the CompressedImageData object type wired up.
+// Compressed textures: Love::Image.new_compressed_data(file:) returns a
+// Love::CompressedImageData (is-a Data), and Love::Image.compressed?(file:)
+// reports whether a file holds a recognized compressed format.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -265,7 +266,122 @@ static const MrbReg imageDataFunctions[] =
 	{ nullptr, nullptr, 0 }
 };
 
+// --- CompressedImageData instance methods --------------------------------
+// CompressedImageData is-a Data, so (like ImageData) it inherits the Data
+// instance methods through the runtime's class hierarchy.
+
+static mrb_value cid_clone(mrb_state *mrb, mrb_value self)
+{
+	CompressedImageData *t = mrbx_checktype<CompressedImageData>(mrb, self), *c = nullptr;
+	mrbx_catchexcept(mrb, [&]() { c = t->clone(); });
+	mrb_value r = mrbx_pushtype(mrb, c);
+	if (c) c->release();
+	return r;
+}
+
+// get_width / get_height / get_dimensions take an optional 1-based `mipmap:`
+// level (0-based internally), matching love.image's CompressedImageData.
+static mrb_value cid_getWidth(mrb_state *mrb, mrb_value self)
+{
+	CompressedImageData *t = mrbx_checktype<CompressedImageData>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"mipmap"}, 0, v);
+	int mip = mrbx_optint(mrb, v[0], 1);
+	int width = 0;
+	if (mrbx_catchexcept(mrb, [&]() { width = t->getWidth(mip - 1); }))
+		return mrb_nil_value();
+	return mrbx_integer(mrb, width);
+}
+
+static mrb_value cid_getHeight(mrb_state *mrb, mrb_value self)
+{
+	CompressedImageData *t = mrbx_checktype<CompressedImageData>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"mipmap"}, 0, v);
+	int mip = mrbx_optint(mrb, v[0], 1);
+	int height = 0;
+	if (mrbx_catchexcept(mrb, [&]() { height = t->getHeight(mip - 1); }))
+		return mrb_nil_value();
+	return mrbx_integer(mrb, height);
+}
+
+static mrb_value cid_getDimensions(mrb_state *mrb, mrb_value self)
+{
+	CompressedImageData *t = mrbx_checktype<CompressedImageData>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"mipmap"}, 0, v);
+	int mip = mrbx_optint(mrb, v[0], 1);
+	int width = 0, height = 0;
+	if (mrbx_catchexcept(mrb, [&]() { width = t->getWidth(mip - 1); height = t->getHeight(mip - 1); }))
+		return mrb_nil_value();
+	mrb_value arr = mrb_ary_new_capa(mrb, 2);
+	mrb_ary_push(mrb, arr, mrbx_integer(mrb, width));
+	mrb_ary_push(mrb, arr, mrbx_integer(mrb, height));
+	return arr;
+}
+
+static mrb_value cid_getMipmapCount(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, mrbx_checktype<CompressedImageData>(mrb, self)->getMipmapCount());
+}
+
+static mrb_value cid_getFormat(mrb_state *mrb, mrb_value self)
+{
+	CompressedImageData *t = mrbx_checktype<CompressedImageData>(mrb, self);
+	const char *fstr = nullptr;
+	if (!love::getConstant(t->getFormat(), fstr))
+		return mrbx_string(mrb, "unknown");
+	return mrbx_string(mrb, fstr);
+}
+
+static mrb_value cid_setLinear(mrb_state *mrb, mrb_value self)
+{
+	CompressedImageData *t = mrbx_checktype<CompressedImageData>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"value"}, 1, v);
+	t->setLinear(mrbx_checkboolean(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value cid_isLinear(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, mrbx_checktype<CompressedImageData>(mrb, self)->isLinear());
+}
+
+static const MrbReg compressedImageDataFunctions[] =
+{
+	{ "clone",            cid_clone,          MRB_ARGS_NONE() },
+	{ "get_width",        cid_getWidth,       MRB_ARGS_KEY(1, 0) },
+	{ "get_height",       cid_getHeight,      MRB_ARGS_KEY(1, 0) },
+	{ "get_dimensions",   cid_getDimensions,  MRB_ARGS_KEY(1, 0) },
+	{ "get_mipmap_count", cid_getMipmapCount, MRB_ARGS_NONE() },
+	{ "get_format",       cid_getFormat,      MRB_ARGS_NONE() },
+	{ "set_linear",       cid_setLinear,      MRB_ARGS_KEY(1, 0) },
+	{ "linear?",          cid_isLinear,       MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
 // --- Module-level functions ----------------------------------------------
+
+// Resolve a `file:` kwarg that is either a Data object or a filename String into
+// a retained Data (caller releases). Filenames are read via the filesystem
+// module. Returns nullptr with an mruby exception pending on read failure.
+static Data *resolveFileData(mrb_state *mrb, mrb_value v)
+{
+	if (mrbx_istype<Data>(mrb, v))
+	{
+		Data *d = mrbx_checktype<Data>(mrb, v);
+		d->retain();
+		return d;
+	}
+	std::string filename = mrbx_checkstring(mrb, v);
+	auto fs = Module::getInstance<love::filesystem::Filesystem>(Module::M_FILESYSTEM);
+	if (fs == nullptr)
+		mrb_raise(mrb, E_RUNTIME_ERROR, "The filesystem module must be loaded to read a file by name.");
+	Data *data = nullptr;
+	mrbx_catchexcept(mrb, [&]() { data = fs->read(filename.c_str()); });
+	return data;
+}
 
 static mrb_value w_newImageData(mrb_state *mrb, mrb_value self)
 {
@@ -375,12 +491,51 @@ static mrb_value w_newCubeFaces(mrb_state *mrb, mrb_value self)
 	return arr;
 }
 
+// new_compressed_data(file:) -> CompressedImageData. `file:` is a Data object or
+// a filename String (read via the filesystem module).
+static mrb_value w_newCompressedData(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"file"}, 1, v);
+
+	Data *data = resolveFileData(mrb, v[0]);
+	if (data == nullptr)
+		return mrb_nil_value();
+
+	CompressedImageData *t = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { t = instance()->newCompressedData(data); });
+	data->release();
+	if (err)
+		return mrb_nil_value();
+
+	mrb_value r = mrbx_pushtype(mrb, t);
+	t->release();
+	return r;
+}
+
+// compressed?(file:) -> whether the file holds a recognized compressed format.
+static mrb_value w_isCompressed(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"file"}, 1, v);
+
+	Data *data = resolveFileData(mrb, v[0]);
+	if (data == nullptr)
+		return mrb_nil_value();
+
+	bool compressed = instance()->isCompressed(data);
+	data->release();
+	return mrbx_boolean(mrb, compressed);
+}
+
 static const MrbReg functions[] =
 {
-	{ "new_image_data", w_newImageData, MRB_ARGS_KEY(5, 0) },
-	{ "new_cube_faces", w_newCubeFaces, MRB_ARGS_KEY(1, 0) },
-	// TODO(mruby) #img-compressed: new_compressed_data / compressed? deferred —
-	// need the CompressedImageData object type wired up. PORTING.md §A
+	{ "new_image_data",      w_newImageData,      MRB_ARGS_KEY(5, 0) },
+	{ "new_cube_faces",      w_newCubeFaces,      MRB_ARGS_KEY(1, 0) },
+	{ "new_compressed_data", w_newCompressedData, MRB_ARGS_KEY(1, 0) },
+	{ "compressed?",         w_isCompressed,      MRB_ARGS_KEY(1, 0) },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -403,6 +558,7 @@ extern "C" void mrb_love_image_init(mrb_state *mrb)
 
 	mrbx_register_module(mrb, w);
 	mrbx_register_type(mrb, ImageData::type, imageDataFunctions);
+	mrbx_register_type(mrb, CompressedImageData::type, compressedImageDataFunctions);
 }
 
 } // image
