@@ -89,8 +89,8 @@ public:
 		return name != nullptr ? name : "unknown";
 	}
 
-	// TODO(mruby) #kbd-keyrepeat: stored state only — lean event backend always
-	// forwards key repeats regardless of this flag (see PORTING.md §A)
+	// The lean event backend consults hasKeyRepeat() (via harnessKeyRepeatEnabled)
+	// and drops repeat keypressed events when this is off.
 	void setKeyRepeat(bool enable) { keyRepeat = enable; }
 	bool hasKeyRepeat() const { return keyRepeat; }
 
@@ -164,6 +164,16 @@ private:
 }; // HarnessKeyboard
 
 #define instance() (Module::getInstance<HarnessKeyboard>(Module::M_KEYBOARD))
+
+// Consulted by the lean event backend so it can honor set_key_repeat without
+// depending on the HarnessKeyboard type. Returns true when repeats should be
+// forwarded: either the keyboard module isn't loaded (SDL's default of
+// forwarding repeats, matching the real event backend) or key repeat is on.
+bool harnessKeyRepeatEnabled()
+{
+	auto kb = instance();
+	return kb == nullptr || kb->hasKeyRepeat();
+}
 
 // =========================================================================
 // Love::Keyboard module functions

@@ -59,8 +59,10 @@ timer · math · filesystem · event · window · graphics (slice) · keyboard �
       too (single value -> Number, `x:`+`y:` -> Hash {x:, y:})
 
 ### keyboard
-- [~] (#kbd-keyrepeat) `set_key_repeat` — stored state only; the lean event
-      backend always forwards key repeats regardless
+- [x] (#kbd-keyrepeat) `set_key_repeat` — done; the lean event backend now
+      consults the keyboard module (via `keyboard::harnessKeyRepeatEnabled`) and
+      drops auto-repeat keypressed events when key repeat is off, matching the
+      real event backend
 
 ### mouse
 - [x] (#mouse-cursor) cursor object family: `new_cursor`, `get_system_cursor`,

@@ -186,8 +186,10 @@ narrative overview.
    `HarnessKeyboard` is likewise a plain `love::Module` that resolves key and
    scancode names through SDL's own name lookups (`SDL_GetKeyFromName` etc.)
    rather than the 621-line `Keyboard.h` enum tables -- symmetric with the lean
-   event backend, which emits those same SDL names. `set_key_repeat` is stored
-   state only for now (the lean event backend always forwards key repeats).
+   event backend, which emits those same SDL names. `set_key_repeat` is honored:
+   the lean event backend consults the keyboard module (via
+   `keyboard::harnessKeyRepeatEnabled`) and drops auto-repeat keypressed events
+   when it is off.
    `HarnessMouse` follows the same lean pattern: a plain `love::Module` driving
    SDL's mouse state directly (position, buttons, visibility, grab, relative
    mode). Button indices keep LÖVE's convention (1 left, 2 right, 3 middle),

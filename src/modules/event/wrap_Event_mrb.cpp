@@ -52,6 +52,11 @@
 
 namespace love
 {
+
+// Defined in the keyboard wrapper: whether repeat keypressed events should be
+// forwarded (true if the keyboard module is absent or key repeat is enabled).
+namespace keyboard { bool harnessKeyRepeatEnabled(); }
+
 namespace event
 {
 
@@ -136,6 +141,10 @@ private:
 			return new Message("quit");
 
 		case SDL_EVENT_KEY_DOWN:
+			// Drop auto-repeat keypresses when key repeat is disabled, matching
+			// the real event backend (#kbd-keyrepeat).
+			if (e.key.repeat != 0 && !love::keyboard::harnessKeyRepeatEnabled())
+				return nullptr;
 			txt = SDL_GetKeyName(e.key.key);
 			a.emplace_back(txt, strlen(txt));
 			txt = SDL_GetScancodeName(e.key.scancode);
