@@ -36,13 +36,16 @@ CXXFLAGS ?= -std=$(CXXSTD) -O2 -Wall
 INCLUDES := -I$(LOVE_SRC) -I$(LOVE_SRC)/modules -I$(LOVE_SRC)/libraries -I$(MRUBY_INC) -I$(MRUBY_GEN)
 # freetype + harfbuzz headers for the font module (system-installed).
 INCLUDES += $(shell pkg-config --cflags freetype2 harfbuzz)
+# OpenAL headers for the audio module's real backend (openal/*.cpp use <alc.h>).
+INCLUDES += $(shell pkg-config --cflags openal)
 # So the harness can locate the ported boot scripts (arg.rb/callbacks.rb/boot.rb).
 CXXFLAGS += -DLOVE_SRC_DIR='"$(LOVE_SRC)"'
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
 # The sound module's lullaby backend links system libvorbis + libmodplug (the
 # Wave/FLAC/MP3 decoders are bundled — Wuff and dr_flac/dr_mp3, built below).
+# The audio module's real backend is OpenAL (system libopenal).
 LDLIBS   := -lmruby -lSDL3 -lGL -lpthread -lm -lz -lfreetype -lharfbuzz \
-            -lvorbisfile -lvorbis -logg -lmodplug
+            -lvorbisfile -lvorbis -logg -lmodplug -lopenal
 
 # --- physfs (compiled as C into a static archive) ------------------------
 PHYSFS_DIR  := $(LOVE_SRC)/libraries/physfs
@@ -177,7 +180,22 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/sound/lullaby/FLACDecoder.cpp \
 	$(LOVE_SRC)/modules/sound/lullaby/VorbisDecoder.cpp \
 	$(LOVE_SRC)/modules/sound/lullaby/MP3Decoder.cpp \
-	$(LOVE_SRC)/modules/sound/lullaby/ModPlugDecoder.cpp
+	$(LOVE_SRC)/modules/sound/lullaby/ModPlugDecoder.cpp \
+	$(LOVE_SRC)/modules/audio/wrap_Audio_mrb.cpp \
+	$(LOVE_SRC)/modules/audio/Audio.cpp \
+	$(LOVE_SRC)/modules/audio/Source.cpp \
+	$(LOVE_SRC)/modules/audio/Effect.cpp \
+	$(LOVE_SRC)/modules/audio/Filter.cpp \
+	$(LOVE_SRC)/modules/audio/RecordingDevice.cpp \
+	$(LOVE_SRC)/modules/audio/openal/Audio.cpp \
+	$(LOVE_SRC)/modules/audio/openal/Source.cpp \
+	$(LOVE_SRC)/modules/audio/openal/Pool.cpp \
+	$(LOVE_SRC)/modules/audio/openal/Effect.cpp \
+	$(LOVE_SRC)/modules/audio/openal/Filter.cpp \
+	$(LOVE_SRC)/modules/audio/openal/RecordingDevice.cpp \
+	$(LOVE_SRC)/modules/audio/null/Audio.cpp \
+	$(LOVE_SRC)/modules/audio/null/Source.cpp \
+	$(LOVE_SRC)/modules/audio/null/RecordingDevice.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 

@@ -26,7 +26,7 @@ Legend: `[ ]` not started · `[~]` partial / stubbed · `[x]` done
 ## Modules ported so far
 
 timer · math · filesystem · event · window · graphics (slice) · keyboard · mouse
-· system · data · image · font · thread · sound · boot pipeline (arg/callbacks/boot)
+· system · data · image · font · thread · sound · audio · boot pipeline (arg/callbacks/boot)
 
 ---
 
@@ -127,6 +127,33 @@ take an optional 1-based `channel:`; `slice`/`copy_from`/`clone` are exposed.
 Note the FFI fast path in `wrap_SoundData.lua` (a per-object pointer cache) is a
 LuaJIT-only optimization and is intentionally dropped — the mruby binding calls
 the C++ `getSample`/`setSample` directly. No deferrals.
+
+### audio
+Fully ported with the **real** OpenAL backend (links system libopenal; the null
+backend is kept as the fallback exactly as the Lua loader did — OpenAL is tried
+first, null only if a device can't be opened). `Love::Audio` exposes the module
+functions plus the `Love::Source` and `Love::RecordingDevice` object types (both
+is-a Object). Listener/source vectors that returned several Lua numbers return a
+Hash here (`{x:, y:, z:}`, `{fx:, fy:, fz:, ux:, uy:, uz:}`, cone/limits/
+distances likewise). Effect and Filter descriptions, which were Lua tables,
+become Ruby Hashes keyed by the same parameter-name strings (symbol **or**
+string keys accepted) with a mandatory `type:` entry; the EFX path is exercised
+end-to-end (set/get a scene effect, source filters, source effects). `new_source`
+mirrors the Lua convention: `file:` (a filename String or Data, decoded via the
+sound + filesystem modules), `decoder:`, or `sound_data:`, with `type:`
+`"static"`/`"stream"` (`"queue"` is rejected — use `new_queueable_source`). The
+sound module must be initialised first (new_source-from-file builds a Decoder via
+the Sound instance). `set_playback_device` returns false rather than raising when
+a device can't be set, matching the Lua wrapper.
+
+The OpenAL backend needs an audio device: in this dev environment `alcOpenDevice`
+succeeds (EFX supported, recording devices enumerated, sources actually play); on
+a host with no device it transparently falls back to null audio.
+
+- Not ported (intentionally): `Source#queue`'s raw-pointer (lightuserdata) form —
+  an FFI-style path with no mruby analog. The `SoundData` form is supported.
+  RecordingDevice is fully wrapped, but mic capture itself isn't exercised by the
+  test (depends on host hardware/permission). No code-site deferrals.
 
 ### data
 The module's functions are class methods on `Love::Data` (the module name "Data"
