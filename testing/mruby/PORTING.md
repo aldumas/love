@@ -26,7 +26,7 @@ Legend: `[ ]` not started · `[~]` partial / stubbed · `[x]` done
 ## Modules ported so far
 
 timer · math · filesystem · event · window · graphics (slice) · keyboard · mouse
-· system · data · image · boot pipeline (arg/callbacks/boot)
+· system · data · image · font · boot pipeline (arg/callbacks/boot)
 
 ---
 
@@ -79,6 +79,19 @@ methods through the runtime's class hierarchy.
       clone / get_width / get_height / get_dimensions (optional 1-based `mipmap:`)
       / get_mipmap_count / get_format / set_linear / linear?. Both module funcs
       take `file:` (a Data object or a filename String read via the filesystem).
+
+### font
+Fully ported with the **real** `freetype::Font` backend (links freetype +
+harfbuzz; default font is the embedded gzip NotoSans, decompressed via the data
+module). Exposes the module functions (new_rasterizer / new_true_type_rasterizer
+/ new_bm_font_rasterizer / new_image_rasterizer / new_glyph_data) and the
+`Love::Rasterizer` and `Love::GlyphData` types (GlyphData is-a Data). No
+deferrals. Note a faithful upstream quirk: `GlyphData#get_glyph` is 0 (and
+`get_glyph_string` is "\\x00") for TrueType glyphs — `Rasterizer::getGlyphData`
+routes through `getGlyphDataForIndex`, which constructs `GlyphData(0, …)` since
+it only has the freetype glyph index, not the codepoint. (The graphics-side
+`TextShaper` / harfbuzz shaping is compiled in but exposed via the unported
+graphics `Font`, not love.font.)
 
 ### data
 The module's functions are class methods on `Love::Data` (the module name "Data"

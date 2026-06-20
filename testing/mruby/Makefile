@@ -34,10 +34,12 @@ CXX      ?= g++
 CXXSTD   ?= c++17
 CXXFLAGS ?= -std=$(CXXSTD) -O2 -Wall
 INCLUDES := -I$(LOVE_SRC) -I$(LOVE_SRC)/modules -I$(LOVE_SRC)/libraries -I$(MRUBY_INC) -I$(MRUBY_GEN)
+# freetype + harfbuzz headers for the font module (system-installed).
+INCLUDES += $(shell pkg-config --cflags freetype2 harfbuzz)
 # So the harness can locate the ported boot scripts (arg.rb/callbacks.rb/boot.rb).
 CXXFLAGS += -DLOVE_SRC_DIR='"$(LOVE_SRC)"'
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
-LDLIBS   := -lmruby -lSDL3 -lGL -lpthread -lm -lz
+LDLIBS   := -lmruby -lSDL3 -lGL -lpthread -lm -lz -lfreetype -lharfbuzz
 
 # --- physfs (compiled as C into a static archive) ------------------------
 PHYSFS_DIR  := $(LOVE_SRC)/libraries/physfs
@@ -135,7 +137,19 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/image/magpie/PVRHandler.cpp \
 	$(LOVE_SRC)/modules/image/magpie/KTXHandler.cpp \
 	$(LOVE_SRC)/modules/image/magpie/PKMHandler.cpp \
-	$(LOVE_SRC)/modules/image/magpie/ASTCHandler.cpp
+	$(LOVE_SRC)/modules/image/magpie/ASTCHandler.cpp \
+	$(LOVE_SRC)/modules/font/wrap_Font_mrb.cpp \
+	$(LOVE_SRC)/modules/font/Font.cpp \
+	$(LOVE_SRC)/modules/font/GlyphData.cpp \
+	$(LOVE_SRC)/modules/font/Rasterizer.cpp \
+	$(LOVE_SRC)/modules/font/TrueTypeRasterizer.cpp \
+	$(LOVE_SRC)/modules/font/BMFontRasterizer.cpp \
+	$(LOVE_SRC)/modules/font/ImageRasterizer.cpp \
+	$(LOVE_SRC)/modules/font/TextShaper.cpp \
+	$(LOVE_SRC)/modules/font/GenericShaper.cpp \
+	$(LOVE_SRC)/modules/font/freetype/Font.cpp \
+	$(LOVE_SRC)/modules/font/freetype/TrueTypeRasterizer.cpp \
+	$(LOVE_SRC)/modules/font/freetype/HarfbuzzShaper.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 
