@@ -14,10 +14,10 @@ arguments**.
 | Ported module: timer (module functions) | `src/modules/timer/wrap_Timer_mrb.cpp` |
 | Ported module: math (functions + RandomGenerator, BezierCurve, Transform object types) | `src/modules/math/wrap_Math_mrb.cpp` |
 | Ported module: filesystem (functions + File, FileData; real physfs backend) | `src/modules/filesystem/wrap_Filesystem_mrb.cpp` |
-| Ported module: event (queue + lean window-independent SDL backend) | `src/modules/event/wrap_Event_mrb.cpp` |
+| Ported module: event (queue + full SDL event translation: kbd/mouse/touch/joystick/gamepad/sensor/window/drop) | `src/modules/event/wrap_Event_mrb.cpp` |
 | Ported module: window (lean graphics-independent SDL backend) | `src/modules/window/wrap_Window_mrb.cpp` |
 | Ported module: graphics (thin slice: clear/color/rectangle/present, immediate-mode GL) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
-| Ported module: keyboard (lean SDL state queries, no enum maps) | `src/modules/keyboard/wrap_Keyboard_mrb.cpp` |
+| Ported module: keyboard (lean SDL state queries; real key-constant tables linked for the event backend) | `src/modules/keyboard/wrap_Keyboard_mrb.cpp` |
 | Ported module: mouse (lean SDL state queries; cursor objects deferred) | `src/modules/mouse/wrap_Mouse_mrb.cpp` |
 | Ported module: system (OS/CPU/memory/clipboard/power/locale; real SDL backend) | `src/modules/system/wrap_System_mrb.cpp` |
 | Ported module: data (Data/ByteData/DataView/CompressedData; compress/encode/hash) | `src/modules/data/wrap_DataModule_mrb.cpp` |
