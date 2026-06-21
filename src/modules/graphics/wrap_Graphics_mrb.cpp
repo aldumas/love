@@ -48,10 +48,16 @@
 #include "Graphics.h"
 #include "Texture.h"
 #include "Quad.h"
+#include "Font.h"
 #include "image/Image.h"
 #include "image/ImageData.h"
 #include "image/CompressedImageData.h"
 #include "filesystem/Filesystem.h"
+#include "filesystem/FileData.h"
+#include "font/Font.h"
+#include "font/Rasterizer.h"
+#include "font/TrueTypeRasterizer.h"
+#include "font/TextShaper.h"
 
 namespace love
 {
@@ -480,6 +486,261 @@ static mrb_value w_draw(mrb_state *mrb, mrb_value self)
 	return mrb_nil_value();
 }
 
+// =========================================================================
+// Love::Font  (a graphics::Font -- a rasterizer uploaded into a glyph atlas,
+// used by print/printf). Distinct from love.font's Rasterizer.
+// =========================================================================
+
+static mrb_value w_font_get_height(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_number(mrb, mrbx_checktype<Font>(mrb, self)->getHeight());
+}
+
+static mrb_value w_font_get_width(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"text"}, 1, v);
+	int w = 0;
+	mrbx_catchexcept(mrb, [&]() { w = mrbx_checktype<Font>(mrb, self)->getWidth(mrbx_checkstring(mrb, v[0])); });
+	return mrbx_integer(mrb, w);
+}
+
+static mrb_value w_font_get_ascent(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, mrbx_checktype<Font>(mrb, self)->getAscent());
+}
+
+static mrb_value w_font_get_descent(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, mrbx_checktype<Font>(mrb, self)->getDescent());
+}
+
+static mrb_value w_font_get_baseline(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_number(mrb, mrbx_checktype<Font>(mrb, self)->getBaseline());
+}
+
+static mrb_value w_font_get_line_height(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_number(mrb, mrbx_checktype<Font>(mrb, self)->getLineHeight());
+}
+
+static mrb_value w_font_set_line_height(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"height"}, 1, v);
+	mrbx_checktype<Font>(mrb, self)->setLineHeight(mrbx_checkfloat(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_font_get_dpi_scale(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_number(mrb, mrbx_checktype<Font>(mrb, self)->getDPIScale());
+}
+
+static mrb_value w_font_has_glyphs(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"text"}, 1, v);
+	bool has = false;
+	mrbx_catchexcept(mrb, [&]() { has = mrbx_checktype<Font>(mrb, self)->hasGlyphs(mrbx_checkstring(mrb, v[0])); });
+	return mrbx_boolean(mrb, has);
+}
+
+// get_wrap(text:, width:) -> { width: <max line width>, lines: [String, ...] }
+static mrb_value w_font_get_wrap(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"text", "width"}, 2, v);
+	Font *f = mrbx_checktype<Font>(mrb, self);
+
+	std::vector<love::font::ColoredString> text;
+	text.push_back({ mrbx_checkstring(mrb, v[0]), Colorf(1, 1, 1, 1) });
+	float wraplimit = mrbx_checkfloat(mrb, v[1]);
+
+	std::vector<std::string> lines;
+	std::vector<float> widths;
+	mrbx_catchexcept(mrb, [&]() { f->getWrap(text, wraplimit, lines, &widths); });
+
+	float maxwidth = 0.0f;
+	for (float w : widths)
+		maxwidth = std::max(maxwidth, w);
+
+	mrb_value linesary = mrb_ary_new_capa(mrb, (mrb_int) lines.size());
+	for (const std::string &line : lines)
+		mrb_ary_push(mrb, linesary, mrbx_string(mrb, line));
+
+	mrb_value h = mrb_hash_new(mrb);
+	hset(mrb, h, "width", mrbx_number(mrb, maxwidth));
+	hset(mrb, h, "lines", linesary);
+	return h;
+}
+
+static const MrbReg fontFunctions[] =
+{
+	{ "get_height",      w_font_get_height,      MRB_ARGS_NONE() },
+	{ "get_width",       w_font_get_width,       MRB_ARGS_KEY(1, 0) },
+	{ "get_ascent",      w_font_get_ascent,      MRB_ARGS_NONE() },
+	{ "get_descent",     w_font_get_descent,     MRB_ARGS_NONE() },
+	{ "get_baseline",    w_font_get_baseline,    MRB_ARGS_NONE() },
+	{ "get_line_height", w_font_get_line_height, MRB_ARGS_NONE() },
+	{ "set_line_height", w_font_set_line_height, MRB_ARGS_KEY(1, 0) },
+	{ "get_dpi_scale",   w_font_get_dpi_scale,   MRB_ARGS_NONE() },
+	{ "has_glyphs",      w_font_has_glyphs,      MRB_ARGS_KEY(1, 0) },
+	{ "get_wrap",        w_font_get_wrap,        MRB_ARGS_KEY(2, 0) },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::Graphics font + text functions
+// =========================================================================
+
+// new_font(size:) for the embedded default font, or new_font(file:, size:) for
+// a TrueType file. Returns a Love::Font.
+static mrb_value w_new_font(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"file", "size"}, 0, v);
+
+	int size = mrbx_optint(mrb, v[1], 13);
+	love::font::TrueTypeRasterizer::Settings settings;
+
+	Font *font = nullptr;
+
+	if (mrb_undef_p(v[0]))
+	{
+		// Default (embedded) font at the requested size.
+		mrbx_catchexcept(mrb, [&]() { font = instance()->newDefaultFont(size, settings); });
+	}
+	else
+	{
+		std::string filename = mrbx_checkstring(mrb, v[0]);
+		auto fontmodule = Module::getInstance<love::font::Font>(Module::M_FONT);
+		if (fontmodule == nullptr)
+			mrb_raise(mrb, E_RUNTIME_ERROR, "Cannot create a font without the love.font module.");
+		auto fs = Module::getInstance<filesystem::Filesystem>(Module::M_FILESYSTEM);
+		if (fs == nullptr)
+			mrb_raise(mrb, E_RUNTIME_ERROR, "Cannot load a font from a filename without the love.filesystem module.");
+
+		love::filesystem::FileData *fdata = nullptr;
+		if (mrbx_catchexcept(mrb, [&]() { fdata = fs->read(filename.c_str()); }))
+			return mrb_nil_value();
+
+		love::font::Rasterizer *r = nullptr;
+		bool err = mrbx_catchexcept(mrb, [&]() { r = fontmodule->newTrueTypeRasterizer(fdata, size, settings); });
+		fdata->release();
+		if (err)
+			return mrb_nil_value();
+
+		bool err2 = mrbx_catchexcept(mrb, [&]() { font = instance()->newFont(r); });
+		r->release();
+		if (err2)
+			return mrb_nil_value();
+	}
+
+	mrb_value res = mrbx_pushtype(mrb, font);
+	font->release();
+	return res;
+}
+
+static mrb_value w_set_font(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"font"}, 1, v);
+	// nil clears the active font (falls back to the default on next print).
+	Font *font = mrb_nil_p(v[0]) ? nullptr : mrbx_checktype<Font>(mrb, v[0]);
+	instance()->setFont(font);
+	return mrb_nil_value();
+}
+
+static mrb_value w_get_font(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	Font *font = nullptr;
+	mrbx_catchexcept(mrb, [&]() { font = instance()->getFont(); });
+	return mrbx_pushtype(mrb, font);
+}
+
+// print(text:, x:, y:, r:, sx:, sy:, ox:, oy:, kx:, ky:, font:) -- draws text
+// with the current (or given) font in the current color.
+static mrb_value w_print(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[11];
+	mrbx_get_kwargs(mrb, {"text", "x", "y", "r", "sx", "sy", "ox", "oy",
+		"kx", "ky", "font"}, 1, v);
+
+	std::vector<love::font::ColoredString> text;
+	text.push_back({ mrbx_checkstring(mrb, v[0]), Colorf(1, 1, 1, 1) });
+
+	float x  = mrbx_optfloat(mrb, v[1], 0.0f);
+	float y  = mrbx_optfloat(mrb, v[2], 0.0f);
+	float angle = mrbx_optfloat(mrb, v[3], 0.0f);
+	float sx = mrbx_optfloat(mrb, v[4], 1.0f);
+	float sy = mrbx_optfloat(mrb, v[5], sx);
+	float ox = mrbx_optfloat(mrb, v[6], 0.0f);
+	float oy = mrbx_optfloat(mrb, v[7], 0.0f);
+	float kx = mrbx_optfloat(mrb, v[8], 0.0f);
+	float ky = mrbx_optfloat(mrb, v[9], 0.0f);
+
+	Matrix4 m(x, y, angle, sx, sy, ox, oy, kx, ky);
+
+	if (!mrb_undef_p(v[10]) && !mrb_nil_p(v[10]))
+	{
+		Font *font = mrbx_checktype<Font>(mrb, v[10]);
+		mrbx_catchexcept(mrb, [&]() { instance()->print(text, font, m); });
+	}
+	else
+		mrbx_catchexcept(mrb, [&]() { instance()->print(text, m); });
+	return mrb_nil_value();
+}
+
+// printf(text:, x:, y:, limit:, align:, r:, sx:, sy:, ox:, oy:, kx:, ky:, font:)
+// -- word-wrapped text within `limit` pixels, aligned left/center/right/justify.
+static mrb_value w_printf(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[13];
+	mrbx_get_kwargs(mrb, {"text", "x", "y", "limit", "align", "r", "sx", "sy",
+		"ox", "oy", "kx", "ky", "font"}, 4, v);
+
+	std::vector<love::font::ColoredString> text;
+	text.push_back({ mrbx_checkstring(mrb, v[0]), Colorf(1, 1, 1, 1) });
+
+	float x = mrbx_checkfloat(mrb, v[1]);
+	float y = mrbx_checkfloat(mrb, v[2]);
+	float limit = mrbx_checkfloat(mrb, v[3]);
+
+	Font::AlignMode align = Font::ALIGN_LEFT;
+	if (!mrb_undef_p(v[4]))
+	{
+		std::string alignstr = mrbx_checkstring(mrb, v[4]);
+		if (!Font::getConstant(alignstr.c_str(), align))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid alignment: %s", alignstr.c_str());
+	}
+
+	float angle = mrbx_optfloat(mrb, v[5], 0.0f);
+	float sx = mrbx_optfloat(mrb, v[6], 1.0f);
+	float sy = mrbx_optfloat(mrb, v[7], sx);
+	float ox = mrbx_optfloat(mrb, v[8], 0.0f);
+	float oy = mrbx_optfloat(mrb, v[9], 0.0f);
+	float kx = mrbx_optfloat(mrb, v[10], 0.0f);
+	float ky = mrbx_optfloat(mrb, v[11], 0.0f);
+
+	Matrix4 m(x, y, angle, sx, sy, ox, oy, kx, ky);
+
+	if (!mrb_undef_p(v[12]) && !mrb_nil_p(v[12]))
+	{
+		Font *font = mrbx_checktype<Font>(mrb, v[12]);
+		mrbx_catchexcept(mrb, [&]() { instance()->printf(text, font, limit, align, m); });
+	}
+	else
+		mrbx_catchexcept(mrb, [&]() { instance()->printf(text, limit, align, m); });
+	return mrb_nil_value();
+}
+
 static const MrbReg functions[] =
 {
 	{ "active?",              w_active,               MRB_ARGS_NONE() },
@@ -497,6 +758,11 @@ static const MrbReg functions[] =
 	{ "new_image",            w_new_image,            MRB_ARGS_KEY(2, 0) },
 	{ "new_quad",             w_new_quad,             MRB_ARGS_KEY(7, 0) },
 	{ "draw",                 w_draw,                 MRB_ARGS_KEY(11, 0) },
+	{ "new_font",             w_new_font,             MRB_ARGS_KEY(2, 0) },
+	{ "set_font",             w_set_font,             MRB_ARGS_KEY(1, 0) },
+	{ "get_font",             w_get_font,             MRB_ARGS_NONE() },
+	{ "print",                w_print,                MRB_ARGS_KEY(11, 0) },
+	{ "printf",               w_printf,               MRB_ARGS_KEY(13, 0) },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -523,6 +789,7 @@ extern "C" void mrb_love_graphics_init(mrb_state *mrb)
 	// love::Type hierarchy (Texture is-a Drawable), set up lazily on first use.
 	mrbx_register_type(mrb, Texture::type, textureFunctions);
 	mrbx_register_type(mrb, Quad::type, quadFunctions);
+	mrbx_register_type(mrb, Font::type, fontFunctions);
 }
 
 } // graphics

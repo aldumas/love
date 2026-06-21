@@ -233,14 +233,25 @@ them changes when we swap.
       `libxxhash.a`. The Ruby API (`active?`/`clear`/`set_color`/`rectangle`/
       `origin`/`present`/dimensions) now drives the real path — a rectangle goes
       through the default shader and the streaming vertex buffer. Object types
-      exposed so far: **Texture** (`new_image` — modern LÖVE merged Image into
-      Texture; query/dimensions + `set_filter`/`get_filter`) and **Quad**
-      (`new_quad` + `get_viewport`/`set_viewport`), plus `draw` (Drawable or
-      Texture+Quad, with the full x/y/r/sx/sy/ox/oy/kx/ky transform). Still to
-      expose on this same instance: shaders, transforms beyond `origin` (push/
-      pop/translate/rotate/scale), blend/stencil/scissor state, fonts + print,
-      and the remaining object types (SpriteBatch, Mesh, ParticleSystem, Canvas/
-      render targets, TextBatch, Video).
+      exposed so far: **Texture** (`new_image`; query/dimensions +
+      `set_filter`/`get_filter`), **Quad** (`new_quad` + `get_viewport`/
+      `set_viewport`), and **Font** (`new_font` + metrics: get_height/get_width/
+      ascent/descent/baseline/line_height/has_glyphs/get_wrap), plus `draw`
+      (Drawable or Texture+Quad), `set_font`/`get_font`, and `print`/`printf`
+      (the full x/y/r/sx/sy/ox/oy/kx/ky transform; printf adds wrap limit +
+      align). Still to expose on this same instance: shaders, transforms beyond
+      `origin` (push/pop/translate/rotate/scale), blend/stencil/scissor state,
+      and the remaining object types (SpriteBatch, Mesh, ParticleSystem,
+      Canvas/render targets, TextBatch, Video).
+
+      Name collision (font vs graphics): the love.font module and the graphics `Font`
+      *type* both map to `Love::Font`. Resolved as for data/thread/joystick --
+      one Ruby class doubles as both: the love.font module functions are
+      registered as **class methods** on the graphics `Font` type's class (in
+      `wrap_Font_mrb.cpp`), while graphics `Font` instances (`g.new_font`) are
+      objects of that same class with the instance methods registered by the
+      graphics wrapper. So `Love::Font.new_true_type_rasterizer(...)` and a
+      font's `get_height` both work.
 - [x] (#kbd-backend) **keyboard** — done; the module instance is now the real
       `keyboard::sdl::Keyboard` (`keyboard/Keyboard.cpp` + `keyboard/sdl/Keyboard.cpp`
       linked). The wrapper translates key/scancode/modifier names to and from the

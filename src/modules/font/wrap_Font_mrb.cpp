@@ -45,6 +45,8 @@
 #include "filesystem/FileData.h"
 #include "image/Image.h"
 #include "image/ImageData.h"
+// The Ruby name "Font" is shared with the graphics Font *type* (see init).
+#include "graphics/Font.h"
 
 #include <string>
 #include <vector>
@@ -480,16 +482,19 @@ extern "C" void mrb_love_font_init(mrb_state *mrb)
 	Font *inst = instance();
 	if (inst == nullptr)
 		inst = new love::font::freetype::Font();
-	else
-		inst->retain();
+	inst->retain(); // keep the module alive for the binding's lifetime
 
-	WrappedModule w;
-	w.module = inst;
-	w.name = "Font";
-	w.type = &Module::type;
-	w.functions = functions;
+	// Name collision: the love.font module and the graphics Font *type* both map
+	// to Love::Font. As with the data/thread/joystick module-name vs type-name
+	// clashes, one Ruby class doubles as both -- the module functions become
+	// CLASS methods on the graphics Font type's class, while graphics Font
+	// instances (g.new_font) are objects of that same class with the instance
+	// methods registered by the graphics wrapper. So Love::Font.new_*_rasterizer
+	// and a font's get_height both work. (See PORTING.md, graphics §B.)
+	struct RClass *fontClass = mrbx_gettypeclass(mrb, love::graphics::Font::type);
+	for (const MrbReg *r = functions; r != nullptr && r->name != nullptr; r++)
+		mrb_define_class_method(mrb, fontClass, r->name, r->func, r->aspec);
 
-	mrbx_register_module(mrb, w);
 	mrbx_register_type(mrb, Rasterizer::type, rasterizerFunctions);
 	mrbx_register_type(mrb, GlyphData::type, glyphDataFunctions);
 }
