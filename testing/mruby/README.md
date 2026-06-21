@@ -187,6 +187,17 @@ narrative overview.
    renderer context, shader pipeline, and batched renderer -- ~8000 lines that
    pull in the whole graphics subsystem. Swap the lean trio for them once the
    graphics object/shader system is ported; the Ruby-facing APIs are unchanged.
+   Note the window and graphics swaps are **coupled and must land together**:
+   `window/sdl/Window.cpp` is not graphics-independent -- its `setMode()` grabs
+   the `M_GRAPHICS` instance via `Module::getInstance<graphics::Graphics>` (a
+   plain C-cast, no RTTI) and calls `getRenderer()`/`setMode()` on it, so the
+   real SDL window cannot replace `HarnessWindow` until a real
+   `graphics::Graphics` (not the plain-`Module` `HarnessGraphics`) occupies
+   `M_GRAPHICS`; otherwise that cast is wrong and the virtual call crashes. It
+   also links the `love::graphics::isDebugEnabled`/`isGammaCorrect`/
+   `setGammaCorrect` free functions. See PORTING.md §B (`#win-backend` /
+   `#gfx-backend`) for the details. The remaining graphics-*independent* window
+   work (native file-dialog hosting) does not need this swap.
    The window module is fully exposed: `set_icon`/`get_icon`, `update_mode`,
    `get_pointer`, `show_file_dialog`, and the HiDPI transforms
    (`to_pixels`/`from_pixels`/`get_dpi_scale`) are all wired up. `update_mode`

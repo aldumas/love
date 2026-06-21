@@ -213,11 +213,31 @@ them changes when we swap.
       keyboard module (`#kbd-backend` is done). A true wholesale swap to
       `event/sdl/Event.cpp` is now blocked only on `#win-backend`.
 - [~] (#win-backend) **window** — `HarnessWindow`: real SDL window, no
-      renderer/graphics context. Swap for `window/sdl/Window.cpp`.
+      renderer/graphics context. Swap for `window/sdl/Window.cpp`. **Coupled to
+      `#gfx-backend` — they must swap together.** `window/sdl/Window.cpp` is not
+      graphics-independent: (1) at link time it references the free functions
+      `love::graphics::isDebugEnabled` / `isGammaCorrect` / `setGammaCorrect`
+      (defined in `graphics/Graphics.cpp`); (2) more fundamentally, `setMode()`
+      does `graphics.set(Module::getInstance<graphics::Graphics>(M_GRAPHICS))`
+      and then calls `graphics->getRenderer()` — and `getInstance<T>` is a plain
+      C-cast `(T*)instances[type]` (no RTTI; see `common/Module.h`). The lean
+      `HarnessGraphics` registered at `M_GRAPHICS` is a plain `love::Module`,
+      **not** a `graphics::Graphics`, so that cast is wrong and the virtual call
+      lands on a bogus vtable (crash). There's no way to make the cast return
+      null while still registering a lean graphics module. So the real SDL window
+      can't go in until a real `graphics::Graphics` occupies `M_GRAPHICS`. The
+      remaining graphics-*independent* win work (native file dialog hosting, see
+      `#win-filedialog`) can be done on the lean backend without this swap.
 - [~] (#gfx-backend) **graphics** — `HarnessGraphics`: immediate-mode
       (fixed-function GL 2.1) scaffolding. No textures, shaders, transforms
       beyond `origin`, blend/stencil state, fonts, or batched drawing. Swap for
       the real shader-based batched renderer (`graphics/opengl|vulkan|metal`).
+      Note `HarnessGraphics` is a plain `love::Module`, not a real
+      `graphics::Graphics`, and it manages its own GL context on the window
+      handle. **Coupled to `#win-backend`** — the real `window/sdl/Window.cpp`
+      assumes the `M_GRAPHICS` instance is a real `graphics::Graphics` (it casts
+      and calls `getRenderer()`/`setMode()`/`backbufferChanged()` on it), so the
+      window backend can only swap once this is a real `graphics::Graphics`.
 - [x] (#kbd-backend) **keyboard** — done; the module instance is now the real
       `keyboard::sdl::Keyboard` (`keyboard/Keyboard.cpp` + `keyboard/sdl/Keyboard.cpp`
       linked). The wrapper translates key/scancode/modifier names to and from the
