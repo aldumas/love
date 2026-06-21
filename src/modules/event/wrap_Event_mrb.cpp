@@ -74,10 +74,6 @@
 namespace love
 {
 
-// Defined in the keyboard wrapper: whether repeat keypressed events should be
-// forwarded (true if the keyboard module is absent or key repeat is enabled).
-namespace keyboard { bool harnessKeyRepeatEnabled(); }
-
 namespace event
 {
 
@@ -92,8 +88,7 @@ namespace event
 // system) but keeps the lean pump() and omits the one sdl::Window-only hook
 // (the live-resize modal-draw dynamic_cast). A true wholesale swap to
 // event/sdl/Event.cpp additionally needs #win-backend (sdl::Window typeinfo for
-// that dynamic_cast) and #kbd-backend (a real keyboard::Keyboard instance for
-// the key-repeat check). See PORTING.md §B.
+// that dynamic_cast). See PORTING.md §B.
 class HarnessEvent : public love::event::Event
 {
 public:
@@ -182,9 +177,7 @@ private:
 	// Faithful port of love::event::sdl::Event::convert, minus the sdl::Window
 	// live-resize modal-draw hook (which dynamic_casts to window::sdl::Window —
 	// the one piece that would force the renderer window backend, #win-backend).
-	// Key names come from the real keyboard enum tables; key repeat honours the
-	// lean keyboard module via harnessKeyRepeatEnabled() (its instance isn't a
-	// keyboard::Keyboard, so getInstance<Keyboard> can't be used here).
+	// Key names and the key-repeat check both go through the real keyboard module.
 	static Message *convert(const SDL_Event &e)
 	{
 		using namespace love;
@@ -206,8 +199,12 @@ private:
 		{
 		case SDL_EVENT_KEY_DOWN:
 			// Drop auto-repeat keypresses when key repeat is disabled (#kbd-keyrepeat).
-			if (e.key.repeat != 0 && !keyboard::harnessKeyRepeatEnabled())
-				break;
+			if (e.key.repeat != 0)
+			{
+				auto kb = Module::getInstance<keyboard::Keyboard>(Module::M_KEYBOARD);
+				if (kb && !kb->hasKeyRepeat())
+					break;
+			}
 			keyboard::sdl::Keyboard::getConstant(e.key.key, key);
 			if (!keyboard::Keyboard::getConstant(key, txt)) txt = "unknown";
 			keyboard::sdl::Keyboard::getConstant(e.key.scancode, scancode);

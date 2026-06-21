@@ -209,8 +209,9 @@ puts "down?(key: 'a')                   -> #{k.down?(key: 'a')}  (nothing held i
 puts "down?(key: ['lctrl', 'space'])    -> #{k.down?(key: ['lctrl', 'space'])}"
 puts "get_scancode_from_key(key: 'a')   -> #{k.get_scancode_from_key(key: 'a').inspect}"
 puts "get_key_from_scancode(scancode: 'space') -> #{k.get_key_from_scancode(scancode: 'space').inspect}"
+# modifier_active? covers the sticky modifiers only: numlock/capslock/scrolllock/mode.
 puts "modifier_active?(key: 'capslock') -> #{k.modifier_active?(key: 'capslock')}"
-puts "modifier_active?(key: 'shift')    -> #{k.modifier_active?(key: 'shift')}"
+puts "modifier_active?(key: 'numlock')  -> #{k.modifier_active?(key: 'numlock')}"
 puts "has_screen_keyboard?              -> #{k.has_screen_keyboard?}"
 
 # --- mouse -----------------------------------------------------------------

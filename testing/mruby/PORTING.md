@@ -207,24 +207,25 @@ them changes when we swap.
       gamepad/sensor/window/drop/system), using the real input-family modules and
       the keyboard enum tables (now linked) for canonical key names. Two things
       keep this from being the literal upstream file, and both are pre-existing
-      lean backends, not new work: (a) the sdl::Window live-resize *modal-draw*
-      hook is omitted (it dynamic_casts to `window::sdl::Window`, which would pull
-      `#win-backend`); (b) key-repeat is honoured via the lean keyboard module's
-      `harnessKeyRepeatEnabled()` shim rather than `getInstance<keyboard::Keyboard>`
-      (the lean instance isn't a `keyboard::Keyboard`). A true wholesale swap to
-      `event/sdl/Event.cpp` needs `#win-backend` + `#kbd-backend` first.
+      lean backends, not new work: the sdl::Window live-resize *modal-draw* hook
+      is omitted (it dynamic_casts to `window::sdl::Window`, which would pull
+      `#win-backend`). Key names and the key-repeat check now go through the real
+      keyboard module (`#kbd-backend` is done). A true wholesale swap to
+      `event/sdl/Event.cpp` is now blocked only on `#win-backend`.
 - [~] (#win-backend) **window** — `HarnessWindow`: real SDL window, no
       renderer/graphics context. Swap for `window/sdl/Window.cpp`.
 - [~] (#gfx-backend) **graphics** — `HarnessGraphics`: immediate-mode
       (fixed-function GL 2.1) scaffolding. No textures, shaders, transforms
       beyond `origin`, blend/stencil state, fonts, or batched drawing. Swap for
       the real shader-based batched renderer (`graphics/opengl|vulkan|metal`).
-- [~] (#kbd-backend) **keyboard** — the *module instance* is still a plain
-      `love::Module` using SDL name lookups. The real key-constant tables
-      (`keyboard/Keyboard.cpp` + `keyboard/sdl/Keyboard.cpp`) are now compiled and
-      linked — the event backend uses their `getConstant` for canonical key names —
-      but the module instance isn't yet swapped to `keyboard::sdl::Keyboard` (that
-      also needs the wrapper rewired to drive the real module + key-repeat state).
+- [x] (#kbd-backend) **keyboard** — done; the module instance is now the real
+      `keyboard::sdl::Keyboard` (`keyboard/Keyboard.cpp` + `keyboard/sdl/Keyboard.cpp`
+      linked). The wrapper translates key/scancode/modifier names to and from the
+      engine enum tables via `Keyboard::getConstant`, so down?/scancode_down? and
+      the conversion helpers use LÖVE's canonical names (e.g. scancode `"a"`, not
+      SDL's `"A"`); `modifier_active?` is now the real sticky-modifier set
+      (numlock/capslock/scrolllock/mode). Key repeat is real state on the module,
+      consulted directly by the event backend.
 - [~] (#mouse-backend) **mouse** — plain `love::Module` driving SDL state
       directly instead of the real `Mouse` base (it manages cursors itself via
       the real `sdl::Cursor`). Swap for `mouse/sdl/Mouse.cpp`.

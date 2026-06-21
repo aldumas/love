@@ -27,190 +27,81 @@
 //   love.keyboard.isDown("space")   -> Love::Keyboard.down?(key: "space")
 //   love.keyboard.hasTextInput()    -> Love::Keyboard.text_input?
 //
-// Backend note: like the other input/window modules, this is a LEAN backend.
-// The real keyboard/sdl/Keyboard.cpp depends on the 621-line Keyboard.h key and
-// scancode enum maps and the window module. Instead, HarnessKeyboard is a plain
-// love::Module that resolves key/scancode names through SDL's own name lookup
-// functions (SDL_GetKeyFromName / SDL_GetScancodeFromName) -- symmetric with the
-// lean event backend, which produces those same names via SDL_GetKeyName /
-// SDL_GetScancodeName for keypressed/keyreleased events. Swap for the full
-// sdl::Keyboard once the key-constant tables are ported; the Ruby API is the same.
+// Backend: the **real** love::keyboard::sdl::Keyboard. Key/scancode/modifier
+// names are translated to and from the engine's enum tables via
+// Keyboard::getConstant (the same tables the event backend uses for key names),
+// so down?/scancode_down? and the conversion helpers use LÖVE's canonical key
+// names rather than SDL's.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
 #include "common/Module.h"
-#include "window/Window.h"
 
-#include <SDL3/SDL.h>
+#include "Keyboard.h"
+#include "sdl/Keyboard.h"
 
 #include <string>
+#include <vector>
 
 namespace love
 {
 namespace keyboard
 {
 
-// TODO(mruby) #kbd-backend: lean backend — plain Module using SDL name lookups
-// instead of Keyboard.h enum tables; swap for keyboard/sdl/Keyboard.cpp (§B)
-class HarnessKeyboard : public love::Module
-{
-public:
+#define instance() (Module::getInstance<Keyboard>(Module::M_KEYBOARD))
 
-	HarnessKeyboard()
-		: love::Module(M_KEYBOARD, "love.keyboard.harness")
-	{
-	}
-
-	bool isDown(const std::string &keyname) const
-	{
-		SDL_Keycode kc = SDL_GetKeyFromName(keyname.c_str());
-		if (kc == SDLK_UNKNOWN)
-			return false;
-		return isScancodeDownRaw(SDL_GetScancodeFromKey(kc, nullptr));
-	}
-
-	bool isScancodeDown(const std::string &scancodename) const
-	{
-		return isScancodeDownRaw(SDL_GetScancodeFromName(scancodename.c_str()));
-	}
-
-	// "a" -> its physical scancode name, e.g. on a US layout still "a".
-	std::string getScancodeFromKey(const std::string &keyname) const
-	{
-		SDL_Keycode kc = SDL_GetKeyFromName(keyname.c_str());
-		const char *name = SDL_GetScancodeName(SDL_GetScancodeFromKey(kc, nullptr));
-		return name != nullptr ? name : "unknown";
-	}
-
-	std::string getKeyFromScancode(const std::string &scancodename) const
-	{
-		SDL_Scancode sc = SDL_GetScancodeFromName(scancodename.c_str());
-		const char *name = SDL_GetKeyName(SDL_GetKeyFromScancode(sc, SDL_KMOD_NONE, false));
-		return name != nullptr ? name : "unknown";
-	}
-
-	// The lean event backend consults hasKeyRepeat() (via harnessKeyRepeatEnabled)
-	// and drops repeat keypressed events when this is off.
-	void setKeyRepeat(bool enable) { keyRepeat = enable; }
-	bool hasKeyRepeat() const { return keyRepeat; }
-
-	void setTextInput(bool enable)
-	{
-		SDL_Window *w = windowHandle();
-		if (w == nullptr)
-			return;
-		if (enable)
-			SDL_StartTextInput(w);
-		else
-			SDL_StopTextInput(w);
-	}
-
-	void setTextInput(bool enable, double x, double y, double w, double h)
-	{
-		SDL_Window *win = windowHandle();
-		if (win == nullptr)
-			return;
-		SDL_Rect rect = {(int) x, (int) y, (int) w, (int) h};
-		SDL_SetTextInputArea(win, &rect, 0);
-		setTextInput(enable);
-	}
-
-	bool hasTextInput() const
-	{
-		SDL_Window *w = windowHandle();
-		return w != nullptr && SDL_TextInputActive(w);
-	}
-
-	bool hasScreenKeyboard() const { return SDL_HasScreenKeyboardSupport(); }
-
-	bool isScreenKeyboardVisible() const
-	{
-		SDL_Window *w = windowHandle();
-		return w != nullptr && SDL_ScreenKeyboardShown(w);
-	}
-
-	bool isModifierActive(const std::string &name) const
-	{
-		SDL_Keymod mod = SDL_GetModState();
-		if (name == "ctrl")       return (mod & SDL_KMOD_CTRL)  != 0;
-		if (name == "shift")      return (mod & SDL_KMOD_SHIFT) != 0;
-		if (name == "alt")        return (mod & SDL_KMOD_ALT)   != 0;
-		if (name == "gui")        return (mod & SDL_KMOD_GUI)   != 0;
-		if (name == "capslock")   return (mod & SDL_KMOD_CAPS)  != 0;
-		if (name == "numlock")    return (mod & SDL_KMOD_NUM)   != 0;
-		if (name == "scrolllock") return (mod & SDL_KMOD_SCROLL) != 0;
-		return false;
-	}
-
-private:
-
-	static SDL_Window *windowHandle()
-	{
-		auto win = Module::getInstance<love::window::Window>(M_WINDOW);
-		return win != nullptr ? (SDL_Window *) win->getHandle() : nullptr;
-	}
-
-	static bool isScancodeDownRaw(SDL_Scancode sc)
-	{
-		if (sc == SDL_SCANCODE_UNKNOWN)
-			return false;
-		int numkeys = 0;
-		const bool *state = SDL_GetKeyboardState(&numkeys);
-		return state != nullptr && (int) sc < numkeys && state[sc];
-	}
-
-	bool keyRepeat = false;
-
-}; // HarnessKeyboard
-
-#define instance() (Module::getInstance<HarnessKeyboard>(Module::M_KEYBOARD))
-
-// Consulted by the lean event backend so it can honor set_key_repeat without
-// depending on the HarnessKeyboard type. Returns true when repeats should be
-// forwarded: either the keyboard module isn't loaded (SDL's default of
-// forwarding repeats, matching the real event backend) or key repeat is on.
-bool harnessKeyRepeatEnabled()
-{
-	auto kb = instance();
-	return kb == nullptr || kb->hasKeyRepeat();
-}
-
-// =========================================================================
-// Love::Keyboard module functions
-// =========================================================================
-
-// Runs pred over a key kwarg that is either a single name string or an Array of
-// names, returning true if any matches (love.keyboard.isDown semantics).
-template <typename Pred>
-static bool anyMatch(mrb_state *mrb, mrb_value v, Pred pred)
+// Applies fn to a name kwarg that is either a single String or an Array of them.
+template <typename F>
+static void eachName(mrb_state *mrb, mrb_value v, F fn)
 {
 	if (mrb_array_p(v))
 	{
 		mrb_int n = RARRAY_LEN(v);
 		for (mrb_int i = 0; i < n; i++)
-			if (pred(mrbx_checkstring(mrb, mrb_ary_ref(mrb, v, i))))
-				return true;
-		return false;
+			fn(mrbx_checkstring(mrb, mrb_ary_ref(mrb, v, i)));
 	}
-	return pred(mrbx_checkstring(mrb, v));
+	else
+		fn(mrbx_checkstring(mrb, v));
 }
 
+static Keyboard::Key checkKey(mrb_state *mrb, const std::string &name)
+{
+	Keyboard::Key k;
+	if (!Keyboard::getConstant(name.c_str(), k))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "invalid key constant: %s", name.c_str());
+	return k;
+}
+
+static Keyboard::Scancode checkScancode(mrb_state *mrb, const std::string &name)
+{
+	Keyboard::Scancode s;
+	if (!Keyboard::getConstant(name.c_str(), s))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "invalid scancode: %s", name.c_str());
+	return s;
+}
+
+// down?(key:) — key is a key-constant name or an Array of them; true if any held.
 static mrb_value w_down(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
 	mrb_value v[1];
 	mrbx_get_kwargs(mrb, {"key"}, 1, v);
-	bool down = anyMatch(mrb, v[0], [](const std::string &n) { return instance()->isDown(n); });
-	return mrbx_boolean(mrb, down);
+
+	std::vector<Keyboard::Key> keys;
+	eachName(mrb, v[0], [&](const std::string &n) { keys.push_back(checkKey(mrb, n)); });
+	return mrbx_boolean(mrb, instance()->isDown(keys));
 }
 
+// scancode_down?(scancode:) — a scancode name or an Array; true if any held.
 static mrb_value w_scancode_down(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
 	mrb_value v[1];
 	mrbx_get_kwargs(mrb, {"scancode"}, 1, v);
-	bool down = anyMatch(mrb, v[0], [](const std::string &n) { return instance()->isScancodeDown(n); });
-	return mrbx_boolean(mrb, down);
+
+	std::vector<Keyboard::Scancode> scancodes;
+	eachName(mrb, v[0], [&](const std::string &n) { scancodes.push_back(checkScancode(mrb, n)); });
+	return mrbx_boolean(mrb, instance()->isScancodeDown(scancodes));
 }
 
 static mrb_value w_get_scancode_from_key(mrb_state *mrb, mrb_value self)
@@ -218,7 +109,13 @@ static mrb_value w_get_scancode_from_key(mrb_state *mrb, mrb_value self)
 	(void) self;
 	mrb_value v[1];
 	mrbx_get_kwargs(mrb, {"key"}, 1, v);
-	return mrbx_string(mrb, instance()->getScancodeFromKey(mrbx_checkstring(mrb, v[0])));
+	Keyboard::Key key = checkKey(mrb, mrbx_checkstring(mrb, v[0]));
+
+	Keyboard::Scancode scancode = instance()->getScancodeFromKey(key);
+	const char *str;
+	if (!Keyboard::getConstant(scancode, str))
+		mrb_raise(mrb, E_RUNTIME_ERROR, "Unknown scancode.");
+	return mrbx_string(mrb, str);
 }
 
 static mrb_value w_get_key_from_scancode(mrb_state *mrb, mrb_value self)
@@ -226,7 +123,13 @@ static mrb_value w_get_key_from_scancode(mrb_state *mrb, mrb_value self)
 	(void) self;
 	mrb_value v[1];
 	mrbx_get_kwargs(mrb, {"scancode"}, 1, v);
-	return mrbx_string(mrb, instance()->getKeyFromScancode(mrbx_checkstring(mrb, v[0])));
+	Keyboard::Scancode scancode = checkScancode(mrb, mrbx_checkstring(mrb, v[0]));
+
+	Keyboard::Key key = instance()->getKeyFromScancode(scancode);
+	const char *str;
+	if (!Keyboard::getConstant(key, str))
+		mrb_raise(mrb, E_RUNTIME_ERROR, "Unknown key constant.");
+	return mrbx_string(mrb, str);
 }
 
 static mrb_value w_set_key_repeat(mrb_state *mrb, mrb_value self)
@@ -277,12 +180,19 @@ static mrb_value w_screen_keyboard_visible(mrb_state *mrb, mrb_value self)
 	return mrbx_boolean(mrb, instance()->isScreenKeyboardVisible());
 }
 
+// modifier_active?(key:) — one of the sticky modifiers (numlock/capslock/
+// scrolllock/mode), matching love.keyboard.isModifierActive.
 static mrb_value w_modifier_active(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
 	mrb_value v[1];
 	mrbx_get_kwargs(mrb, {"key"}, 1, v);
-	return mrbx_boolean(mrb, instance()->isModifierActive(mrbx_checkstring(mrb, v[0])));
+	std::string name = mrbx_checkstring(mrb, v[0]);
+
+	Keyboard::ModifierKey key;
+	if (!Keyboard::getConstant(name.c_str(), key))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "invalid modifier key: %s", name.c_str());
+	return mrbx_boolean(mrb, instance()->isModifierActive(key));
 }
 
 static const MrbReg functions[] =
@@ -303,9 +213,9 @@ static const MrbReg functions[] =
 
 extern "C" void mrb_love_keyboard_init(mrb_state *mrb)
 {
-	Module *inst = Module::getInstance<Module>(Module::M_KEYBOARD);
+	Keyboard *inst = instance();
 	if (inst == nullptr)
-		inst = new HarnessKeyboard();
+		inst = new love::keyboard::sdl::Keyboard();
 	else
 		inst->retain();
 
