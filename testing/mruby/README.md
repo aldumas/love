@@ -15,8 +15,8 @@ arguments**.
 | Ported module: math (functions + RandomGenerator, BezierCurve, Transform object types) | `src/modules/math/wrap_Math_mrb.cpp` |
 | Ported module: filesystem (functions + File, FileData; real physfs backend) | `src/modules/filesystem/wrap_Filesystem_mrb.cpp` |
 | Ported module: event (queue + full SDL event translation: kbd/mouse/touch/joystick/gamepad/sensor/window/drop) | `src/modules/event/wrap_Event_mrb.cpp` |
-| Ported module: window (lean graphics-independent SDL backend) | `src/modules/window/wrap_Window_mrb.cpp` |
-| Ported module: graphics (thin slice: clear/color/rectangle/present, immediate-mode GL) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
+| Ported module: window (real `window::sdl::Window` backend; creates the GL context, drives the graphics backbuffer) | `src/modules/window/wrap_Window_mrb.cpp` |
+| Ported module: graphics (real shader-based batched renderer, OpenGL backend; API slice: clear/color/rectangle/origin/present) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
 | Ported module: keyboard (real keyboard::sdl::Keyboard backend; canonical key/scancode enum names) | `src/modules/keyboard/wrap_Keyboard_mrb.cpp` |
 | Ported module: mouse (lean SDL state queries; cursor objects deferred) | `src/modules/mouse/wrap_Mouse_mrb.cpp` |
 | Ported module: system (OS/CPU/memory/clipboard/power/locale; real SDL backend) | `src/modules/system/wrap_System_mrb.cpp` |
@@ -41,7 +41,13 @@ so this harness exercises the ported modules (`timer`, `math`, `filesystem`,
 The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the
-graphics slice additionally links `libGL` for immediate-mode OpenGL, the
+graphics module is the **real** shader-based batched renderer (OpenGL backend),
+built as static archives — `libgfx.a` (`graphics/*.cpp` + `graphics/opengl/*` +
+glad GL loader + the `video::VideoStream` base), `libglslang.a` (the bundled
+glslang for shader validation/reflection), and `libxxhash.a` — and links `libGL`;
+the real `window::sdl::Window` backend creates the GL context and drives the
+graphics backbuffer. Vulkan/Metal are intentionally out of the build
+(`LOVE_MRUBY_NO_VULKAN`). The
 font module links the system `freetype` and `harfbuzz` (via `pkg-config`), the
 sound module links the bundled Wuff (WAV, compiled as C) plus the system
 `libvorbis`/`libmodplug` for its lullaby decode backend (FLAC and MP3 use the
@@ -176,42 +182,35 @@ narrative overview.
    ported to Ruby (`boot.rb`, `callbacks.rb`, `arg.rb`) with the coroutine boot
    loop mapped onto mruby `Fiber`, and the run loop now pumps/polls the ported
    `love.event`, `Love.init` opens the config window via `love.window`, and the
-   run loop clears/draws/presents through `love.graphics` when active. The event
-   (`HarnessEvent`), window (`HarnessWindow`), and graphics (`HarnessGraphics`)
-   backends are all intentionally lean. `HarnessEvent` converts only
-   window-independent SDL events; `HarnessWindow` creates a real SDL window but
-   no renderer context; `HarnessGraphics` is a standalone `love::Module` (not
-   `love::graphics::Graphics`) that creates a legacy GL context on the window and
-   draws with immediate-mode OpenGL. The full SDL/graphics backends
-   (`window/sdl/Window.cpp`, `graphics/opengl|vulkan|metal`) build a real
-   renderer context, shader pipeline, and batched renderer -- ~8000 lines that
-   pull in the whole graphics subsystem. Swap the lean trio for them once the
-   graphics object/shader system is ported; the Ruby-facing APIs are unchanged.
-   Note the window and graphics swaps are **coupled and must land together**:
-   `window/sdl/Window.cpp` is not graphics-independent -- its `setMode()` grabs
-   the `M_GRAPHICS` instance via `Module::getInstance<graphics::Graphics>` (a
-   plain C-cast, no RTTI) and calls `getRenderer()`/`setMode()` on it, so the
-   real SDL window cannot replace `HarnessWindow` until a real
-   `graphics::Graphics` (not the plain-`Module` `HarnessGraphics`) occupies
-   `M_GRAPHICS`; otherwise that cast is wrong and the virtual call crashes. It
-   also links the `love::graphics::isDebugEnabled`/`isGammaCorrect`/
-   `setGammaCorrect` free functions. See PORTING.md §B (`#win-backend` /
-   `#gfx-backend`) for the details. The remaining graphics-*independent* window
-   work (native file-dialog hosting) does not need this swap.
+   run loop clears/draws/presents through `love.graphics` when active. The window
+   and graphics backends are now the **real** ones: window is
+   `window::sdl::Window` (`window/sdl/Window.cpp`) and graphics is a real
+   `graphics::Graphics` from `Graphics::createInstance()` (the OpenGL backend,
+   `graphics/opengl`). The window backend creates the GL context and drives the
+   graphics backbuffer: `setWindow()` resolves the `M_GRAPHICS` instance via
+   `Module::getInstance<graphics::Graphics>` and calls
+   `getRenderer()`/`setMode()`/`backbufferChanged()` on it — so window and
+   graphics are coupled and come up together, which is why they were swapped in
+   the same step. Vulkan/Metal are kept out of the build (`LOVE_MRUBY_NO_VULKAN`)
+   so only the OpenGL renderer (and its glad loader + the bundled glslang shader
+   compiler) is linked. The event backend (`HarnessEvent`) is still lean but its
+   wholesale swap to `event/sdl/Event.cpp` is now unblocked. See PORTING.md §B
+   (`#win-backend` / `#gfx-backend`) for the details.
    The window module is fully exposed: `set_icon`/`get_icon`, `update_mode`,
    `get_pointer`, `show_file_dialog`, and the HiDPI transforms
    (`to_pixels`/`from_pixels`/`get_dpi_scale`) are all wired up. `update_mode`
    re-applies the mode with every keyword optional; `get_pointer` returns the
    native handle as a TT_CPTR value; `show_file_dialog` takes a
-   `{ |files, filter_name, err| ... }` result block plus the dialog kwargs (the
-   Ruby callback plumbing is real, while hosting a native dialog waits on the
-   full window-backend swap, so the lean backend resolves the block with an
-   "unsupported" error); the DPI transforms mirror window/sdl/Window.cpp (the
-   pixel/window size ratio plus SDL's display scale, honored only when the window
-   set `use_dpi_scale`).
-   The graphics slice covers only `clear` / `set_color` / `set_background_color`
-   / `rectangle` / `origin` / `present` / dimensions -- no textures, shaders,
-   transforms beyond `origin`, blend/stencil state, fonts, or batched drawing.
+   `{ |files, filter_name, err| ... }` result block plus the dialog kwargs, now
+   hosted by the real SDL window backend; the DPI transforms come from the real
+   `window/sdl/Window.cpp` (the pixel/window size ratio plus SDL's display scale,
+   honored only when the window set `use_dpi_scale`).
+   The graphics API slice currently exposes `clear` / `set_color` /
+   `set_background_color` / `rectangle` / `origin` / `present` / dimensions, now
+   driven through the real batched renderer (a rectangle goes through the default
+   shader and the streaming vertex buffer). Still to expose on the same real
+   instance: textures, shaders, transforms beyond `origin`, blend/stencil state,
+   fonts, and the object types (Image, Quad, SpriteBatch, Mesh, ...).
    `HarnessKeyboard` is likewise a plain `love::Module` that resolves key and
    scancode names through SDL's own name lookups (`SDL_GetKeyFromName` etc.)
    rather than the 621-line `Keyboard.h` enum tables -- symmetric with the lean

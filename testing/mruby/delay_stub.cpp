@@ -5,17 +5,14 @@
  */
 
 #include "common/delay.h"
-#include "common/deprecation.h"
 
 #include <ctime>
 
 namespace love
 {
 
-// The deprecation subsystem is SDL-thread-backed in the real build; stub it for
-// the standalone harness.
-void initDeprecation() {}
-void deinitDeprecation() {}
+// Note: the deprecation subsystem (initDeprecation/deinitDeprecation) is now
+// provided by the real common/deprecation.cpp, linked for the graphics backend.
 
 void sleep(double ms)
 {

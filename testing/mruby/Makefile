@@ -40,6 +40,10 @@ INCLUDES += $(shell pkg-config --cflags freetype2 harfbuzz)
 INCLUDES += $(shell pkg-config --cflags openal)
 # So the harness can locate the ported boot scripts (arg.rb/callbacks.rb/boot.rb).
 CXXFLAGS += -DLOVE_SRC_DIR='"$(LOVE_SRC)"'
+# The real graphics backend is OpenGL-only here; keep the Vulkan renderer (and
+# its dynamic_casts in the SDL window backend) out of the link. Must be defined
+# consistently for every TU that includes common/config.h.
+CXXFLAGS += -DLOVE_MRUBY_NO_VULKAN
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
 # The sound module's lullaby backend links system libvorbis + libmodplug (the
 # Wave/FLAC/MP3 decoders are bundled — Wuff and dr_flac/dr_mp3, built below).
@@ -75,6 +79,41 @@ WUFF_SRCS := \
 WUFF_OBJS := $(patsubst $(WUFF_DIR)/%.c,$(OBJ_DIR)/wuff_%.o,$(WUFF_SRCS))
 WUFF_A    := $(OBJ_DIR)/libwuff.a
 
+# --- xxHash (compiled as C; the graphics backend hashes FBO/shader keys) --
+XXHASH_DIR  := $(LOVE_SRC)/libraries/xxHash
+XXHASH_OBJS := $(OBJ_DIR)/xxhash.o
+XXHASH_A    := $(OBJ_DIR)/libxxhash.a
+
+# --- glslang (compiled as C++ for the graphics module's shader compiler) --
+# The real graphics backend validates/reflects shaders through the bundled
+# glslang (same source list as love's CMake love_3p_glslang target, Unix
+# OSDependent only; the Web/Windows ossource variants are excluded).
+GLSLANG_DIR  := $(LOVE_SRC)/libraries/glslang
+GLSLANG_SRCS := $(shell find $(GLSLANG_DIR) -name '*.cpp' \
+                  ! -path '*/OSDependent/Web/*' \
+                  ! -path '*/OSDependent/Windows/*')
+GLSLANG_OBJS := $(patsubst $(GLSLANG_DIR)/%.cpp,$(OBJ_DIR)/glslang/%.o,$(GLSLANG_SRCS))
+GLSLANG_A    := $(OBJ_DIR)/libglslang.a
+
+# --- graphics (real backend: core + opengl + glad + video base) ----------
+# The real shader-based batched renderer. Built as an archive (selective
+# linking) so the harness only recompiles the Ruby binding (wrap_*_mrb.cpp)
+# on each rebuild. glad is the GL loader; video/VideoStream is the abstract
+# base graphics/Video.cpp links against (no theora).
+GFX_SRCS := \
+	$(filter-out %wrap_Graphics_mrb.cpp,$(wildcard $(LOVE_SRC)/modules/graphics/*.cpp) ) \
+	$(wildcard $(LOVE_SRC)/modules/graphics/opengl/*.cpp) \
+	$(LOVE_SRC)/libraries/glad/glad.cpp \
+	$(LOVE_SRC)/modules/video/VideoStream.cpp
+# Drop the other Lua wrap_*.cpp (Buffer/Font/Graphics/Mesh/... ) — those are
+# the unported Lua bindings; only the _mrb binding (in MODULE_SRCS) is used.
+GFX_SRCS := $(filter-out %wrap_Buffer.cpp %wrap_Font.cpp %wrap_Graphics.cpp \
+	%wrap_GraphicsReadback.cpp %wrap_Mesh.cpp %wrap_ParticleSystem.cpp \
+	%wrap_Quad.cpp %wrap_Shader.cpp %wrap_SpriteBatch.cpp %wrap_TextBatch.cpp \
+	%wrap_Texture.cpp %wrap_Video.cpp,$(GFX_SRCS))
+GFX_OBJS := $(patsubst $(LOVE_SRC)/%.cpp,$(OBJ_DIR)/gfx/%.o,$(GFX_SRCS))
+GFX_A    := $(OBJ_DIR)/libgfx.a
+
 # --- C++ sources ---------------------------------------------------------
 CORE_SRCS := \
 	$(HERE)harness.cpp \
@@ -88,7 +127,9 @@ CORE_SRCS := \
 	$(LOVE_SRC)/common/Data.cpp \
 	$(LOVE_SRC)/common/Stream.cpp \
 	$(LOVE_SRC)/common/b64.cpp \
-	$(LOVE_SRC)/common/utf8.cpp
+	$(LOVE_SRC)/common/utf8.cpp \
+	$(LOVE_SRC)/common/memory.cpp \
+	$(LOVE_SRC)/common/deprecation.cpp
 
 # Ported module wrappers + their native implementations.
 # Append here as you port more modules.
@@ -125,6 +166,7 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/common/Variant.cpp \
 	$(LOVE_SRC)/modules/window/wrap_Window_mrb.cpp \
 	$(LOVE_SRC)/modules/window/Window.cpp \
+	$(LOVE_SRC)/modules/window/sdl/Window.cpp \
 	$(LOVE_SRC)/modules/graphics/wrap_Graphics_mrb.cpp \
 	$(LOVE_SRC)/modules/keyboard/wrap_Keyboard_mrb.cpp \
 	$(LOVE_SRC)/modules/keyboard/Keyboard.cpp \
@@ -230,8 +272,30 @@ install-hooks:
 	chmod +x "$$hooks/pre-commit"; \
 	echo "installed pre-commit hook -> $$hooks/pre-commit"
 
-$(BIN): $(SRCS) $(MRUBY_A) $(PHYSFS_A) $(LZ4_A) $(WUFF_A)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRCS) $(PHYSFS_A) $(LZ4_A) $(WUFF_A) $(LDFLAGS) $(LDLIBS) -o $@
+$(BIN): $(SRCS) $(MRUBY_A) $(PHYSFS_A) $(LZ4_A) $(WUFF_A) $(GFX_A) $(GLSLANG_A) $(XXHASH_A)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRCS) $(PHYSFS_A) $(LZ4_A) $(WUFF_A) $(GFX_A) $(GLSLANG_A) $(XXHASH_A) $(LDFLAGS) $(LDLIBS) -o $@
+
+$(OBJ_DIR)/xxhash.o: $(XXHASH_DIR)/xxhash.c | $(OBJ_DIR)
+	$(CC) -O2 -I$(XXHASH_DIR) -c $< -o $@
+
+$(XXHASH_A): $(XXHASH_OBJS)
+	ar rcs $@ $(XXHASH_OBJS)
+
+# glslang objects keep their source subdir layout under $(OBJ_DIR)/glslang.
+$(OBJ_DIR)/glslang/%.o: $(GLSLANG_DIR)/%.cpp | $(OBJ_DIR)
+	@mkdir -p $(dir $@)
+	$(CXX) -std=$(CXXSTD) -O2 -I$(LOVE_SRC) -I$(GLSLANG_DIR) -c $< -o $@
+
+$(GLSLANG_A): $(GLSLANG_OBJS)
+	ar rcs $@ $(GLSLANG_OBJS)
+
+# graphics objects keep their source subdir layout under $(OBJ_DIR)/gfx.
+$(OBJ_DIR)/gfx/%.o: $(LOVE_SRC)/%.cpp | $(OBJ_DIR)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+$(GFX_A): $(GFX_OBJS)
+	ar rcs $@ $(GFX_OBJS)
 
 $(OBJ_DIR)/physfs_%.o: $(PHYSFS_DIR)/%.c | $(OBJ_DIR)
 	$(CC) -O2 -I$(PHYSFS_DIR) -c $< -o $@

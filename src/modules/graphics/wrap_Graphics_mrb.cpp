@@ -18,171 +18,39 @@
  * 3. This notice may not be removed or altered from any source distribution.
  **/
 
-// mruby port of love.graphics -- a deliberately THIN first slice.
+// mruby port of love.graphics.
 //
-// The real love.graphics is ~8000 lines across three renderer backends
-// (opengl/vulkan/metal) plus shaders, batched rendering, textures, fonts, and a
-// full render-state stack. Linking any of it would pull in that entire tree.
+// This now drives the REAL shader-based batched renderer: the module instance
+// at M_GRAPHICS is a love::graphics::Graphics created via Graphics::createInstance()
+// (OpenGL backend in this harness; Vulkan/Metal are out of the build, see
+// LOVE_MRUBY_NO_VULKAN). The renderer context is created by the real SDL window
+// backend's setMode() (window/sdl/Window.cpp), which resolves this instance from
+// M_GRAPHICS and calls setMode()/backbufferChanged() on it -- so graphics and
+// window are coupled and come up together.
 //
-// Following the lean-backend pattern used for window and event, this provides a
-// standalone HarnessGraphics that is NOT love::graphics::Graphics: it's a plain
-// love::Module that creates a legacy OpenGL context on the (lean) window and
-// implements just enough to put pixels on screen --
+// The Ruby-facing API is still a thin first slice over the real backend --
 //
-//   clear, set_color / set_background_color, rectangle, origin, present
+//   active?, clear, set_color / set_background_color, rectangle, origin, present
 //
-// using fixed-function immediate-mode GL (no shader pipeline, no GL loader).
-// Colors are 0..1 floats and the coordinate space is top-left origin / y-down,
-// matching modern LÖVE. This is the "draw a rectangle" milestone; swap it for
-// the real backend once the graphics object/shader system is ported. The
-// Ruby-facing API (Love::Graphics.clear, .rectangle, ...) is the shape the full
-// module will keep.
+// -- exercising the real batched-draw path (a rectangle goes through the default
+// shader and the streaming vertex buffer). Textures, shaders, transforms beyond
+// origin, blend/stencil state, fonts, and the object types (Image, Quad,
+// SpriteBatch, Mesh, ...) are still to be exposed; the binding will grow onto
+// the same real Graphics instance.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
 #include "common/Module.h"
-#include "window/Window.h"
-
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_opengl.h>
+#include "common/Color.h"
+#include "common/Optional.h"
+#include "Graphics.h"
 
 namespace love
 {
 namespace graphics
 {
 
-// =========================================================================
-// Lean immediate-mode OpenGL backend
-// =========================================================================
-//
-// TODO(mruby) #gfx-backend: temporary scaffolding — this whole class is fixed-
-// function immediate-mode GL standing in for the real shader-based renderer.
-// No textures, shaders, transforms beyond origin, blend/stencil, or fonts.
-// Swap for graphics/opengl|vulkan|metal once ported. (see PORTING.md §B)
-
-class HarnessGraphics : public love::Module
-{
-public:
-
-	HarnessGraphics()
-		: love::Module(M_GRAPHICS, "love.graphics.harness")
-	{
-	}
-
-	~HarnessGraphics() override
-	{
-		if (glcontext != nullptr)
-			SDL_GL_DestroyContext(glcontext);
-	}
-
-	// Lazily create the GL context on the window. Returns true once a usable
-	// context is current. Mirrors love.graphics.isActive(): false when there's
-	// no window or context creation failed.
-	bool active()
-	{
-		if (glcontext != nullptr)
-			return true;
-		if (contextFailed)
-			return false;
-
-		SDL_Window *w = windowHandle();
-		if (w == nullptr)
-			return false;
-
-		// A compatibility profile keeps fixed-function immediate mode available.
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
-
-		glcontext = SDL_GL_CreateContext(w);
-		if (glcontext == nullptr)
-		{
-			SDL_Log("love.graphics: could not create GL context (%s)", SDL_GetError());
-			contextFailed = true;
-			return false;
-		}
-
-		SDL_GL_MakeCurrent(w, glcontext);
-		SDL_GL_SetSwapInterval(1); // vsync; frame-paces the boot loop
-		return true;
-	}
-
-	void setColor(float r, float g, float b, float a)      { color[0]=r; color[1]=g; color[2]=b; color[3]=a; }
-	void setBackgroundColor(float r, float g, float b, float a) { bg[0]=r; bg[1]=g; bg[2]=b; bg[3]=a; }
-	const float *getColor() const { return color; }
-	const float *getBackground() const { return bg; }
-
-	// Set up the viewport + a top-left-origin orthographic projection for the
-	// window's current pixel size. Called at the start of each frame (clear).
-	void beginFrame()
-	{
-		int w = 0, h = 0;
-		pixelDimensions(w, h);
-		glViewport(0, 0, w, h);
-		glMatrixMode(GL_PROJECTION);
-		glLoadIdentity();
-		glOrtho(0.0, (GLdouble) w, (GLdouble) h, 0.0, -1.0, 1.0);
-		glMatrixMode(GL_MODELVIEW);
-		glLoadIdentity();
-	}
-
-	void clear(float r, float g, float b, float a)
-	{
-		beginFrame();
-		glClearColor(r, g, b, a);
-		glClear(GL_COLOR_BUFFER_BIT);
-	}
-
-	void origin()
-	{
-		glMatrixMode(GL_MODELVIEW);
-		glLoadIdentity();
-	}
-
-	void rectangle(bool fill, float x, float y, float w, float h)
-	{
-		glColor4f(color[0], color[1], color[2], color[3]);
-		glBegin(fill ? GL_QUADS : GL_LINE_LOOP);
-			glVertex2f(x,     y);
-			glVertex2f(x + w, y);
-			glVertex2f(x + w, y + h);
-			glVertex2f(x,     y + h);
-		glEnd();
-	}
-
-	void present()
-	{
-		SDL_Window *w = windowHandle();
-		if (w != nullptr)
-			SDL_GL_SwapWindow(w);
-	}
-
-	void getDimensions(int &w, int &h) { pixelDimensions(w, h); }
-
-private:
-
-	static SDL_Window *windowHandle()
-	{
-		auto win = Module::getInstance<love::window::Window>(M_WINDOW);
-		return win != nullptr ? (SDL_Window *) win->getHandle() : nullptr;
-	}
-
-	static void pixelDimensions(int &w, int &h)
-	{
-		w = h = 0;
-		SDL_Window *win = windowHandle();
-		if (win != nullptr && !SDL_GetWindowSizeInPixels(win, &w, &h))
-			SDL_GetWindowSize(win, &w, &h);
-	}
-
-	SDL_GLContext glcontext = nullptr;
-	bool contextFailed = false;
-	float color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-	float bg[4]    = {0.0f, 0.0f, 0.0f, 1.0f};
-
-}; // HarnessGraphics
-
-#define instance() (Module::getInstance<HarnessGraphics>(Module::M_GRAPHICS))
+#define instance() (Module::getInstance<Graphics>(Module::M_GRAPHICS))
 
 // =========================================================================
 // Love::Graphics module functions
@@ -191,7 +59,7 @@ private:
 static mrb_value w_active(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	return mrbx_boolean(mrb, instance()->active());
+	return mrbx_boolean(mrb, instance()->isActive());
 }
 
 static mrb_value w_clear(mrb_state *mrb, mrb_value self)
@@ -200,13 +68,16 @@ static mrb_value w_clear(mrb_state *mrb, mrb_value self)
 	mrb_value v[4];
 	mrbx_get_kwargs(mrb, {"r", "g", "b", "a"}, 0, v);
 
-	const float *bg = instance()->getBackground();
-	float r = mrbx_optfloat(mrb, v[0], bg[0]);
-	float g = mrbx_optfloat(mrb, v[1], bg[1]);
-	float b = mrbx_optfloat(mrb, v[2], bg[2]);
-	float a = mrbx_optfloat(mrb, v[3], bg[3]);
+	Colorf bg = instance()->getBackgroundColor();
+	ColorD c;
+	c.r = mrbx_optfloat(mrb, v[0], bg.r);
+	c.g = mrbx_optfloat(mrb, v[1], bg.g);
+	c.b = mrbx_optfloat(mrb, v[2], bg.b);
+	c.a = mrbx_optfloat(mrb, v[3], bg.a);
 
-	instance()->clear(r, g, b, a);
+	mrbx_catchexcept(mrb, [&]() {
+		instance()->clear(OptionalColorD(c), OptionalInt(), OptionalDouble());
+	});
 	return mrb_nil_value();
 }
 
@@ -215,8 +86,9 @@ static mrb_value w_set_color(mrb_state *mrb, mrb_value self)
 	(void) self;
 	mrb_value v[4];
 	mrbx_get_kwargs(mrb, {"r", "g", "b", "a"}, 3, v);
-	instance()->setColor(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]),
+	Colorf c(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]),
 		mrbx_checkfloat(mrb, v[2]), mrbx_optfloat(mrb, v[3], 1.0f));
+	instance()->setColor(c);
 	return mrb_nil_value();
 }
 
@@ -225,18 +97,19 @@ static mrb_value w_set_background_color(mrb_state *mrb, mrb_value self)
 	(void) self;
 	mrb_value v[4];
 	mrbx_get_kwargs(mrb, {"r", "g", "b", "a"}, 3, v);
-	instance()->setBackgroundColor(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]),
+	Colorf c(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]),
 		mrbx_checkfloat(mrb, v[2]), mrbx_optfloat(mrb, v[3], 1.0f));
+	instance()->setBackgroundColor(c);
 	return mrb_nil_value();
 }
 
-static mrb_value colorhash(mrb_state *mrb, const float *c)
+static mrb_value colorhash(mrb_state *mrb, Colorf c)
 {
 	mrb_value h = mrb_hash_new(mrb);
-	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "r")), mrbx_number(mrb, c[0]));
-	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "g")), mrbx_number(mrb, c[1]));
-	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "b")), mrbx_number(mrb, c[2]));
-	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "a")), mrbx_number(mrb, c[3]));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "r")), mrbx_number(mrb, c.r));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "g")), mrbx_number(mrb, c.g));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "b")), mrbx_number(mrb, c.b));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "a")), mrbx_number(mrb, c.a));
 	return h;
 }
 
@@ -249,7 +122,7 @@ static mrb_value w_get_color(mrb_state *mrb, mrb_value self)
 static mrb_value w_get_background_color(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	return colorhash(mrb, instance()->getBackground());
+	return colorhash(mrb, instance()->getBackgroundColor());
 }
 
 static mrb_value w_rectangle(mrb_state *mrb, mrb_value self)
@@ -259,19 +132,21 @@ static mrb_value w_rectangle(mrb_state *mrb, mrb_value self)
 	mrbx_get_kwargs(mrb, {"mode", "x", "y", "width", "height"}, 5, v);
 
 	std::string mode = mrbx_checkstring(mrb, v[0]);
-	bool fill;
+	Graphics::DrawMode drawmode;
 	if (mode == "fill")
-		fill = true;
+		drawmode = Graphics::DRAW_FILL;
 	else if (mode == "line")
-		fill = false;
+		drawmode = Graphics::DRAW_LINE;
 	else
 	{
 		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid draw mode: %s (expected 'fill' or 'line')", mode.c_str());
 		return mrb_nil_value();
 	}
 
-	instance()->rectangle(fill, mrbx_checkfloat(mrb, v[1]), mrbx_checkfloat(mrb, v[2]),
-		mrbx_checkfloat(mrb, v[3]), mrbx_checkfloat(mrb, v[4]));
+	mrbx_catchexcept(mrb, [&]() {
+		instance()->rectangle(drawmode, mrbx_checkfloat(mrb, v[1]), mrbx_checkfloat(mrb, v[2]),
+			mrbx_checkfloat(mrb, v[3]), mrbx_checkfloat(mrb, v[4]));
+	});
 	return mrb_nil_value();
 }
 
@@ -285,34 +160,28 @@ static mrb_value w_origin(mrb_state *mrb, mrb_value self)
 static mrb_value w_present(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	instance()->present();
+	mrbx_catchexcept(mrb, [&]() { instance()->present(nullptr); });
 	return mrb_nil_value();
 }
 
 static mrb_value w_get_width(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	int w, h;
-	instance()->getDimensions(w, h);
-	return mrbx_integer(mrb, w);
+	return mrbx_integer(mrb, instance()->getWidth());
 }
 
 static mrb_value w_get_height(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	int w, h;
-	instance()->getDimensions(w, h);
-	return mrbx_integer(mrb, h);
+	return mrbx_integer(mrb, instance()->getHeight());
 }
 
 static mrb_value w_get_dimensions(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	int w, h;
-	instance()->getDimensions(w, h);
 	mrb_value arr = mrb_ary_new_capa(mrb, 2);
-	mrb_ary_push(mrb, arr, mrbx_integer(mrb, w));
-	mrb_ary_push(mrb, arr, mrbx_integer(mrb, h));
+	mrb_ary_push(mrb, arr, mrbx_integer(mrb, instance()->getWidth()));
+	mrb_ary_push(mrb, arr, mrbx_integer(mrb, instance()->getHeight()));
 	return arr;
 }
 
@@ -335,9 +204,12 @@ static const MrbReg functions[] =
 
 extern "C" void mrb_love_graphics_init(mrb_state *mrb)
 {
-	Module *inst = Module::getInstance<Module>(Module::M_GRAPHICS);
+	// The real renderer-backed instance. createInstance() picks the renderer
+	// (OpenGL here) and registers itself at M_GRAPHICS; the window backend's
+	// setMode() later creates the GL context and drives setMode() on it.
+	Graphics *inst = Module::getInstance<Graphics>(Module::M_GRAPHICS);
 	if (inst == nullptr)
-		inst = new HarnessGraphics();
+		inst = Graphics::createInstance();
 	else
 		inst->retain();
 

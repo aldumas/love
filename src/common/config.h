@@ -123,7 +123,10 @@
 #	define LOVE_LEGENDARY_APP_ARGV_HACK
 #endif
 
-#if defined(LOVE_WINDOWS) || defined(LOVE_LINUX) || defined(LOVE_ANDROID)
+// The mruby-port harness builds an OpenGL-only graphics backend; defining
+// LOVE_MRUBY_NO_VULKAN keeps the Vulkan renderer (and its dynamic_casts in the
+// SDL window backend) out of the link until the Vulkan backend is ported.
+#if (defined(LOVE_WINDOWS) || defined(LOVE_LINUX) || defined(LOVE_ANDROID)) && !defined(LOVE_MRUBY_NO_VULKAN)
 #	define LOVE_GRAPHICS_VULKAN
 #endif
 

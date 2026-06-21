@@ -25,7 +25,7 @@ Legend: `[ ]` not started · `[~]` partial / stubbed · `[x]` done
 
 ## Modules ported so far
 
-timer · math · filesystem · event · window · graphics (slice) · keyboard · mouse
+timer · math · filesystem · event · window · graphics (real backend) · keyboard · mouse
 · system · data · image · font · thread · sound · audio · touch · sensor · joystick
 · boot pipeline (arg/callbacks/boot)
 
@@ -208,36 +208,34 @@ them changes when we swap.
       the keyboard enum tables (now linked) for canonical key names. Two things
       keep this from being the literal upstream file, and both are pre-existing
       lean backends, not new work: the sdl::Window live-resize *modal-draw* hook
-      is omitted (it dynamic_casts to `window::sdl::Window`, which would pull
-      `#win-backend`). Key names and the key-repeat check now go through the real
-      keyboard module (`#kbd-backend` is done). A true wholesale swap to
-      `event/sdl/Event.cpp` is now blocked only on `#win-backend`.
-- [~] (#win-backend) **window** — `HarnessWindow`: real SDL window, no
-      renderer/graphics context. Swap for `window/sdl/Window.cpp`. **Coupled to
-      `#gfx-backend` — they must swap together.** `window/sdl/Window.cpp` is not
-      graphics-independent: (1) at link time it references the free functions
-      `love::graphics::isDebugEnabled` / `isGammaCorrect` / `setGammaCorrect`
-      (defined in `graphics/Graphics.cpp`); (2) more fundamentally, `setMode()`
-      does `graphics.set(Module::getInstance<graphics::Graphics>(M_GRAPHICS))`
-      and then calls `graphics->getRenderer()` — and `getInstance<T>` is a plain
-      C-cast `(T*)instances[type]` (no RTTI; see `common/Module.h`). The lean
-      `HarnessGraphics` registered at `M_GRAPHICS` is a plain `love::Module`,
-      **not** a `graphics::Graphics`, so that cast is wrong and the virtual call
-      lands on a bogus vtable (crash). There's no way to make the cast return
-      null while still registering a lean graphics module. So the real SDL window
-      can't go in until a real `graphics::Graphics` occupies `M_GRAPHICS`. The
-      remaining graphics-*independent* win work (native file dialog hosting, see
-      `#win-filedialog`) can be done on the lean backend without this swap.
-- [~] (#gfx-backend) **graphics** — `HarnessGraphics`: immediate-mode
-      (fixed-function GL 2.1) scaffolding. No textures, shaders, transforms
-      beyond `origin`, blend/stencil state, fonts, or batched drawing. Swap for
-      the real shader-based batched renderer (`graphics/opengl|vulkan|metal`).
-      Note `HarnessGraphics` is a plain `love::Module`, not a real
-      `graphics::Graphics`, and it manages its own GL context on the window
-      handle. **Coupled to `#win-backend`** — the real `window/sdl/Window.cpp`
-      assumes the `M_GRAPHICS` instance is a real `graphics::Graphics` (it casts
-      and calls `getRenderer()`/`setMode()`/`backbufferChanged()` on it), so the
-      window backend can only swap once this is a real `graphics::Graphics`.
+      is omitted (it dynamic_casts to `window::sdl::Window`). Key names and the
+      key-repeat check now go through the real keyboard module (`#kbd-backend` is
+      done). With `#win-backend` now done too, a true wholesale swap to
+      `event/sdl/Event.cpp` is unblocked (the live-resize hook can now cast to the
+      real `window::sdl::Window`).
+- [x] (#win-backend) **window** — done; the module instance is now the real
+      `window::sdl::Window` (`window/sdl/Window.cpp` linked). The Ruby bindings
+      were unchanged — every binding calls through the abstract
+      `love::window::Window` interface, which the SDL backend implements. The
+      coupling to `#gfx-backend` is satisfied: `setWindow()` resolves the real
+      `graphics::Graphics` from `M_GRAPHICS`, creates the GL context, and calls
+      `setMode()`/`backbufferChanged()` on it. The free functions
+      `isDebugEnabled`/`isGammaCorrect`/`setGammaCorrect` resolve from the linked
+      `graphics/Graphics.cpp`. Native file-dialog hosting (`#win-filedialog`) now
+      runs on the real backend. The duplicate lean `setHighDPIAllowedImplementation`
+      was dropped (the SDL backend provides it).
+- [x] (#gfx-backend) **graphics** — done; the module instance is now a real
+      `graphics::Graphics` from `Graphics::createInstance()` (the OpenGL backend,
+      `graphics/opengl` — Vulkan/Metal are out of the build via
+      `LOVE_MRUBY_NO_VULKAN`). The real shader-based batched renderer is linked:
+      `graphics/*.cpp` + `graphics/opengl/*.cpp` + glad + glslang (shader
+      validation/reflection) + xxHash, built as `libgfx.a`/`libglslang.a`/
+      `libxxhash.a`. The Ruby API (`active?`/`clear`/`set_color`/`rectangle`/
+      `origin`/`present`/dimensions) now drives the real path — a rectangle goes
+      through the default shader and the streaming vertex buffer. Still to expose
+      on this same instance: textures, shaders, transforms beyond `origin`,
+      blend/stencil state, fonts, and the object types (Image, Quad, SpriteBatch,
+      Mesh, ...). See §A "graphics object types" follow-ups as they land.
 - [x] (#kbd-backend) **keyboard** — done; the module instance is now the real
       `keyboard::sdl::Keyboard` (`keyboard/Keyboard.cpp` + `keyboard/sdl/Keyboard.cpp`
       linked). The wrapper translates key/scancode/modifier names to and from the
