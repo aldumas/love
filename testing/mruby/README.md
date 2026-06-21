@@ -26,6 +26,9 @@ arguments**.
 | Ported module: thread (Thread + Channel; real SDL threads, per-thread mruby VM) | `src/modules/thread/wrap_ThreadModule_mrb.cpp` |
 | Ported module: sound (Decoder + SoundData; real lullaby wav/flac/ogg/mp3/mod backend) | `src/modules/sound/wrap_Sound_mrb.cpp` |
 | Ported module: audio (Source + RecordingDevice; real OpenAL backend, null fallback) | `src/modules/audio/wrap_Audio_mrb.cpp` |
+| Ported module: touch (real SDL backend; ids are 64-bit Integers) | `src/modules/touch/wrap_Touch_mrb.cpp` |
+| Ported module: sensor (real SDL backend) | `src/modules/sensor/wrap_Sensor_mrb.cpp` |
+| Ported module: joystick (Joystick type + module class methods; real SDL gamepad backend) | `src/modules/joystick/wrap_JoystickModule_mrb.cpp` |
 | Ported boot scripts (arg/callbacks/boot) | `src/modules/love/{arg,callbacks,boot}.rb` |
 | Standalone demo harness | `testing/mruby/harness.cpp` |
 | nanosleep/deprecation stubs (avoid linking SDL for the demo) | `testing/mruby/delay_stub.cpp` |
@@ -34,7 +37,8 @@ arguments**.
 The full `love` executable can't link until all 74 module wrappers are ported,
 so this harness exercises the ported modules (`timer`, `math`, `filesystem`,
 `event`, `window`, `graphics`, `keyboard`, `mouse`, `system`, `data`, `image`,
-`font`, `thread`, `sound`, `audio`) end-to-end. The filesystem module links the
+`font`, `thread`, `sound`, `audio`, `touch`, `sensor`, `joystick`) end-to-end.
+The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the
 graphics slice additionally links `libGL` for immediate-mode OpenGL, the
@@ -43,7 +47,10 @@ sound module links the bundled Wuff (WAV, compiled as C) plus the system
 `libvorbis`/`libmodplug` for its lullaby decode backend (FLAC and MP3 use the
 bundled header-only dr_flac/dr_mp3), and the audio module links the system
 `libopenal` for its real OpenAL backend (with the null backend kept as a
-fallback when no audio device is available).
+fallback when no audio device is available). The input family (`touch`,
+`sensor`, `joystick`) uses the real SDL backends (no extra libraries beyond
+`libSDL3`); with no devices attached the lists are empty, but the global
+gamepad-mapping database is exercised.
 
 ## API shape
 

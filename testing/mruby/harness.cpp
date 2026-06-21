@@ -46,6 +46,9 @@ namespace love { namespace font       { extern "C" void mrb_love_font_init(mrb_s
 namespace love { namespace thread     { extern "C" void mrb_love_thread_init(mrb_state *mrb); } }
 namespace love { namespace sound      { extern "C" void mrb_love_sound_init(mrb_state *mrb); } }
 namespace love { namespace audio      { extern "C" void mrb_love_audio_init(mrb_state *mrb); } }
+namespace love { namespace touch      { extern "C" void mrb_love_touch_init(mrb_state *mrb); } }
+namespace love { namespace sensor     { extern "C" void mrb_love_sensor_init(mrb_state *mrb); } }
+namespace love { namespace joystick   { extern "C" void mrb_love_joystick_init(mrb_state *mrb); } }
 
 // Set by the thread module (LuaThread.h); the harness installs open_love so a
 // thread's fresh mrb_state gets the same Love:: modules as the main VM.
@@ -81,6 +84,9 @@ static void open_love(mrb_state *mrb)
 	love::thread::mrb_love_thread_init(mrb);
 	love::sound::mrb_love_sound_init(mrb);
 	love::audio::mrb_love_audio_init(mrb);
+	love::touch::mrb_love_touch_init(mrb);
+	love::sensor::mrb_love_sensor_init(mrb);
+	love::joystick::mrb_love_joystick_init(mrb);
 }
 
 static bool read_file(const char *path, std::string &out)

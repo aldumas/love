@@ -195,7 +195,17 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/audio/openal/RecordingDevice.cpp \
 	$(LOVE_SRC)/modules/audio/null/Audio.cpp \
 	$(LOVE_SRC)/modules/audio/null/Source.cpp \
-	$(LOVE_SRC)/modules/audio/null/RecordingDevice.cpp
+	$(LOVE_SRC)/modules/audio/null/RecordingDevice.cpp \
+	$(LOVE_SRC)/modules/touch/wrap_Touch_mrb.cpp \
+	$(LOVE_SRC)/modules/touch/Touch.cpp \
+	$(LOVE_SRC)/modules/touch/sdl/Touch.cpp \
+	$(LOVE_SRC)/modules/sensor/wrap_Sensor_mrb.cpp \
+	$(LOVE_SRC)/modules/sensor/Sensor.cpp \
+	$(LOVE_SRC)/modules/sensor/sdl/Sensor.cpp \
+	$(LOVE_SRC)/modules/joystick/wrap_JoystickModule_mrb.cpp \
+	$(LOVE_SRC)/modules/joystick/Joystick.cpp \
+	$(LOVE_SRC)/modules/joystick/sdl/Joystick.cpp \
+	$(LOVE_SRC)/modules/joystick/sdl/JoystickModule.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 

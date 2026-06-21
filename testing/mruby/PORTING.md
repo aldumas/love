@@ -26,7 +26,8 @@ Legend: `[ ]` not started · `[~]` partial / stubbed · `[x]` done
 ## Modules ported so far
 
 timer · math · filesystem · event · window · graphics (slice) · keyboard · mouse
-· system · data · image · font · thread · sound · audio · boot pipeline (arg/callbacks/boot)
+· system · data · image · font · thread · sound · audio · touch · sensor · joystick
+· boot pipeline (arg/callbacks/boot)
 
 ---
 
@@ -155,6 +156,34 @@ a host with no device it transparently falls back to null audio.
   RecordingDevice is fully wrapped, but mic capture itself isn't exercised by the
   test (depends on host hardware/permission). No code-site deferrals.
 
+### touch / sensor / joystick (the input family)
+All three ported with their **real** SDL backends.
+
+- **touch** (`Love::Touch`): `get_touches` (optional `device_type:` filter),
+  `get_position`/`get_pressure`/`get_device_type`/`mouse?` (each takes `id:`).
+  Touch ids were Lua lightuserdata (to dodge the 2^53 double-precision limit);
+  here they are plain Integers, since mruby's integers are 64-bit (word boxing)
+  and hold an SDL touch id exactly.
+- **sensor** (`Love::Sensor`): `has_sensor?`/`enabled?`/`set_enabled`/`get_data`/
+  `get_name`, all keyed by `type:`. `get_data` returns an Array of floats.
+- **joystick**: the module name collides with the `Joystick` type, so (like
+  data/thread) the module functions are **class methods** on `Love::Joystick`
+  while the per-controller API is **instance methods** on the same class.
+  Module side: `get_joysticks`, `get_joystick_count`, `set_background_events`/
+  `background_events?`, `set_gamepad_mapping` (kwargs `guid:`/`gamepad_input:`/
+  `input_type:`/`input_index:`/`hat_direction:`), `load_gamepad_mappings(data:)`
+  (a filename if it names an existing file, else a literal mappings string),
+  `save_gamepad_mappings(file:)` (returns the String; writes it too if `file:`
+  given), `get_gamepad_mapping_string(guid:)`. Instance side: the full controller
+  API — ids/axes/buttons/hats (1-based, as in Lua), gamepad axis/button/mapping
+  queries, vibration, and (under `LOVE_ENABLE_SENSOR`, which is defined) the
+  per-controller sensor + power/connection-state methods. Multi-value Lua returns
+  become Hashes (`get_id` -> `{id:, instance_id:}`, `get_device_info`,
+  `get_vibration`, `get_device_power_info`, `get_gamepad_mapping`). No deferrals.
+
+The harness has no physical input devices, so device lists come back empty; the
+gamepad-mapping database (global to SDL) is exercised end-to-end without one.
+
 ### data
 The module's functions are class methods on `Love::Data` (the module name "Data"
 collides with the `Data` type; a Ruby class doubling as the namespace resolves
@@ -202,8 +231,11 @@ them changes when we swap.
 
 ---
 
-## D. Not-yet-started input family (no code site yet)
+## D. Input family
 
-- [ ] joystick (gamepad mappings, haptics — heaviest)
-- [ ] touch
-- [ ] sensor
+- [x] joystick (gamepad mappings, haptics — heaviest) — see §A.
+- [x] touch — see §A.
+- [x] sensor — see §A.
+
+This unblocks the `#event-backend` swap in §B (the real SDL event backend needs
+the joystick/touch/sensor modules to translate their events).
