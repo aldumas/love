@@ -232,10 +232,15 @@ them changes when we swap.
       validation/reflection) + xxHash, built as `libgfx.a`/`libglslang.a`/
       `libxxhash.a`. The Ruby API (`active?`/`clear`/`set_color`/`rectangle`/
       `origin`/`present`/dimensions) now drives the real path — a rectangle goes
-      through the default shader and the streaming vertex buffer. Still to expose
-      on this same instance: textures, shaders, transforms beyond `origin`,
-      blend/stencil state, fonts, and the object types (Image, Quad, SpriteBatch,
-      Mesh, ...). See §A "graphics object types" follow-ups as they land.
+      through the default shader and the streaming vertex buffer. Object types
+      exposed so far: **Texture** (`new_image` — modern LÖVE merged Image into
+      Texture; query/dimensions + `set_filter`/`get_filter`) and **Quad**
+      (`new_quad` + `get_viewport`/`set_viewport`), plus `draw` (Drawable or
+      Texture+Quad, with the full x/y/r/sx/sy/ox/oy/kx/ky transform). Still to
+      expose on this same instance: shaders, transforms beyond `origin` (push/
+      pop/translate/rotate/scale), blend/stencil/scissor state, fonts + print,
+      and the remaining object types (SpriteBatch, Mesh, ParticleSystem, Canvas/
+      render targets, TextBatch, Video).
 - [x] (#kbd-backend) **keyboard** — done; the module instance is now the real
       `keyboard::sdl::Keyboard` (`keyboard/Keyboard.cpp` + `keyboard/sdl/Keyboard.cpp`
       linked). The wrapper translates key/scancode/modifier names to and from the
