@@ -37,13 +37,14 @@
 //   scissor, color mask, line width/style/join, point size, wireframe),
 //   new_image / new_quad / draw, new_font / print / printf, shaders
 //   (new_shader / set_shader / get_shader + the Shader type), canvas /
-//   render targets (new_canvas / set_canvas / get_canvas), and stencil/depth
-//   render state (set_stencil_mode / set_depth_mode)
+//   render targets (new_canvas / set_canvas / get_canvas), stencil/depth
+//   render state (set_stencil_mode / set_depth_mode), and the SpriteBatch
+//   object type (new_sprite_batch)
 //
 // -- exercising the real batched-draw path (a rectangle goes through the default
-// shader and the streaming vertex buffer). The remaining object types
-// (SpriteBatch, Mesh, ParticleSystem, TextBatch, Video) are still to be exposed;
-// the binding will grow onto the same real Graphics instance.
+// shader and the streaming vertex buffer). The remaining object types (Mesh,
+// ParticleSystem, TextBatch, Video) are still to be exposed; the binding will
+// grow onto the same real Graphics instance.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -57,6 +58,8 @@
 #include "Quad.h"
 #include "Font.h"
 #include "Shader.h"
+#include "SpriteBatch.h"
+#include "vertex.h"
 #include "math/Transform.h"
 #include "math/MathModule.h"
 #include "image/Image.h"
@@ -1471,6 +1474,189 @@ static mrb_value w_get_shader(mrb_state *mrb, mrb_value self)
 }
 
 // =========================================================================
+// Love::SpriteBatch  (batches many quads of a single texture into one draw
+// call). Faithful to wrap_SpriteBatch.cpp; the add_layer/set_layer (array
+// textures) and attach_attribute (custom vertex buffers, needs Mesh) variants
+// are not ported yet.
+// =========================================================================
+
+// Build a standard transform Matrix4 from v[base..base+8] = x,y,r,sx,sy,ox,oy,
+// kx,ky (all optional; sy defaults to sx).
+static Matrix4 standard_transform(mrb_state *mrb, mrb_value *v, int base)
+{
+	float x  = mrbx_optfloat(mrb, v[base + 0], 0.0f);
+	float y  = mrbx_optfloat(mrb, v[base + 1], 0.0f);
+	float r  = mrbx_optfloat(mrb, v[base + 2], 0.0f);
+	float sx = mrbx_optfloat(mrb, v[base + 3], 1.0f);
+	float sy = mrbx_optfloat(mrb, v[base + 4], sx);
+	float ox = mrbx_optfloat(mrb, v[base + 5], 0.0f);
+	float oy = mrbx_optfloat(mrb, v[base + 6], 0.0f);
+	float kx = mrbx_optfloat(mrb, v[base + 7], 0.0f);
+	float ky = mrbx_optfloat(mrb, v[base + 8], 0.0f);
+	return Matrix4(x, y, r, sx, sy, ox, oy, kx, ky);
+}
+
+// add(quad:, x:, y:, r:, sx:, sy:, ox:, oy:, kx:, ky:) -- quad optional;
+// returns the 1-based sprite index.
+static mrb_value w_sb_add(mrb_state *mrb, mrb_value self)
+{
+	SpriteBatch *t = mrbx_checktype<SpriteBatch>(mrb, self);
+	mrb_value v[10];
+	mrbx_get_kwargs(mrb, {"quad", "x", "y", "r", "sx", "sy", "ox", "oy", "kx", "ky"}, 0, v);
+	Matrix4 m = standard_transform(mrb, v, 1);
+	int index = -1;
+	mrbx_catchexcept(mrb, [&]() {
+		if (!mrb_undef_p(v[0]) && !mrb_nil_p(v[0]))
+			index = t->add(mrbx_checktype<Quad>(mrb, v[0]), m);
+		else
+			index = t->add(m);
+	});
+	return mrbx_integer(mrb, index + 1);
+}
+
+// set(index:, quad:, x:, ...) -- overwrite the sprite at the 1-based index.
+static mrb_value w_sb_set(mrb_state *mrb, mrb_value self)
+{
+	SpriteBatch *t = mrbx_checktype<SpriteBatch>(mrb, self);
+	mrb_value v[11];
+	mrbx_get_kwargs(mrb, {"index", "quad", "x", "y", "r", "sx", "sy", "ox", "oy", "kx", "ky"}, 1, v);
+	int index = mrbx_checkint(mrb, v[0]) - 1;
+	Matrix4 m = standard_transform(mrb, v, 2);
+	mrbx_catchexcept(mrb, [&]() {
+		if (!mrb_undef_p(v[1]) && !mrb_nil_p(v[1]))
+			t->add(mrbx_checktype<Quad>(mrb, v[1]), m, index);
+		else
+			t->add(m, index);
+	});
+	return mrb_nil_value();
+}
+
+static mrb_value w_sb_clear(mrb_state *mrb, mrb_value self)
+{
+	mrbx_checktype<SpriteBatch>(mrb, self)->clear();
+	return mrb_nil_value();
+}
+
+static mrb_value w_sb_flush(mrb_state *mrb, mrb_value self)
+{
+	mrbx_checktype<SpriteBatch>(mrb, self)->flush();
+	return mrb_nil_value();
+}
+
+static mrb_value w_sb_set_texture(mrb_state *mrb, mrb_value self)
+{
+	SpriteBatch *t = mrbx_checktype<SpriteBatch>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"texture"}, 1, v);
+	Texture *tex = mrbx_checktype<Texture>(mrb, v[0]);
+	mrbx_catchexcept(mrb, [&]() { t->setTexture(tex); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_sb_get_texture(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_pushtype(mrb, mrbx_checktype<SpriteBatch>(mrb, self)->getTexture());
+}
+
+static mrb_value w_sb_set_color(mrb_state *mrb, mrb_value self)
+{
+	SpriteBatch *t = mrbx_checktype<SpriteBatch>(mrb, self);
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"r", "g", "b", "a"}, 3, v);
+	Colorf c(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]),
+		mrbx_checkfloat(mrb, v[2]), mrbx_optfloat(mrb, v[3], 1.0f));
+	t->setColor(c);
+	return mrb_nil_value();
+}
+
+static mrb_value w_sb_get_color(mrb_state *mrb, mrb_value self)
+{
+	return colorhash(mrb, mrbx_checktype<SpriteBatch>(mrb, self)->getColor());
+}
+
+static mrb_value w_sb_get_count(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, mrbx_checktype<SpriteBatch>(mrb, self)->getCount());
+}
+
+static mrb_value w_sb_get_buffer_size(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, mrbx_checktype<SpriteBatch>(mrb, self)->getBufferSize());
+}
+
+// set_draw_range(start:, count:) -- omit both to reset to the full batch.
+static mrb_value w_sb_set_draw_range(mrb_state *mrb, mrb_value self)
+{
+	SpriteBatch *t = mrbx_checktype<SpriteBatch>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"start", "count"}, 0, v);
+	if (mrb_undef_p(v[0]) && mrb_undef_p(v[1]))
+		t->setDrawRange();
+	else
+	{
+		int start = mrbx_checkint(mrb, v[0]) - 1;
+		int count = mrbx_checkint(mrb, v[1]);
+		mrbx_catchexcept(mrb, [&]() { t->setDrawRange(start, count); });
+	}
+	return mrb_nil_value();
+}
+
+// get_draw_range -> Hash {start:, count:} (1-based start), or nil if unset.
+static mrb_value w_sb_get_draw_range(mrb_state *mrb, mrb_value self)
+{
+	SpriteBatch *t = mrbx_checktype<SpriteBatch>(mrb, self);
+	int start = 0, count = 1;
+	if (!t->getDrawRange(start, count))
+		return mrb_nil_value();
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "start", mrbx_integer(mrb, start + 1));
+	hset(mrb, out, "count", mrbx_integer(mrb, count));
+	return out;
+}
+
+static const MrbReg spriteBatchFunctions[] =
+{
+	{ "add",             w_sb_add,             MRB_ARGS_KEY(10, 0) },
+	{ "set",             w_sb_set,             MRB_ARGS_KEY(11, 0) },
+	{ "clear",           w_sb_clear,           MRB_ARGS_NONE() },
+	{ "flush",           w_sb_flush,           MRB_ARGS_NONE() },
+	{ "set_texture",     w_sb_set_texture,     MRB_ARGS_KEY(1, 0) },
+	{ "get_texture",     w_sb_get_texture,     MRB_ARGS_NONE() },
+	{ "set_color",       w_sb_set_color,       MRB_ARGS_KEY(4, 0) },
+	{ "get_color",       w_sb_get_color,       MRB_ARGS_NONE() },
+	{ "get_count",       w_sb_get_count,       MRB_ARGS_NONE() },
+	{ "get_buffer_size", w_sb_get_buffer_size, MRB_ARGS_NONE() },
+	{ "set_draw_range",  w_sb_set_draw_range,  MRB_ARGS_KEY(2, 0) },
+	{ "get_draw_range",  w_sb_get_draw_range,  MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// new_sprite_batch(texture:, size:, usage:) -- size defaults to 1000, usage to
+// "dynamic" ("static"/"stream" also accepted).
+static mrb_value w_new_sprite_batch(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"texture", "size", "usage"}, 1, v);
+	Texture *tex = mrbx_checktype<Texture>(mrb, v[0]);
+	int size = mrbx_optint(mrb, v[1], 1000);
+	BufferDataUsage usage = BUFFERDATAUSAGE_DYNAMIC;
+	if (!mrb_undef_p(v[2]))
+	{
+		std::string str = mrbx_checkstring(mrb, v[2]);
+		if (!getConstant(str.c_str(), usage))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid usage hint: %s", str.c_str());
+	}
+
+	SpriteBatch *t = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { t = instance()->newSpriteBatch(tex, size, usage); }))
+		return mrb_nil_value();
+	mrb_value res = mrbx_pushtype(mrb, t);
+	t->release();
+	return res;
+}
+
+// =========================================================================
 // Canvas / render targets. new_canvas returns a render-target Texture (modern
 // LÖVE merged Canvas into Texture); set_canvas / get_canvas swap the active
 // render target(s). A single 2D target or an Array of them (MRT) is supported;
@@ -1621,6 +1807,7 @@ static const MrbReg functions[] =
 	{ "new_canvas",           w_new_canvas,           MRB_ARGS_KEY(5, 0) },
 	{ "set_canvas",           w_set_canvas,           MRB_ARGS_KEY(3, 0) },
 	{ "get_canvas",           w_get_canvas,           MRB_ARGS_NONE() },
+	{ "new_sprite_batch",     w_new_sprite_batch,     MRB_ARGS_KEY(3, 0) },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -1649,6 +1836,7 @@ extern "C" void mrb_love_graphics_init(mrb_state *mrb)
 	mrbx_register_type(mrb, Quad::type, quadFunctions);
 	mrbx_register_type(mrb, Font::type, fontFunctions);
 	mrbx_register_type(mrb, Shader::type, shaderFunctions);
+	mrbx_register_type(mrb, SpriteBatch::type, spriteBatchFunctions);
 }
 
 } // graphics
