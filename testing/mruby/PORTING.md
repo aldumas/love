@@ -245,9 +245,17 @@ them changes when we swap.
       (`x:` defaults `y:` to it) / `shear` / `origin`, plus `apply_transform` /
       `replace_transform` (each takes `transform:` a `Love::Transform`) and
       `transform_point` / `inverse_transform_point` (`x:`+`y:` -> Hash {x:, y:}).
-      Still to expose on this same instance: shaders, blend/stencil/scissor
-      state, and the remaining object types (SpriteBatch, Mesh, ParticleSystem,
-      Canvas/render targets, TextBatch, Video).
+      Render state is exposed too: `set_blend_mode` (`mode:`, optional
+      `alpha_mode:`) / `get_blend_mode` (-> Hash {mode:, alpha_mode:}),
+      `set_scissor` (`x:`/`y:`/`width:`/`height:`, all optional -> none disables)
+      / `intersect_scissor` / `get_scissor` (-> Hash or nil), `set_color_mask`
+      (`r:`/`g:`/`b:`/`a:`, each optional, default true) / `get_color_mask`,
+      `set_line_width` / `get_line_width`, `set_line_style` / `get_line_style`,
+      `set_line_join` / `get_line_join`, `set_point_size` / `get_point_size`, and
+      `set_wireframe` / `wireframe?`. Still to expose on this same instance:
+      shaders, stencil/depth state (needs render targets / a stencil buffer), and
+      the remaining object types (SpriteBatch, Mesh, ParticleSystem, Canvas/render
+      targets, TextBatch, Video).
 
       Name collision (font vs graphics): the love.font module and the graphics `Font`
       *type* both map to `Love::Font`. Resolved as for data/thread/joystick --

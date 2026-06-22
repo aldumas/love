@@ -33,14 +33,15 @@
 //   active?, clear, set_color / set_background_color, rectangle, present,
 //   the coordinate-system transform stack (origin / push / pop / translate /
 //   rotate / scale / shear / apply_transform / replace_transform /
-//   transform_point / inverse_transform_point), new_image / new_quad / draw,
-//   and new_font / print / printf
+//   transform_point / inverse_transform_point), render state (blend mode,
+//   scissor, color mask, line width/style/join, point size, wireframe),
+//   new_image / new_quad / draw, and new_font / print / printf
 //
 // -- exercising the real batched-draw path (a rectangle goes through the default
-// shader and the streaming vertex buffer). Shaders, blend/stencil/scissor
-// state, and the remaining object types (SpriteBatch, Mesh, ParticleSystem,
-// Canvas, TextBatch, Video) are still to be exposed; the binding will grow onto
-// the same real Graphics instance.
+// shader and the streaming vertex buffer). Shaders, stencil/depth state, and the
+// remaining object types (SpriteBatch, Mesh, ParticleSystem, Canvas, TextBatch,
+// Video) are still to be exposed; the binding will grow onto the same real
+// Graphics instance.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -331,6 +332,225 @@ static mrb_value w_inverse_transform_point(mrb_state *mrb, mrb_value self)
 	hset(mrb, out, "x", mrbx_number(mrb, p.x));
 	hset(mrb, out, "y", mrbx_number(mrb, p.y));
 	return out;
+}
+
+// =========================================================================
+// Render state. Faithful to wrap_Graphics.cpp; the positional Lua args become
+// keyword args. (Stencil/depth state is deferred -- it depends on render
+// targets / a stencil buffer, which aren't exposed yet.)
+// =========================================================================
+
+// set_blend_mode(mode:[, alpha_mode:]); alpha_mode defaults to "alphamultiply".
+static mrb_value w_set_blend_mode(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"mode", "alpha_mode"}, 1, v);
+
+	std::string modestr = mrbx_checkstring(mrb, v[0]);
+	BlendMode mode;
+	if (!getConstant(modestr.c_str(), mode))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid blend mode: %s", modestr.c_str());
+
+	BlendAlpha alphamode = BLENDALPHA_MULTIPLY;
+	if (!mrb_undef_p(v[1]))
+	{
+		std::string alphastr = mrbx_checkstring(mrb, v[1]);
+		if (!getConstant(alphastr.c_str(), alphamode))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid blend alpha mode: %s", alphastr.c_str());
+	}
+
+	mrbx_catchexcept(mrb, [&]() { instance()->setBlendMode(mode, alphamode); });
+	return mrb_nil_value();
+}
+
+// get_blend_mode -> Hash {mode:, alpha_mode:}.
+static mrb_value w_get_blend_mode(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	BlendAlpha alphamode;
+	BlendMode mode = instance()->getBlendMode(alphamode);
+	const char *modestr = nullptr;
+	const char *alphastr = nullptr;
+	getConstant(mode, modestr);
+	getConstant(alphamode, alphastr);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "mode", mrbx_string(mrb, modestr ? modestr : ""));
+	hset(mrb, out, "alpha_mode", mrbx_string(mrb, alphastr ? alphastr : ""));
+	return out;
+}
+
+// set_scissor(x:, y:, width:, height:) -- all optional; with none given the
+// scissor is disabled. Negative width/height raises.
+static mrb_value w_set_scissor(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"x", "y", "width", "height"}, 0, v);
+
+	if (mrb_undef_p(v[0]) && mrb_undef_p(v[1]) && mrb_undef_p(v[2]) && mrb_undef_p(v[3]))
+	{
+		instance()->setScissor();
+		return mrb_nil_value();
+	}
+
+	Rect rect;
+	rect.x = (int) mrbx_checkint(mrb, v[0]);
+	rect.y = (int) mrbx_checkint(mrb, v[1]);
+	rect.w = (int) mrbx_checkint(mrb, v[2]);
+	rect.h = (int) mrbx_checkint(mrb, v[3]);
+	if (rect.w < 0 || rect.h < 0)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Can't set scissor with negative width and/or height.");
+
+	instance()->setScissor(rect);
+	return mrb_nil_value();
+}
+
+static mrb_value w_intersect_scissor(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"x", "y", "width", "height"}, 4, v);
+	Rect rect;
+	rect.x = (int) mrbx_checkint(mrb, v[0]);
+	rect.y = (int) mrbx_checkint(mrb, v[1]);
+	rect.w = (int) mrbx_checkint(mrb, v[2]);
+	rect.h = (int) mrbx_checkint(mrb, v[3]);
+	if (rect.w < 0 || rect.h < 0)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Can't set scissor with negative width and/or height.");
+
+	instance()->intersectScissor(rect);
+	return mrb_nil_value();
+}
+
+// get_scissor -> Hash {x:, y:, width:, height:}, or nil if no scissor is set.
+static mrb_value w_get_scissor(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	Rect rect;
+	if (!instance()->getScissor(rect))
+		return mrb_nil_value();
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "x", mrbx_integer(mrb, rect.x));
+	hset(mrb, out, "y", mrbx_integer(mrb, rect.y));
+	hset(mrb, out, "width", mrbx_integer(mrb, rect.w));
+	hset(mrb, out, "height", mrbx_integer(mrb, rect.h));
+	return out;
+}
+
+// set_color_mask(r:, g:, b:, a:) -- each optional, defaulting to true (so
+// set_color_mask(r: false) masks only red). With no args, all channels enable.
+static mrb_value w_set_color_mask(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"r", "g", "b", "a"}, 0, v);
+	ColorChannelMask mask;
+	mask.r = mrbx_optboolean(mrb, v[0], true);
+	mask.g = mrbx_optboolean(mrb, v[1], true);
+	mask.b = mrbx_optboolean(mrb, v[2], true);
+	mask.a = mrbx_optboolean(mrb, v[3], true);
+	instance()->setColorMask(mask);
+	return mrb_nil_value();
+}
+
+static mrb_value w_get_color_mask(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	ColorChannelMask mask = instance()->getColorMask();
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "r", mrbx_boolean(mrb, mask.r));
+	hset(mrb, out, "g", mrbx_boolean(mrb, mask.g));
+	hset(mrb, out, "b", mrbx_boolean(mrb, mask.b));
+	hset(mrb, out, "a", mrbx_boolean(mrb, mask.a));
+	return out;
+}
+
+static mrb_value w_set_line_width(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"width"}, 1, v);
+	instance()->setLineWidth(mrbx_checkfloat(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_get_line_width(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	return mrbx_number(mrb, instance()->getLineWidth());
+}
+
+static mrb_value w_set_line_style(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"style"}, 1, v);
+	std::string str = mrbx_checkstring(mrb, v[0]);
+	Graphics::LineStyle style;
+	if (!Graphics::getConstant(str.c_str(), style))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid line style: %s", str.c_str());
+	instance()->setLineStyle(style);
+	return mrb_nil_value();
+}
+
+static mrb_value w_get_line_style(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	const char *str = nullptr;
+	Graphics::getConstant(instance()->getLineStyle(), str);
+	return mrbx_string(mrb, str ? str : "");
+}
+
+static mrb_value w_set_line_join(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"join"}, 1, v);
+	std::string str = mrbx_checkstring(mrb, v[0]);
+	Graphics::LineJoin join;
+	if (!Graphics::getConstant(str.c_str(), join))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid line join: %s", str.c_str());
+	instance()->setLineJoin(join);
+	return mrb_nil_value();
+}
+
+static mrb_value w_get_line_join(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	const char *str = nullptr;
+	Graphics::getConstant(instance()->getLineJoin(), str);
+	return mrbx_string(mrb, str ? str : "");
+}
+
+static mrb_value w_set_point_size(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"size"}, 1, v);
+	instance()->setPointSize(mrbx_checkfloat(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_get_point_size(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	return mrbx_number(mrb, instance()->getPointSize());
+}
+
+static mrb_value w_set_wireframe(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"enable"}, 1, v);
+	instance()->setWireframe(mrbx_checkboolean(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_is_wireframe(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	return mrbx_boolean(mrb, instance()->isWireframe());
 }
 
 // =========================================================================
@@ -890,6 +1110,23 @@ static const MrbReg functions[] =
 	{ "replace_transform",    w_replace_transform,    MRB_ARGS_KEY(1, 0) },
 	{ "transform_point",      w_transform_point,      MRB_ARGS_KEY(2, 0) },
 	{ "inverse_transform_point", w_inverse_transform_point, MRB_ARGS_KEY(2, 0) },
+	{ "set_blend_mode",       w_set_blend_mode,       MRB_ARGS_KEY(2, 0) },
+	{ "get_blend_mode",       w_get_blend_mode,       MRB_ARGS_NONE() },
+	{ "set_scissor",          w_set_scissor,          MRB_ARGS_KEY(4, 0) },
+	{ "intersect_scissor",    w_intersect_scissor,    MRB_ARGS_KEY(4, 0) },
+	{ "get_scissor",          w_get_scissor,          MRB_ARGS_NONE() },
+	{ "set_color_mask",       w_set_color_mask,       MRB_ARGS_KEY(4, 0) },
+	{ "get_color_mask",       w_get_color_mask,       MRB_ARGS_NONE() },
+	{ "set_line_width",       w_set_line_width,       MRB_ARGS_KEY(1, 0) },
+	{ "get_line_width",       w_get_line_width,       MRB_ARGS_NONE() },
+	{ "set_line_style",       w_set_line_style,       MRB_ARGS_KEY(1, 0) },
+	{ "get_line_style",       w_get_line_style,       MRB_ARGS_NONE() },
+	{ "set_line_join",        w_set_line_join,        MRB_ARGS_KEY(1, 0) },
+	{ "get_line_join",        w_get_line_join,        MRB_ARGS_NONE() },
+	{ "set_point_size",       w_set_point_size,       MRB_ARGS_KEY(1, 0) },
+	{ "get_point_size",       w_get_point_size,       MRB_ARGS_NONE() },
+	{ "set_wireframe",        w_set_wireframe,        MRB_ARGS_KEY(1, 0) },
+	{ "wireframe?",           w_is_wireframe,         MRB_ARGS_NONE() },
 	{ "present",              w_present,              MRB_ARGS_NONE() },
 	{ "get_width",            w_get_width,            MRB_ARGS_NONE() },
 	{ "get_height",           w_get_height,           MRB_ARGS_NONE() },
