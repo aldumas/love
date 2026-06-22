@@ -16,7 +16,7 @@ arguments**.
 | Ported module: filesystem (functions + File, FileData; real physfs backend) | `src/modules/filesystem/wrap_Filesystem_mrb.cpp` |
 | Ported module: event (queue + full SDL event translation: kbd/mouse/touch/joystick/gamepad/sensor/window/drop) | `src/modules/event/wrap_Event_mrb.cpp` |
 | Ported module: window (real `window::sdl::Window` backend; creates the GL context, drives the graphics backbuffer) | `src/modules/window/wrap_Window_mrb.cpp` |
-| Ported module: graphics (real shader-based batched renderer, OpenGL backend; clear/color/rectangle/origin/present + new_image/new_quad/draw + new_font/print/printf; Texture, Quad & Font object types) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
+| Ported module: graphics (real shader-based batched renderer, OpenGL backend; clear/color/rectangle/present + transform stack (origin/push/pop/translate/rotate/scale/shear/apply_transform/transform_point) + new_image/new_quad/draw + new_font/print/printf; Texture, Quad & Font object types) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
 | Ported module: keyboard (real keyboard::sdl::Keyboard backend; canonical key/scancode enum names) | `src/modules/keyboard/wrap_Keyboard_mrb.cpp` |
 | Ported module: mouse (lean SDL state queries; cursor objects deferred) | `src/modules/mouse/wrap_Mouse_mrb.cpp` |
 | Ported module: system (OS/CPU/memory/clipboard/power/locale; real SDL backend) | `src/modules/system/wrap_System_mrb.cpp` |
@@ -206,7 +206,10 @@ narrative overview.
    `window/sdl/Window.cpp` (the pixel/window size ratio plus SDL's display scale,
    honored only when the window set `use_dpi_scale`).
    The graphics API slice currently exposes `clear` / `set_color` /
-   `set_background_color` / `rectangle` / `origin` / `present` / dimensions plus
+   `set_background_color` / `rectangle` / `present` / dimensions, the full
+   coordinate-system transform stack (`origin` / `push` / `pop` / `translate` /
+   `rotate` / `scale` / `shear` / `apply_transform` / `replace_transform` /
+   `transform_point` / `inverse_transform_point`), plus
    `new_image` / `new_quad` / `draw`, `new_font` / `set_font` / `get_font` /
    `print` / `printf`, and the `Love::Texture`, `Love::Quad`, and `Love::Font`
    object types (Texture is-a Drawable, with dimensions + `set_filter`; `draw`
@@ -216,9 +219,9 @@ narrative overview.
    streaming vertex buffer). Note `Love::Font` is shared between the love.font
    module (class methods) and the graphics Font type (instances), resolving the
    module-name vs type-name collision the same way data/thread/joystick do.
-   Still to expose on the same real instance: shaders, transforms beyond
-   `origin`, blend/stencil/scissor state, and the remaining object types
-   (SpriteBatch, Mesh, ParticleSystem, Canvas, TextBatch, Video).
+   Still to expose on the same real instance: shaders, blend/stencil/scissor
+   state, and the remaining object types (SpriteBatch, Mesh, ParticleSystem,
+   Canvas, TextBatch, Video).
    `HarnessKeyboard` is likewise a plain `love::Module` that resolves key and
    scancode names through SDL's own name lookups (`SDL_GetKeyFromName` etc.)
    rather than the 621-line `Keyboard.h` enum tables -- symmetric with the lean

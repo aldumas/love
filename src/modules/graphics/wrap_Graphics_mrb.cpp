@@ -28,14 +28,18 @@
 // M_GRAPHICS and calls setMode()/backbufferChanged() on it -- so graphics and
 // window are coupled and come up together.
 //
-// The Ruby-facing API is still a thin first slice over the real backend --
+// The Ruby-facing API is a growing slice over the real backend --
 //
-//   active?, clear, set_color / set_background_color, rectangle, origin, present
+//   active?, clear, set_color / set_background_color, rectangle, present,
+//   the coordinate-system transform stack (origin / push / pop / translate /
+//   rotate / scale / shear / apply_transform / replace_transform /
+//   transform_point / inverse_transform_point), new_image / new_quad / draw,
+//   and new_font / print / printf
 //
 // -- exercising the real batched-draw path (a rectangle goes through the default
-// shader and the streaming vertex buffer). Textures, shaders, transforms beyond
-// origin, blend/stencil state, fonts, and the object types (Image, Quad,
-// SpriteBatch, Mesh, ...) are still to be exposed; the binding will grow onto
+// shader and the streaming vertex buffer). Shaders, blend/stencil/scissor
+// state, and the remaining object types (SpriteBatch, Mesh, ParticleSystem,
+// Canvas, TextBatch, Video) are still to be exposed; the binding will grow onto
 // the same real Graphics instance.
 
 #include "common/config.h"
@@ -49,6 +53,7 @@
 #include "Texture.h"
 #include "Quad.h"
 #include "Font.h"
+#include "math/Transform.h"
 #include "image/Image.h"
 #include "image/ImageData.h"
 #include "image/CompressedImageData.h"
@@ -202,6 +207,130 @@ static mrb_value w_get_dimensions(mrb_state *mrb, mrb_value self)
 static void hset(mrb_state *mrb, mrb_value h, const char *key, mrb_value val)
 {
 	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, key)), val);
+}
+
+// =========================================================================
+// Coordinate-system transform stack. Faithful to wrap_Graphics.cpp; the
+// positional Lua args become keyword args.
+// =========================================================================
+
+// push(type:) optional ("transform" default, or "all"); push(transform:) also
+// applies a Love::Transform after the push (mirrors w_push's optional 2nd arg).
+static mrb_value w_push(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"type", "transform"}, 0, v);
+
+	Graphics::StackType stype = Graphics::STACK_TRANSFORM;
+	if (!mrb_undef_p(v[0]))
+	{
+		std::string sname = mrbx_checkstring(mrb, v[0]);
+		if (!Graphics::getConstant(sname.c_str(), stype))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid graphics stack type: %s", sname.c_str());
+	}
+
+	mrbx_catchexcept(mrb, [&]() { instance()->push(stype); });
+
+	if (!mrb_undef_p(v[1]))
+	{
+		math::Transform *t = mrbx_checktype<math::Transform>(mrb, v[1]);
+		mrbx_catchexcept(mrb, [&]() { instance()->applyTransform(t->getMatrix()); });
+	}
+	return mrb_nil_value();
+}
+
+static mrb_value w_pop(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrbx_catchexcept(mrb, [&]() { instance()->pop(); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_translate(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 2, v);
+	instance()->translate(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_rotate(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"angle"}, 1, v);
+	instance()->rotate(mrbx_checkfloat(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+// scale(x:) defaults y to x; scale(x:, y:) sets both. Both default to 1.0.
+static mrb_value w_scale(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 0, v);
+	float sx = mrbx_optfloat(mrb, v[0], 1.0f);
+	float sy = mrbx_optfloat(mrb, v[1], sx);
+	instance()->scale(sx, sy);
+	return mrb_nil_value();
+}
+
+static mrb_value w_shear(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"kx", "ky"}, 2, v);
+	instance()->shear(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_apply_transform(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"transform"}, 1, v);
+	math::Transform *t = mrbx_checktype<math::Transform>(mrb, v[0]);
+	mrbx_catchexcept(mrb, [&]() { instance()->applyTransform(t->getMatrix()); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_replace_transform(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"transform"}, 1, v);
+	math::Transform *t = mrbx_checktype<math::Transform>(mrb, v[0]);
+	mrbx_catchexcept(mrb, [&]() { instance()->replaceTransform(t->getMatrix()); });
+	return mrb_nil_value();
+}
+
+// transform_point(x:, y:) -> Hash {x:, y:} (Lua returned two numbers).
+static mrb_value w_transform_point(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 2, v);
+	Vector2 p(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]));
+	p = instance()->transformPoint(p);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "x", mrbx_number(mrb, p.x));
+	hset(mrb, out, "y", mrbx_number(mrb, p.y));
+	return out;
+}
+
+static mrb_value w_inverse_transform_point(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 2, v);
+	Vector2 p(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]));
+	p = instance()->inverseTransformPoint(p);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "x", mrbx_number(mrb, p.x));
+	hset(mrb, out, "y", mrbx_number(mrb, p.y));
+	return out;
 }
 
 // =========================================================================
@@ -751,6 +880,16 @@ static const MrbReg functions[] =
 	{ "get_background_color", w_get_background_color, MRB_ARGS_NONE() },
 	{ "rectangle",            w_rectangle,            MRB_ARGS_KEY(5, 0) },
 	{ "origin",               w_origin,               MRB_ARGS_NONE() },
+	{ "push",                 w_push,                 MRB_ARGS_KEY(2, 0) },
+	{ "pop",                  w_pop,                  MRB_ARGS_NONE() },
+	{ "translate",            w_translate,            MRB_ARGS_KEY(2, 0) },
+	{ "rotate",               w_rotate,               MRB_ARGS_KEY(1, 0) },
+	{ "scale",                w_scale,                MRB_ARGS_KEY(2, 0) },
+	{ "shear",                w_shear,                MRB_ARGS_KEY(2, 0) },
+	{ "apply_transform",      w_apply_transform,      MRB_ARGS_KEY(1, 0) },
+	{ "replace_transform",    w_replace_transform,    MRB_ARGS_KEY(1, 0) },
+	{ "transform_point",      w_transform_point,      MRB_ARGS_KEY(2, 0) },
+	{ "inverse_transform_point", w_inverse_transform_point, MRB_ARGS_KEY(2, 0) },
 	{ "present",              w_present,              MRB_ARGS_NONE() },
 	{ "get_width",            w_get_width,            MRB_ARGS_NONE() },
 	{ "get_height",           w_get_height,           MRB_ARGS_NONE() },

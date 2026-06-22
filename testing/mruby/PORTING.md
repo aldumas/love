@@ -239,9 +239,14 @@ them changes when we swap.
       ascent/descent/baseline/line_height/has_glyphs/get_wrap), plus `draw`
       (Drawable or Texture+Quad), `set_font`/`get_font`, and `print`/`printf`
       (the full x/y/r/sx/sy/ox/oy/kx/ky transform; printf adds wrap limit +
-      align). Still to expose on this same instance: shaders, transforms beyond
-      `origin` (push/pop/translate/rotate/scale), blend/stencil/scissor state,
-      and the remaining object types (SpriteBatch, Mesh, ParticleSystem,
+      align). The full coordinate-system transform stack is exposed too:
+      `push` (optional `type:` `"transform"`/`"all"` and optional `transform:` a
+      `Love::Transform`) / `pop` / `translate` / `rotate` (`angle:`) / `scale`
+      (`x:` defaults `y:` to it) / `shear` / `origin`, plus `apply_transform` /
+      `replace_transform` (each takes `transform:` a `Love::Transform`) and
+      `transform_point` / `inverse_transform_point` (`x:`+`y:` -> Hash {x:, y:}).
+      Still to expose on this same instance: shaders, blend/stencil/scissor
+      state, and the remaining object types (SpriteBatch, Mesh, ParticleSystem,
       Canvas/render targets, TextBatch, Video).
 
       Name collision (font vs graphics): the love.font module and the graphics `Font`
