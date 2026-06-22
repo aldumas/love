@@ -39,12 +39,13 @@
 //   (new_shader / set_shader / get_shader + the Shader type), canvas /
 //   render targets (new_canvas / set_canvas / get_canvas), stencil/depth
 //   render state (set_stencil_mode / set_depth_mode), and the SpriteBatch
-//   and TextBatch object types (new_sprite_batch / new_text_batch)
+//   TextBatch, and ParticleSystem object types (new_sprite_batch /
+//   new_text_batch / new_particle_system)
 //
 // -- exercising the real batched-draw path (a rectangle goes through the default
 // shader and the streaming vertex buffer). The remaining object types (Mesh,
-// ParticleSystem, Video) are still to be exposed; the binding will grow onto the
-// same real Graphics instance.
+// Video) are still to be exposed; the binding will grow onto the same real
+// Graphics instance.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -60,6 +61,7 @@
 #include "Shader.h"
 #include "SpriteBatch.h"
 #include "TextBatch.h"
+#include "ParticleSystem.h"
 #include "vertex.h"
 #include "math/Transform.h"
 #include "math/MathModule.h"
@@ -1825,6 +1827,604 @@ static mrb_value w_new_text_batch(mrb_state *mrb, mrb_value self)
 }
 
 // =========================================================================
+// Love::ParticleSystem  (a CPU particle emitter). Faithful to
+// wrap_ParticleSystem.cpp; multi-value setters/getters use min/max (or
+// component) keyword args and Hash returns. clone is not ported (needs the
+// object identity map).
+// =========================================================================
+
+#define PS (mrbx_checktype<ParticleSystem>(mrb, self))
+
+static mrb_value w_ps_set_texture(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"texture"}, 1, v);
+	PS->setTexture(mrbx_checktype<Texture>(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_texture(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_pushtype(mrb, PS->getTexture());
+}
+
+static mrb_value w_ps_set_buffer_size(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"size"}, 1, v);
+	mrbx_catchexcept(mrb, [&]() { PS->setBufferSize((uint32) mrbx_checkint(mrb, v[0])); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_buffer_size(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, (int) PS->getBufferSize());
+}
+
+static mrb_value w_ps_set_insert_mode(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"mode"}, 1, v);
+	std::string str = mrbx_checkstring(mrb, v[0]);
+	ParticleSystem::InsertMode mode;
+	if (!ParticleSystem::getConstant(str.c_str(), mode))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid insert mode: %s", str.c_str());
+	PS->setInsertMode(mode);
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_insert_mode(mrb_state *mrb, mrb_value self)
+{
+	const char *str = nullptr;
+	ParticleSystem::getConstant(PS->getInsertMode(), str);
+	return mrbx_string(mrb, str ? str : "");
+}
+
+static mrb_value w_ps_set_emission_rate(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"rate"}, 1, v);
+	mrbx_catchexcept(mrb, [&]() { PS->setEmissionRate(mrbx_checkfloat(mrb, v[0])); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_emission_rate(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_number(mrb, PS->getEmissionRate());
+}
+
+static mrb_value w_ps_set_emitter_lifetime(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"life"}, 1, v);
+	PS->setEmitterLifetime(mrbx_checkfloat(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_emitter_lifetime(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_number(mrb, PS->getEmitterLifetime());
+}
+
+// set_particle_lifetime(min:, max:) -- max defaults to min.
+static mrb_value w_ps_set_particle_lifetime(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"min", "max"}, 1, v);
+	float min = mrbx_checkfloat(mrb, v[0]);
+	PS->setParticleLifetime(min, mrbx_optfloat(mrb, v[1], min));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_particle_lifetime(mrb_state *mrb, mrb_value self)
+{
+	float min = 0, max = 0;
+	PS->getParticleLifetime(min, max);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "min", mrbx_number(mrb, min));
+	hset(mrb, out, "max", mrbx_number(mrb, max));
+	return out;
+}
+
+static mrb_value w_ps_set_position(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 2, v);
+	PS->setPosition(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_position(mrb_state *mrb, mrb_value self)
+{
+	const Vector2 &p = PS->getPosition();
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "x", mrbx_number(mrb, p.x));
+	hset(mrb, out, "y", mrbx_number(mrb, p.y));
+	return out;
+}
+
+static mrb_value w_ps_move_to(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 2, v);
+	PS->moveTo(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]));
+	return mrb_nil_value();
+}
+
+// set_emission_area(distribution:, x:, y:, angle:, direction_relative:)
+static mrb_value w_ps_set_emission_area(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[5];
+	mrbx_get_kwargs(mrb, {"distribution", "x", "y", "angle", "direction_relative"}, 1, v);
+	std::string str = mrbx_checkstring(mrb, v[0]);
+	ParticleSystem::AreaSpreadDistribution dist;
+	if (!ParticleSystem::getConstant(str.c_str(), dist))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid particle distribution: %s", str.c_str());
+
+	float x = 0, y = 0, angle = 0;
+	bool dirrel = false;
+	if (dist != ParticleSystem::DISTRIBUTION_NONE)
+	{
+		x = mrbx_checkfloat(mrb, v[1]);
+		y = mrbx_checkfloat(mrb, v[2]);
+		angle = mrbx_optfloat(mrb, v[3], 0.0f);
+		dirrel = mrbx_optboolean(mrb, v[4], false);
+	}
+	PS->setEmissionArea(dist, x, y, angle, dirrel);
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_emission_area(mrb_state *mrb, mrb_value self)
+{
+	Vector2 params;
+	float angle = 0;
+	bool dirrel = false;
+	ParticleSystem::AreaSpreadDistribution dist = PS->getEmissionArea(params, angle, dirrel);
+	const char *str = nullptr;
+	ParticleSystem::getConstant(dist, str);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "distribution", mrbx_string(mrb, str ? str : ""));
+	hset(mrb, out, "x", mrbx_number(mrb, params.x));
+	hset(mrb, out, "y", mrbx_number(mrb, params.y));
+	hset(mrb, out, "angle", mrbx_number(mrb, angle));
+	hset(mrb, out, "direction_relative", mrbx_boolean(mrb, dirrel));
+	return out;
+}
+
+static mrb_value w_ps_set_direction(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"direction"}, 1, v);
+	PS->setDirection(mrbx_checkfloat(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_direction(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_number(mrb, PS->getDirection());
+}
+
+static mrb_value w_ps_set_spread(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"spread"}, 1, v);
+	PS->setSpread(mrbx_checkfloat(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_spread(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_number(mrb, PS->getSpread());
+}
+
+// set_speed(min:, max:) -- max defaults to min.
+static mrb_value w_ps_set_speed(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"min", "max"}, 1, v);
+	float min = mrbx_checkfloat(mrb, v[0]);
+	PS->setSpeed(min, mrbx_optfloat(mrb, v[1], min));
+	return mrb_nil_value();
+}
+
+static mrb_value minmax_hash(mrb_state *mrb, float min, float max)
+{
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "min", mrbx_number(mrb, min));
+	hset(mrb, out, "max", mrbx_number(mrb, max));
+	return out;
+}
+
+static mrb_value w_ps_get_speed(mrb_state *mrb, mrb_value self)
+{
+	float min = 0, max = 0;
+	PS->getSpeed(min, max);
+	return minmax_hash(mrb, min, max);
+}
+
+// set_linear_acceleration(xmin:, ymin:, xmax:, ymax:) -- max defaults to min.
+static mrb_value w_ps_set_linear_acceleration(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"xmin", "ymin", "xmax", "ymax"}, 2, v);
+	float xmin = mrbx_checkfloat(mrb, v[0]);
+	float ymin = mrbx_checkfloat(mrb, v[1]);
+	PS->setLinearAcceleration(xmin, ymin, mrbx_optfloat(mrb, v[2], xmin), mrbx_optfloat(mrb, v[3], ymin));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_linear_acceleration(mrb_state *mrb, mrb_value self)
+{
+	Vector2 min, max;
+	PS->getLinearAcceleration(min, max);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "xmin", mrbx_number(mrb, min.x));
+	hset(mrb, out, "ymin", mrbx_number(mrb, min.y));
+	hset(mrb, out, "xmax", mrbx_number(mrb, max.x));
+	hset(mrb, out, "ymax", mrbx_number(mrb, max.y));
+	return out;
+}
+
+static mrb_value w_ps_set_radial_acceleration(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"min", "max"}, 1, v);
+	float min = mrbx_checkfloat(mrb, v[0]);
+	PS->setRadialAcceleration(min, mrbx_optfloat(mrb, v[1], min));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_radial_acceleration(mrb_state *mrb, mrb_value self)
+{
+	float min = 0, max = 0;
+	PS->getRadialAcceleration(min, max);
+	return minmax_hash(mrb, min, max);
+}
+
+static mrb_value w_ps_set_tangential_acceleration(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"min", "max"}, 1, v);
+	float min = mrbx_checkfloat(mrb, v[0]);
+	PS->setTangentialAcceleration(min, mrbx_optfloat(mrb, v[1], min));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_tangential_acceleration(mrb_state *mrb, mrb_value self)
+{
+	float min = 0, max = 0;
+	PS->getTangentialAcceleration(min, max);
+	return minmax_hash(mrb, min, max);
+}
+
+static mrb_value w_ps_set_linear_damping(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"min", "max"}, 1, v);
+	float min = mrbx_checkfloat(mrb, v[0]);
+	PS->setLinearDamping(min, mrbx_optfloat(mrb, v[1], min));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_linear_damping(mrb_state *mrb, mrb_value self)
+{
+	float min = 0, max = 0;
+	PS->getLinearDamping(min, max);
+	return minmax_hash(mrb, min, max);
+}
+
+// set_sizes(sizes:) -- an Array of up to 8 floats (or a single number).
+static mrb_value w_ps_set_sizes(mrb_state *mrb, mrb_value self)
+{
+	ParticleSystem *t = PS;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"sizes"}, 1, v);
+	if (mrb_array_p(v[0]))
+	{
+		std::vector<float> sizes;
+		mrb_int n = RARRAY_LEN(v[0]);
+		for (mrb_int i = 0; i < n; i++)
+			sizes.push_back(mrbx_checkfloat(mrb, mrb_ary_ref(mrb, v[0], i)));
+		if (sizes.size() == 1)
+			t->setSize(sizes[0]);
+		else
+			t->setSizes(sizes);
+	}
+	else
+		t->setSize(mrbx_checkfloat(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_sizes(mrb_state *mrb, mrb_value self)
+{
+	const std::vector<float> &sizes = PS->getSizes();
+	mrb_value arr = mrb_ary_new_capa(mrb, (mrb_int) sizes.size());
+	for (float s : sizes)
+		mrb_ary_push(mrb, arr, mrbx_number(mrb, s));
+	return arr;
+}
+
+static mrb_value w_ps_set_size_variation(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"variation"}, 1, v);
+	float var = mrbx_checkfloat(mrb, v[0]);
+	if (var < 0.0f || var > 1.0f)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Size variation must be between 0 and 1.");
+	PS->setSizeVariation(var);
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_size_variation(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_number(mrb, PS->getSizeVariation());
+}
+
+// set_rotation(min:, max:) -- max defaults to min.
+static mrb_value w_ps_set_rotation(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"min", "max"}, 1, v);
+	float min = mrbx_checkfloat(mrb, v[0]);
+	PS->setRotation(min, mrbx_optfloat(mrb, v[1], min));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_rotation(mrb_state *mrb, mrb_value self)
+{
+	float min = 0, max = 0;
+	PS->getRotation(min, max);
+	return minmax_hash(mrb, min, max);
+}
+
+// set_spin(start:, end:) -- end defaults to start.
+static mrb_value w_ps_set_spin(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"start", "end"}, 1, v);
+	float start = mrbx_checkfloat(mrb, v[0]);
+	PS->setSpin(start, mrbx_optfloat(mrb, v[1], start));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_spin(mrb_state *mrb, mrb_value self)
+{
+	float start = 0, end = 0;
+	PS->getSpin(start, end);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "start", mrbx_number(mrb, start));
+	hset(mrb, out, "end", mrbx_number(mrb, end));
+	return out;
+}
+
+static mrb_value w_ps_set_spin_variation(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"variation"}, 1, v);
+	PS->setSpinVariation(mrbx_checkfloat(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_spin_variation(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_number(mrb, PS->getSpinVariation());
+}
+
+static mrb_value w_ps_set_offset(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"x", "y"}, 2, v);
+	PS->setOffset(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_offset(mrb_state *mrb, mrb_value self)
+{
+	Vector2 o = PS->getOffset();
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "x", mrbx_number(mrb, o.x));
+	hset(mrb, out, "y", mrbx_number(mrb, o.y));
+	return out;
+}
+
+// set_colors(colors:) -- an Array of [r,g,b,a] arrays (up to 8).
+static mrb_value w_ps_set_colors(mrb_state *mrb, mrb_value self)
+{
+	ParticleSystem *t = PS;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"colors"}, 1, v);
+	if (!mrb_array_p(v[0]))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "colors: must be an Array of [r,g,b,a] arrays.");
+	mrb_int n = RARRAY_LEN(v[0]);
+	std::vector<Colorf> colors;
+	for (mrb_int i = 0; i < n; i++)
+	{
+		mrb_value c = mrb_ary_ref(mrb, v[0], i);
+		colors.emplace_back(
+			mrbx_checkfloat(mrb, mrb_ary_ref(mrb, c, 0)),
+			mrbx_checkfloat(mrb, mrb_ary_ref(mrb, c, 1)),
+			mrbx_checkfloat(mrb, mrb_ary_ref(mrb, c, 2)),
+			mrb_undef_p(mrb_ary_ref(mrb, c, 3)) ? 1.0f : mrbx_checkfloat(mrb, mrb_ary_ref(mrb, c, 3)));
+	}
+	t->setColor(colors);
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_colors(mrb_state *mrb, mrb_value self)
+{
+	const std::vector<Colorf> &colors = PS->getColor();
+	mrb_value arr = mrb_ary_new_capa(mrb, (mrb_int) colors.size());
+	for (const Colorf &c : colors)
+	{
+		mrb_value one = mrb_ary_new_capa(mrb, 4);
+		mrb_ary_push(mrb, one, mrbx_number(mrb, c.r));
+		mrb_ary_push(mrb, one, mrbx_number(mrb, c.g));
+		mrb_ary_push(mrb, one, mrbx_number(mrb, c.b));
+		mrb_ary_push(mrb, one, mrbx_number(mrb, c.a));
+		mrb_ary_push(mrb, arr, one);
+	}
+	return arr;
+}
+
+// set_quads(quads:) -- an Array of Love::Quad (empty/omitted clears).
+static mrb_value w_ps_set_quads(mrb_state *mrb, mrb_value self)
+{
+	ParticleSystem *t = PS;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"quads"}, 0, v);
+	std::vector<Quad *> quads;
+	if (!mrb_undef_p(v[0]) && mrb_array_p(v[0]))
+	{
+		mrb_int n = RARRAY_LEN(v[0]);
+		for (mrb_int i = 0; i < n; i++)
+			quads.push_back(mrbx_checktype<Quad>(mrb, mrb_ary_ref(mrb, v[0], i)));
+	}
+	t->setQuads(quads);
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_get_quads(mrb_state *mrb, mrb_value self)
+{
+	const std::vector<Quad *> &quads = PS->getQuads();
+	mrb_value arr = mrb_ary_new_capa(mrb, (mrb_int) quads.size());
+	for (Quad *q : quads)
+		mrb_ary_push(mrb, arr, mrbx_pushtype(mrb, q));
+	return arr;
+}
+
+static mrb_value w_ps_set_relative_rotation(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"enable"}, 1, v);
+	PS->setRelativeRotation(mrbx_checkboolean(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_has_relative_rotation(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, PS->hasRelativeRotation());
+}
+
+static mrb_value w_ps_get_count(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, PS->getCount());
+}
+
+static mrb_value w_ps_start(mrb_state *mrb, mrb_value self)  { PS->start(); return mrb_nil_value(); }
+static mrb_value w_ps_stop(mrb_state *mrb, mrb_value self)   { PS->stop();  return mrb_nil_value(); }
+static mrb_value w_ps_pause(mrb_state *mrb, mrb_value self)  { PS->pause(); return mrb_nil_value(); }
+static mrb_value w_ps_reset(mrb_state *mrb, mrb_value self)  { PS->reset(); return mrb_nil_value(); }
+
+static mrb_value w_ps_emit(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"count"}, 1, v);
+	PS->emit(mrbx_checkint(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_update(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"dt"}, 1, v);
+	PS->update(mrbx_checkfloat(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_ps_is_active(mrb_state *mrb, mrb_value self)  { return mrbx_boolean(mrb, PS->isActive()); }
+static mrb_value w_ps_is_paused(mrb_state *mrb, mrb_value self)  { return mrbx_boolean(mrb, PS->isPaused()); }
+static mrb_value w_ps_is_stopped(mrb_state *mrb, mrb_value self) { return mrbx_boolean(mrb, PS->isStopped()); }
+static mrb_value w_ps_is_empty(mrb_state *mrb, mrb_value self)   { return mrbx_boolean(mrb, PS->isEmpty()); }
+static mrb_value w_ps_is_full(mrb_state *mrb, mrb_value self)    { return mrbx_boolean(mrb, PS->isFull()); }
+
+#undef PS
+
+static const MrbReg particleSystemFunctions[] =
+{
+	{ "set_texture",                 w_ps_set_texture,                 MRB_ARGS_KEY(1, 0) },
+	{ "get_texture",                 w_ps_get_texture,                 MRB_ARGS_NONE() },
+	{ "set_buffer_size",             w_ps_set_buffer_size,             MRB_ARGS_KEY(1, 0) },
+	{ "get_buffer_size",             w_ps_get_buffer_size,             MRB_ARGS_NONE() },
+	{ "set_insert_mode",             w_ps_set_insert_mode,             MRB_ARGS_KEY(1, 0) },
+	{ "get_insert_mode",             w_ps_get_insert_mode,             MRB_ARGS_NONE() },
+	{ "set_emission_rate",           w_ps_set_emission_rate,           MRB_ARGS_KEY(1, 0) },
+	{ "get_emission_rate",           w_ps_get_emission_rate,           MRB_ARGS_NONE() },
+	{ "set_emitter_lifetime",        w_ps_set_emitter_lifetime,        MRB_ARGS_KEY(1, 0) },
+	{ "get_emitter_lifetime",        w_ps_get_emitter_lifetime,        MRB_ARGS_NONE() },
+	{ "set_particle_lifetime",       w_ps_set_particle_lifetime,       MRB_ARGS_KEY(2, 0) },
+	{ "get_particle_lifetime",       w_ps_get_particle_lifetime,       MRB_ARGS_NONE() },
+	{ "set_position",                w_ps_set_position,                MRB_ARGS_KEY(2, 0) },
+	{ "get_position",                w_ps_get_position,                MRB_ARGS_NONE() },
+	{ "move_to",                     w_ps_move_to,                     MRB_ARGS_KEY(2, 0) },
+	{ "set_emission_area",           w_ps_set_emission_area,           MRB_ARGS_KEY(5, 0) },
+	{ "get_emission_area",           w_ps_get_emission_area,           MRB_ARGS_NONE() },
+	{ "set_direction",               w_ps_set_direction,               MRB_ARGS_KEY(1, 0) },
+	{ "get_direction",               w_ps_get_direction,               MRB_ARGS_NONE() },
+	{ "set_spread",                  w_ps_set_spread,                  MRB_ARGS_KEY(1, 0) },
+	{ "get_spread",                  w_ps_get_spread,                  MRB_ARGS_NONE() },
+	{ "set_speed",                   w_ps_set_speed,                   MRB_ARGS_KEY(2, 0) },
+	{ "get_speed",                   w_ps_get_speed,                   MRB_ARGS_NONE() },
+	{ "set_linear_acceleration",     w_ps_set_linear_acceleration,     MRB_ARGS_KEY(4, 0) },
+	{ "get_linear_acceleration",     w_ps_get_linear_acceleration,     MRB_ARGS_NONE() },
+	{ "set_radial_acceleration",     w_ps_set_radial_acceleration,     MRB_ARGS_KEY(2, 0) },
+	{ "get_radial_acceleration",     w_ps_get_radial_acceleration,     MRB_ARGS_NONE() },
+	{ "set_tangential_acceleration", w_ps_set_tangential_acceleration, MRB_ARGS_KEY(2, 0) },
+	{ "get_tangential_acceleration", w_ps_get_tangential_acceleration, MRB_ARGS_NONE() },
+	{ "set_linear_damping",          w_ps_set_linear_damping,          MRB_ARGS_KEY(2, 0) },
+	{ "get_linear_damping",          w_ps_get_linear_damping,          MRB_ARGS_NONE() },
+	{ "set_sizes",                   w_ps_set_sizes,                   MRB_ARGS_KEY(1, 0) },
+	{ "get_sizes",                   w_ps_get_sizes,                   MRB_ARGS_NONE() },
+	{ "set_size_variation",          w_ps_set_size_variation,          MRB_ARGS_KEY(1, 0) },
+	{ "get_size_variation",          w_ps_get_size_variation,          MRB_ARGS_NONE() },
+	{ "set_rotation",                w_ps_set_rotation,                MRB_ARGS_KEY(2, 0) },
+	{ "get_rotation",                w_ps_get_rotation,                MRB_ARGS_NONE() },
+	{ "set_spin",                    w_ps_set_spin,                    MRB_ARGS_KEY(2, 0) },
+	{ "get_spin",                    w_ps_get_spin,                    MRB_ARGS_NONE() },
+	{ "set_spin_variation",          w_ps_set_spin_variation,          MRB_ARGS_KEY(1, 0) },
+	{ "get_spin_variation",          w_ps_get_spin_variation,          MRB_ARGS_NONE() },
+	{ "set_offset",                  w_ps_set_offset,                  MRB_ARGS_KEY(2, 0) },
+	{ "get_offset",                  w_ps_get_offset,                  MRB_ARGS_NONE() },
+	{ "set_colors",                  w_ps_set_colors,                  MRB_ARGS_KEY(1, 0) },
+	{ "get_colors",                  w_ps_get_colors,                  MRB_ARGS_NONE() },
+	{ "set_quads",                   w_ps_set_quads,                   MRB_ARGS_KEY(1, 0) },
+	{ "get_quads",                   w_ps_get_quads,                   MRB_ARGS_NONE() },
+	{ "set_relative_rotation",       w_ps_set_relative_rotation,       MRB_ARGS_KEY(1, 0) },
+	{ "relative_rotation?",          w_ps_has_relative_rotation,       MRB_ARGS_NONE() },
+	{ "get_count",                   w_ps_get_count,                   MRB_ARGS_NONE() },
+	{ "start",                       w_ps_start,                       MRB_ARGS_NONE() },
+	{ "stop",                        w_ps_stop,                        MRB_ARGS_NONE() },
+	{ "pause",                       w_ps_pause,                       MRB_ARGS_NONE() },
+	{ "reset",                       w_ps_reset,                       MRB_ARGS_NONE() },
+	{ "emit",                        w_ps_emit,                        MRB_ARGS_KEY(1, 0) },
+	{ "update",                      w_ps_update,                      MRB_ARGS_KEY(1, 0) },
+	{ "active?",                     w_ps_is_active,                   MRB_ARGS_NONE() },
+	{ "paused?",                     w_ps_is_paused,                   MRB_ARGS_NONE() },
+	{ "stopped?",                    w_ps_is_stopped,                  MRB_ARGS_NONE() },
+	{ "empty?",                      w_ps_is_empty,                    MRB_ARGS_NONE() },
+	{ "full?",                       w_ps_is_full,                     MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// new_particle_system(texture:, size:) -- size defaults to 1000 (max particles).
+static mrb_value w_new_particle_system(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"texture", "size"}, 1, v);
+	Texture *tex = mrbx_checktype<Texture>(mrb, v[0]);
+	int size = mrbx_optint(mrb, v[1], 1000);
+	if (size < 1 || size > (int) ParticleSystem::MAX_PARTICLES)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Invalid ParticleSystem size.");
+
+	ParticleSystem *t = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { t = instance()->newParticleSystem(tex, size); }))
+		return mrb_nil_value();
+	mrb_value res = mrbx_pushtype(mrb, t);
+	t->release();
+	return res;
+}
+
+// =========================================================================
 // Canvas / render targets. new_canvas returns a render-target Texture (modern
 // LÖVE merged Canvas into Texture); set_canvas / get_canvas swap the active
 // render target(s). A single 2D target or an Array of them (MRT) is supported;
@@ -1977,6 +2577,7 @@ static const MrbReg functions[] =
 	{ "get_canvas",           w_get_canvas,           MRB_ARGS_NONE() },
 	{ "new_sprite_batch",     w_new_sprite_batch,     MRB_ARGS_KEY(3, 0) },
 	{ "new_text_batch",       w_new_text_batch,       MRB_ARGS_KEY(2, 0) },
+	{ "new_particle_system",  w_new_particle_system,  MRB_ARGS_KEY(2, 0) },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -2007,6 +2608,7 @@ extern "C" void mrb_love_graphics_init(mrb_state *mrb)
 	mrbx_register_type(mrb, Shader::type, shaderFunctions);
 	mrbx_register_type(mrb, SpriteBatch::type, spriteBatchFunctions);
 	mrbx_register_type(mrb, TextBatch::type, textBatchFunctions);
+	mrbx_register_type(mrb, ParticleSystem::type, particleSystemFunctions);
 }
 
 } // graphics

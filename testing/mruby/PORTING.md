@@ -278,8 +278,18 @@ them changes when we swap.
       (`text:`) / `setf` (`text:`/`wrap:`/`align:`) / `add` (`text:` + standard
       transform -> 1-based index) / `addf` (`text:`/`wrap:`/`align:` + transform)
       / `clear` / `set_font`/`get_font` / `get_width`/`get_height`/
-      `get_dimensions` (optional 1-based `index:`). Still to expose on this same
-      instance: the remaining object types (Mesh, ParticleSystem, Video). Text is
+      `get_dimensions` (optional 1-based `index:`). The `Love::ParticleSystem`
+      object type is exposed comprehensively: `new_particle_system` (`texture:`,
+      `size:` default 1000) plus the config API (emission rate/lifetime, particle
+      lifetime, position/move_to, emission area, direction/spread, speed, linear/
+      radial/tangential acceleration + linear damping, sizes/size_variation,
+      rotation, spin/spin_variation, offset, colors, quads, insert_mode,
+      relative_rotation) and the lifecycle (`start`/`stop`/`pause`/`reset`/
+      `emit`(`count:`)/`update`(`dt:`)/`get_count`/`active?`/`paused?`/`stopped?`/
+      `empty?`/`full?`). min/max (or x/y component) pairs are keyword args, and
+      multi-value getters return Hashes; colors are Arrays of [r,g,b,a]. Still to
+      expose on this same instance: the remaining object types (Mesh, Video).
+      ParticleSystem#clone isn't ported (needs the object identity map). Text is
       a plain String (the colored-string-segments form isn't ported);
       SpriteBatch's add_layer/set_layer (array textures) and
       attach_attribute (custom vertex buffers) aren't ported; nor are the
