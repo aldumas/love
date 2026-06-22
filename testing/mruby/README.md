@@ -197,9 +197,11 @@ narrative overview.
    graphics are coupled and come up together, which is why they were swapped in
    the same step. Vulkan/Metal are kept out of the build (`LOVE_MRUBY_NO_VULKAN`)
    so only the OpenGL renderer (and its glad loader + the bundled glslang shader
-   compiler) is linked. The event backend (`HarnessEvent`) is still lean but its
-   wholesale swap to `event/sdl/Event.cpp` is now unblocked. See PORTING.md §B
-   (`#win-backend` / `#gfx-backend`) for the details.
+   compiler) is linked. The event backend is now the **real**
+   `event/sdl/Event.cpp` (the lean `HarnessEvent` was swapped out); its
+   live-resize modal-draw hook dynamic_casts to the real `window::sdl::Window`
+   and re-renders through the real `graphics::Graphics`. See PORTING.md §B
+   (`#event-backend` / `#win-backend` / `#gfx-backend`) for the details.
    The window module is fully exposed: `set_icon`/`get_icon`, `update_mode`,
    `get_pointer`, `show_file_dialog`, and the HiDPI transforms
    (`to_pixels`/`from_pixels`/`get_dpi_scale`) are all wired up. `update_mode`
@@ -241,13 +243,10 @@ narrative overview.
    Every graphics object type is now exposed on the real instance. (The video
    audio track isn't wired up yet -- see PORTING.md `#video-audio`; video plays
    silently on its timer-driven sync.)
-   `HarnessKeyboard` is likewise a plain `love::Module` that resolves key and
-   scancode names through SDL's own name lookups (`SDL_GetKeyFromName` etc.)
-   rather than the 621-line `Keyboard.h` enum tables -- symmetric with the lean
-   event backend, which emits those same SDL names. `set_key_repeat` is honored:
-   the lean event backend consults the keyboard module (via
-   `keyboard::harnessKeyRepeatEnabled`) and drops auto-repeat keypressed events
-   when it is off.
+   The keyboard module is the **real** `keyboard::sdl::Keyboard`
+   (`#kbd-backend`), using LÖVE's canonical key/scancode enum names, and the now-
+   real event backend handles `set_key_repeat` natively (no lean key-repeat
+   shim).
    The mouse module is now the **real** `love::mouse::sdl::Mouse` backend
    (`mouse/sdl/Mouse.cpp`), driving position, buttons, visibility, grab, and
    relative mode through the abstract `love::mouse::Mouse` interface. Button

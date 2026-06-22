@@ -218,17 +218,17 @@ These are deliberate: the real backends pull in the whole graphics/input
 subsystem (~8000 lines). The Ruby-facing APIs are stable; only the C++ behind
 them changes when we swap.
 
-- [~] (#event-backend) **event** — `HarnessEvent` now reproduces the **full**
-      `event/sdl/Event.cpp` translation (keyboard/text/mouse/touch/joystick/
-      gamepad/sensor/window/drop/system), using the real input-family modules and
-      the keyboard enum tables (now linked) for canonical key names. Two things
-      keep this from being the literal upstream file, and both are pre-existing
-      lean backends, not new work: the sdl::Window live-resize *modal-draw* hook
-      is omitted (it dynamic_casts to `window::sdl::Window`). Key names and the
-      key-repeat check now go through the real keyboard module (`#kbd-backend` is
-      done). With `#win-backend` now done too, a true wholesale swap to
-      `event/sdl/Event.cpp` is unblocked (the live-resize hook can now cast to the
-      real `window::sdl::Window`).
+- [x] (#event-backend) **event** — done; the module instance is now the real
+      `love::event::sdl::Event` (`event/sdl/Event.cpp` linked). The lean
+      `HarnessEvent` is removed. The Ruby-facing API (pump/poll/push/clear/quit/
+      restart) is unchanged — it calls through the abstract `love::event::Event`
+      interface (queue + Variant round-trip), which the SDL backend's full
+      translation (keyboard/text/mouse/touch/joystick/gamepad/sensor/window/drop/
+      system) feeds. The previously-omitted live-resize *modal-draw* hook now
+      works: it dynamic_casts to the real `window::sdl::Window` and re-renders
+      through the real `graphics::Graphics`, both linked. All the modules the
+      backend resolves at translation time (keyboard/window/graphics/input/audio/
+      timer/filesystem) are ported.
 - [x] (#win-backend) **window** — done; the module instance is now the real
       `window::sdl::Window` (`window/sdl/Window.cpp` linked). The Ruby bindings
       were unchanged — every binding calls through the abstract

@@ -164,6 +164,7 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/thread/wrap_ThreadModule_mrb.cpp \
 	$(LOVE_SRC)/modules/event/wrap_Event_mrb.cpp \
 	$(LOVE_SRC)/modules/event/Event.cpp \
+	$(LOVE_SRC)/modules/event/sdl/Event.cpp \
 	$(LOVE_SRC)/common/Variant.cpp \
 	$(LOVE_SRC)/modules/window/wrap_Window_mrb.cpp \
 	$(LOVE_SRC)/modules/window/Window.cpp \
