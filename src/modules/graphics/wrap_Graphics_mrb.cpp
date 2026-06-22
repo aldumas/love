@@ -66,6 +66,10 @@
 #include "vertex.h"
 #include "video/VideoStream.h"
 #include "video/Video.h"
+#include "audio/Audio.h"
+#include "audio/Source.h"
+#include "sound/Sound.h"
+#include "sound/Decoder.h"
 #include "math/Transform.h"
 #include "math/MathModule.h"
 #include "image/Image.h"
@@ -2850,10 +2854,39 @@ static mrb_value w_new_video(mrb_state *mrb, mrb_value self)
 	if (err2)
 		return mrb_nil_value();
 
-	// TODO(mruby) #video-audio: wire the audio track here -- create a streaming
-	// audio Source from stream->getFilename() (via love.audio) and setSource() it,
-	// then stream->setSync(source's sync), as the Lua newVideo wrapper does. For
-	// now the video plays silently on the stream's default timer-driven DeltaSync.
+	// Best-effort audio: if the video carries an audio track and the sound +
+	// audio modules are present, build a streaming Source from the same file,
+	// attach it, and sync the video frames to it (a SourceSync) -- mirroring the
+	// Lua newVideo wrapper. Any failure (no audio track, missing modules) is
+	// non-fatal: the video keeps its default timer-driven DeltaSync and plays
+	// silently.
+	auto snd = Module::getInstance<love::sound::Sound>(Module::M_SOUND);
+	auto audiomod = Module::getInstance<love::audio::Audio>(Module::M_AUDIO);
+	if (snd != nullptr && audiomod != nullptr)
+	{
+		love::audio::Source *source = nullptr;
+		try
+		{
+			love::filesystem::File *afile = fs->openFile(filename.c_str(), love::filesystem::File::MODE_READ);
+			love::sound::Decoder *dec = snd->newDecoder(afile, love::sound::Decoder::DEFAULT_BUFFER_SIZE);
+			afile->release();
+			source = audiomod->newSource(dec);
+			dec->release();
+		}
+		catch (love::Exception &)
+		{
+			source = nullptr;
+		}
+
+		if (source != nullptr)
+		{
+			video->setSource(source);
+			auto sync = new love::video::VideoStream::SourceSync(source);
+			video->getStream()->setSync(sync);
+			sync->release();
+			source->release();
+		}
+	}
 
 	mrb_value res = mrbx_pushtype(mrb, video);
 	video->release();

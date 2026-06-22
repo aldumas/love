@@ -240,9 +240,10 @@ narrative overview.
    streaming vertex buffer). Note `Love::Font` is shared between the love.font
    module (class methods) and the graphics Font type (instances), resolving the
    module-name vs type-name collision the same way data/thread/joystick do.
-   Every graphics object type is now exposed on the real instance. (The video
-   audio track isn't wired up yet -- see PORTING.md `#video-audio`; video plays
-   silently on its timer-driven sync.)
+   Every graphics object type is now exposed on the real instance. `new_video`
+   also wires the audio track (best-effort): it builds a streaming `Love::Source`
+   from the file and syncs the video to it, like the Lua `newVideo` wrapper
+   (PORTING.md `#video-audio`).
    The keyboard module is the **real** `keyboard::sdl::Keyboard`
    (`#kbd-backend`), using LÖVE's canonical key/scancode enum names, and the now-
    real event backend handles `set_key_repeat` natively (no lean key-repeat

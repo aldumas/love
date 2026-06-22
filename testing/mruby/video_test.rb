@@ -34,7 +34,7 @@ stream = video.get_stream
 puts "  get_stream -> #{stream.class}"
 puts "  stream filename   -> #{stream.get_filename}"
 puts "  stream dimensions -> #{stream.get_dimensions.inspect}"
-puts "  get_source (no audio wired) -> #{video.get_source.inspect}"
+puts "  get_source (audio track) -> #{video.get_source.inspect}"
 
 puts
 puts "=== playback control ==="

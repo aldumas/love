@@ -204,11 +204,16 @@ dimensions). The graphics-side `Love::Video` Drawable (YUV→RGB via the standar
 video shader) is registered by the graphics module — see `#gfx-backend`.
 Playback is timer-driven (a `TheoraVideoStream` owns a `DeltaSync` by default),
 so video advances on its worker thread once played.
-- [ ] (#video-audio) the audio track isn't wired: `love.graphics.new_video`
-      doesn't create/attach an audio `Source` (the Lua `newVideo` does this via
-      `getStream():getFilename()` + `love.audio.newSource(..., "stream")`), and
-      `setSource` / `getStream():setSync(source)` aren't exposed. Video plays
-      silently, frame-accurate on the timer sync.
+- [x] (#video-audio) audio track wired — done; `new_video` now best-effort builds
+      a streaming audio `Source` from the same file (via the sound + audio
+      modules), attaches it (`Video::setSource`), and syncs the video frames to it
+      (`stream->setSync(new SourceSync(source))`), mirroring the Lua `newVideo`
+      wrapper. `video.get_source` returns the `Love::Source`. Any failure (no audio
+      track, missing modules) is non-fatal: the video keeps its default timer
+      `DeltaSync` and plays silently. Note: once synced to a Source, the video
+      advances with the audio clock, so frame progress needs `love.audio` to be
+      pumped (the boot loop does this); a Source has no separate per-frame
+      `tell`-advance in a bare script that never updates audio.
 
 ---
 
