@@ -43,6 +43,10 @@
 #include "DataModule.h"
 
 #include <type_traits>
+#include <cstring>
+#include <cstdint>
+#include <cstddef>
+#include <climits>
 
 namespace love
 {
@@ -542,6 +546,432 @@ static mrb_value w_hash(mrb_state *mrb, mrb_value self)
 	return mrb_str_new(mrb, hashvalue.data, hashvalue.size);
 }
 
+// --- binary pack / unpack (#data-pack) -----------------------------------
+// Native reimplementation of Lua 5.3's string.pack / string.unpack / packsize
+// (libraries/lua53/lstrlib.c). The mruby VM has no string.pack, so the format
+// mini-language is ported here, operating on a std::string buffer and an Array
+// of Ruby values instead of the Lua stack. mrb_int is 64-bit (matching
+// lua_Integer) and mrb_float is double (matching lua_Number), so the size and
+// overflow logic carries over unchanged. See PORTING.md §A.
+
+namespace {
+
+const int      PK_NB        = 8;                  // bits per byte
+const unsigned PK_MC        = (1u << PK_NB) - 1;  // one-byte mask
+const int      PK_SZINT     = (int) sizeof(mrb_int);
+const int      PK_MAXINTSIZE = 16;
+
+const union { int dummy; char little; } pk_nativeendian = {1};
+
+// Native alignment probe (mirrors lstrlib's struct cD): offset of the union
+// gives the platform's max alignment, the upper bound for the '!' option.
+struct PkAlignProbe { char c; union { double d; void *p; mrb_int i; double n; } u; };
+const int PK_MAXALIGN = (int) offsetof(struct PkAlignProbe, u);
+
+// Union for byte-faithful serialization of floats (enough room for any type).
+union PkFtypes { float f; double d; double n; char buff[5 * sizeof(double)]; };
+
+enum PkOption {
+	PK_Kint, PK_Kuint, PK_Kfloat, PK_Kchar,
+	PK_Kstring, PK_Kzstr, PK_Kpadding, PK_Kpaddalign, PK_Knop
+};
+
+struct PkHeader { mrb_state *mrb; int islittle; int maxalign; };
+
+inline int pk_digit(int c) { return '0' <= c && c <= '9'; }
+
+// Read an integer numeral from 'fmt', or 'df' if there is none.
+int pk_getnum(const char **fmt, int df)
+{
+	if (!pk_digit((unsigned char) **fmt))
+		return df;
+	int a = 0;
+	do {
+		a = a * 10 + (*((*fmt)++) - '0');
+	} while (pk_digit((unsigned char) **fmt) && a <= (INT_MAX - 9) / 10);
+	return a;
+}
+
+int pk_getnumlimit(PkHeader *h, const char **fmt, int df)
+{
+	mrb_state *mrb = h->mrb;
+	int sz = pk_getnum(fmt, df);
+	if (sz > PK_MAXINTSIZE || sz <= 0)
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "integral size (%d) out of limits [1,%d]", sz, PK_MAXINTSIZE);
+	return sz;
+}
+
+// Read and classify the next format option; '*size' receives its size.
+PkOption pk_getoption(PkHeader *h, const char **fmt, int *size)
+{
+	mrb_state *mrb = h->mrb;
+	int opt = *((*fmt)++);
+	*size = 0;
+	switch (opt) {
+		case 'b': *size = sizeof(char);    return PK_Kint;
+		case 'B': *size = sizeof(char);    return PK_Kuint;
+		case 'h': *size = sizeof(short);   return PK_Kint;
+		case 'H': *size = sizeof(short);   return PK_Kuint;
+		case 'l': *size = sizeof(long);    return PK_Kint;
+		case 'L': *size = sizeof(long);    return PK_Kuint;
+		case 'j': *size = sizeof(mrb_int); return PK_Kint;
+		case 'J': *size = sizeof(mrb_int); return PK_Kuint;
+		case 'T': *size = sizeof(size_t);  return PK_Kuint;
+		case 'f': *size = sizeof(float);   return PK_Kfloat;
+		case 'd': *size = sizeof(double);  return PK_Kfloat;
+		case 'n': *size = sizeof(double);  return PK_Kfloat;
+		case 'i': *size = pk_getnumlimit(h, fmt, sizeof(int));    return PK_Kint;
+		case 'I': *size = pk_getnumlimit(h, fmt, sizeof(int));    return PK_Kuint;
+		case 's': *size = pk_getnumlimit(h, fmt, sizeof(size_t)); return PK_Kstring;
+		case 'c':
+			*size = pk_getnum(fmt, -1);
+			if (*size == -1)
+				mrb_raise(h->mrb, E_ARGUMENT_ERROR, "missing size for format option 'c'");
+			return PK_Kchar;
+		case 'z': return PK_Kzstr;
+		case 'x': *size = 1; return PK_Kpadding;
+		case 'X': return PK_Kpaddalign;
+		case ' ': break;
+		case '<': h->islittle = 1; break;
+		case '>': h->islittle = 0; break;
+		case '=': h->islittle = pk_nativeendian.little; break;
+		case '!': h->maxalign = pk_getnumlimit(h, fmt, PK_MAXALIGN); break;
+		default: mrb_raisef(h->mrb, E_ARGUMENT_ERROR, "invalid format option '%c'", opt);
+	}
+	return PK_Knop;
+}
+
+// Read the next option plus its alignment requirement ('*ntoalign').
+PkOption pk_getdetails(PkHeader *h, size_t totalsize, const char **fmt, int *psize, int *ntoalign)
+{
+	mrb_state *mrb = h->mrb;
+	PkOption opt = pk_getoption(h, fmt, psize);
+	int align = *psize;
+	if (opt == PK_Kpaddalign) { // 'X' takes alignment from the following option
+		if (**fmt == '\0' || pk_getoption(h, fmt, &align) == PK_Kchar || align == 0)
+			mrb_raise(h->mrb, E_ARGUMENT_ERROR, "invalid next option for option 'X'");
+	}
+	if (align <= 1 || opt == PK_Kchar)
+		*ntoalign = 0;
+	else {
+		if (align > h->maxalign)
+			align = h->maxalign;
+		if ((align & (align - 1)) != 0)
+			mrb_raise(h->mrb, E_ARGUMENT_ERROR, "format asks for alignment not power of 2");
+		*ntoalign = (align - (int)(totalsize & (align - 1))) & (align - 1);
+	}
+	return opt;
+}
+
+// Pack integer 'n' as 'size' bytes with the given endianness (sign-extending
+// when 'size' exceeds the native integer width and 'neg' is set).
+void pk_packint(std::string &b, uint64_t n, int islittle, int size, int neg)
+{
+	std::vector<char> buff(size);
+	buff[islittle ? 0 : size - 1] = (char)(n & PK_MC);
+	for (int i = 1; i < size; i++) {
+		n >>= PK_NB;
+		buff[islittle ? i : size - 1 - i] = (char)(n & PK_MC);
+	}
+	if (neg && size > PK_SZINT) {
+		for (int i = PK_SZINT; i < size; i++)
+			buff[islittle ? i : size - 1 - i] = (char) PK_MC;
+	}
+	b.append(buff.data(), size);
+}
+
+// Copy 'size' bytes, reversing them iff the requested endianness differs.
+void pk_copywithendian(char *dest, const char *src, int size, int islittle)
+{
+	if (islittle == pk_nativeendian.little) {
+		while (size-- != 0) *(dest++) = *(src++);
+	} else {
+		dest += size - 1;
+		while (size-- != 0) *(dest--) = *(src++);
+	}
+}
+
+// Unpack a 'size'-byte integer, sign-extending or overflow-checking as needed.
+mrb_int pk_unpackint(mrb_state *mrb, const char *str, int islittle, int size, int issigned)
+{
+	uint64_t res = 0;
+	int limit = (size <= PK_SZINT) ? size : PK_SZINT;
+	for (int i = limit - 1; i >= 0; i--) {
+		res <<= PK_NB;
+		res |= (uint64_t)(unsigned char) str[islittle ? i : size - 1 - i];
+	}
+	if (size < PK_SZINT) {
+		if (issigned) {
+			uint64_t mask = (uint64_t)1 << (size * PK_NB - 1);
+			res = ((res ^ mask) - mask); // sign extension
+		}
+	} else if (size > PK_SZINT) { // check the unread high bytes
+		int mask = (!issigned || (mrb_int) res >= 0) ? 0 : (int) PK_MC;
+		for (int i = limit; i < size; i++) {
+			if ((unsigned char) str[islittle ? i : size - 1 - i] != mask)
+				mrb_raisef(mrb, E_ARGUMENT_ERROR, "%d-byte integer does not fit into Integer", size);
+		}
+	}
+	return (mrb_int) res;
+}
+
+// Fetch the next value to pack, erroring if the values Array is exhausted.
+mrb_value pk_nextval(mrb_state *mrb, mrb_value values, mrb_int &argi, mrb_int nargs)
+{
+	if (argi >= nargs)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "too few values to pack for the given format");
+	return mrb_ary_ref(mrb, values, argi++);
+}
+
+// Pack 'values' per 'fmt' into a freshly built byte buffer.
+std::string pk_pack_core(mrb_state *mrb, const char *fmt, mrb_value values)
+{
+	PkHeader h = { mrb, pk_nativeendian.little, 1 };
+	std::string b;
+	size_t totalsize = 0;
+	mrb_int argi = 0;
+	mrb_int nargs = RARRAY_LEN(values);
+
+	while (*fmt != '\0') {
+		int size, ntoalign;
+		PkOption opt = pk_getdetails(&h, totalsize, &fmt, &size, &ntoalign);
+		totalsize += ntoalign + size;
+		while (ntoalign-- > 0)
+			b.push_back((char) 0x00); // alignment padding
+
+		switch (opt) {
+		case PK_Kint:
+		case PK_Kuint: {
+			mrb_int n = mrb_as_int(mrb, pk_nextval(mrb, values, argi, nargs));
+			if (opt == PK_Kint) {
+				if (size < PK_SZINT) {
+					mrb_int lim = (mrb_int)1 << (size * PK_NB - 1);
+					if (!(-lim <= n && n < lim))
+						mrb_raise(mrb, E_ARGUMENT_ERROR, "integer overflow");
+				}
+				pk_packint(b, (uint64_t) n, h.islittle, size, (n < 0));
+			} else {
+				if (size < PK_SZINT && (uint64_t) n >= ((uint64_t)1 << (size * PK_NB)))
+					mrb_raise(mrb, E_ARGUMENT_ERROR, "unsigned overflow");
+				pk_packint(b, (uint64_t) n, h.islittle, size, 0);
+			}
+			break;
+		}
+		case PK_Kfloat: {
+			double n = mrb_as_float(mrb, pk_nextval(mrb, values, argi, nargs));
+			PkFtypes u;
+			if (size == (int) sizeof(u.f)) u.f = (float) n;
+			else if (size == (int) sizeof(u.d)) u.d = (double) n;
+			else u.n = n;
+			char tmp[sizeof(u.buff)];
+			pk_copywithendian(tmp, u.buff, size, h.islittle);
+			b.append(tmp, size);
+			break;
+		}
+		case PK_Kchar: {
+			mrb_value s = mrb_ensure_string_type(mrb, pk_nextval(mrb, values, argi, nargs));
+			size_t len = RSTRING_LEN(s);
+			if (len > (size_t) size)
+				mrb_raise(mrb, E_ARGUMENT_ERROR, "string longer than given size");
+			b.append(RSTRING_PTR(s), len);
+			while (len++ < (size_t) size)
+				b.push_back((char) 0x00);
+			break;
+		}
+		case PK_Kstring: {
+			mrb_value s = mrb_ensure_string_type(mrb, pk_nextval(mrb, values, argi, nargs));
+			size_t len = RSTRING_LEN(s);
+			if (!(size >= (int) sizeof(size_t) || len < ((size_t)1 << (size * PK_NB))))
+				mrb_raise(mrb, E_ARGUMENT_ERROR, "string length does not fit in given size");
+			pk_packint(b, (uint64_t) len, h.islittle, size, 0);
+			b.append(RSTRING_PTR(s), len);
+			totalsize += len;
+			break;
+		}
+		case PK_Kzstr: {
+			mrb_value s = mrb_ensure_string_type(mrb, pk_nextval(mrb, values, argi, nargs));
+			size_t len = RSTRING_LEN(s);
+			if (memchr(RSTRING_PTR(s), '\0', len) != nullptr)
+				mrb_raise(mrb, E_ARGUMENT_ERROR, "string contains zeros");
+			b.append(RSTRING_PTR(s), len);
+			b.push_back('\0');
+			totalsize += len + 1;
+			break;
+		}
+		case PK_Kpadding:
+			b.push_back((char) 0x00);
+			break;
+		case PK_Kpaddalign:
+		case PK_Knop:
+			break;
+		}
+	}
+	return b;
+}
+
+// Compute the packed size of 'fmt' (errors on variable-length options).
+size_t pk_packsize_core(mrb_state *mrb, const char *fmt)
+{
+	PkHeader h = { mrb, pk_nativeendian.little, 1 };
+	size_t totalsize = 0;
+	while (*fmt != '\0') {
+		int size, ntoalign;
+		PkOption opt = pk_getdetails(&h, totalsize, &fmt, &size, &ntoalign);
+		size += ntoalign;
+		if (totalsize > (size_t) -1 - (size_t) size)
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "format result too large");
+		totalsize += size;
+		if (opt == PK_Kstring || opt == PK_Kzstr)
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "variable-length format");
+	}
+	return totalsize;
+}
+
+// Translate a 1-based (negative = from end) position, like Lua's posrelat.
+mrb_int pk_posrelat(mrb_int pos, size_t len)
+{
+	if (pos >= 0) return pos;
+	else if ((uint64_t)(0u - (uint64_t) pos) > len) return 0;
+	else return (mrb_int) len + pos + 1;
+}
+
+// Unpack values per 'fmt' from 'data'; '*nextpos' receives the 1-based position
+// just past the consumed bytes (the trailing value Lua's string.unpack returns).
+mrb_value pk_unpack_core(mrb_state *mrb, const char *fmt, const char *data, size_t ld, mrb_int posarg, mrb_int *nextpos)
+{
+	PkHeader h = { mrb, pk_nativeendian.little, 1 };
+	size_t pos = (size_t) pk_posrelat(posarg, ld) - 1;
+	if (pos > ld)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "initial position out of string");
+
+	mrb_value arr = mrb_ary_new(mrb);
+	while (*fmt != '\0') {
+		int size, ntoalign;
+		PkOption opt = pk_getdetails(&h, pos, &fmt, &size, &ntoalign);
+		if ((size_t) ntoalign + size > ~pos || pos + ntoalign + size > ld)
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "data string too short");
+		pos += ntoalign;
+		switch (opt) {
+		case PK_Kint:
+		case PK_Kuint:
+			mrb_ary_push(mrb, arr, mrb_int_value(mrb, pk_unpackint(mrb, data + pos, h.islittle, size, (opt == PK_Kint))));
+			break;
+		case PK_Kfloat: {
+			PkFtypes u;
+			pk_copywithendian(u.buff, data + pos, size, h.islittle);
+			double num;
+			if (size == (int) sizeof(u.f)) num = (double) u.f;
+			else if (size == (int) sizeof(u.d)) num = (double) u.d;
+			else num = u.n;
+			mrb_ary_push(mrb, arr, mrb_float_value(mrb, num));
+			break;
+		}
+		case PK_Kchar:
+			mrb_ary_push(mrb, arr, mrb_str_new(mrb, data + pos, size));
+			break;
+		case PK_Kstring: {
+			size_t len = (size_t) pk_unpackint(mrb, data + pos, h.islittle, size, 0);
+			if (pos + len + size > ld)
+				mrb_raise(mrb, E_ARGUMENT_ERROR, "data string too short");
+			mrb_ary_push(mrb, arr, mrb_str_new(mrb, data + pos + size, len));
+			pos += len;
+			break;
+		}
+		case PK_Kzstr: {
+			size_t len = strlen(data + pos);
+			mrb_ary_push(mrb, arr, mrb_str_new(mrb, data + pos, len));
+			pos += len + 1;
+			break;
+		}
+		case PK_Kpaddalign:
+		case PK_Kpadding:
+		case PK_Knop:
+			break;
+		}
+		pos += size;
+	}
+	*nextpos = (mrb_int) pos + 1;
+	return arr;
+}
+
+} // anonymous namespace
+
+// Love::Data.pack(format:, values:, container:, data:, offset:)
+//   Packs the Array `values:` per the format string. Two output forms:
+//   - into an existing ByteData: pass `data:` (+ optional `offset:`, default 0);
+//     returns that ByteData.
+//   - otherwise `container:` "string" (default, returns a String) or "data"
+//     (returns a new ByteData).
+static mrb_value w_pack(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[5]; // format, values, container, data, offset
+	mrbx_get_kwargs(mrb, {"format", "values", "container", "data", "offset"}, 1, v);
+
+	std::string fmt = mrbx_checkstring(mrb, v[0]);
+
+	mrb_value values = v[1];
+	if (mrb_undef_p(values) || mrb_nil_p(values))
+		values = mrb_ary_new(mrb);
+	else if (!mrb_array_p(values))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "`values:` must be an Array");
+
+	std::string packed = pk_pack_core(mrb, fmt.c_str(), values);
+
+	// Form 1: pack into an existing ByteData at a byte offset.
+	if (!mrb_undef_p(v[3]) && !mrb_nil_p(v[3]))
+	{
+		ByteData *d = mrbx_checktype<ByteData>(mrb, v[3]);
+		int64 offset = mrbx_optint(mrb, v[4], 0);
+		if (offset < 0 || offset + (int64) packed.size() > (int64) d->getSize())
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "The given byte offset and pack format parameters do not fit within the ByteData's size.");
+		memcpy((uint8 *) d->getData() + offset, packed.data(), packed.size());
+		return v[3];
+	}
+
+	// Form 2: container "string" (default) or "data".
+	ContainerType ctype = getcontainer(mrb, v[2]);
+	if (ctype == CONTAINER_DATA)
+		return newbytedata_copy(mrb, packed.data(), packed.size());
+	return mrb_str_new(mrb, packed.data(), packed.size());
+}
+
+// Love::Data.unpack(format:, data:/string:, offset:)
+//   Reads bytes from `data:` (a Data) or `string:` (a String) per the format,
+//   starting at the 1-based `offset:` (default 1; negative counts from the end).
+//   Returns a Hash { values: [...], offset: <1-based position past the data> }.
+static mrb_value w_unpack(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[4]; // format, data, string, offset
+	mrbx_get_kwargs(mrb, {"format", "data", "string", "offset"}, 1, v);
+
+	std::string fmt = mrbx_checkstring(mrb, v[0]);
+
+	mrb_value hold = mrb_nil_value();
+	size_t datasize = 0;
+	const char *data = getbytes(mrb, v[1], v[2], hold, datasize);
+
+	mrb_int posarg = mrb_undef_p(v[3]) ? 1 : mrb_as_int(mrb, v[3]);
+	mrb_int nextpos = 0;
+	mrb_value arr = pk_unpack_core(mrb, fmt.c_str(), data, datasize, posarg, &nextpos);
+
+	mrb_value result = mrb_hash_new_capa(mrb, 2);
+	mrb_hash_set(mrb, result, mrb_symbol_value(mrb_intern_lit(mrb, "values")), arr);
+	mrb_hash_set(mrb, result, mrb_symbol_value(mrb_intern_lit(mrb, "offset")), mrb_int_value(mrb, nextpos));
+	return result;
+}
+
+// Love::Data.get_packed_size(format:) -> Integer (errors on variable-length).
+static mrb_value w_getPackedSize(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1]; // format
+	mrbx_get_kwargs(mrb, {"format"}, 1, v);
+	std::string fmt = mrbx_checkstring(mrb, v[0]);
+	return mrb_int_value(mrb, (mrb_int) pk_packsize_core(mrb, fmt.c_str()));
+}
+
 static const MrbReg moduleFunctions[] =
 {
 	{ "new_data_view", w_newDataView, MRB_ARGS_KEY(3, 0) },
@@ -551,8 +981,9 @@ static const MrbReg moduleFunctions[] =
 	{ "encode",        w_encode,      MRB_ARGS_KEY(5, 0) },
 	{ "decode",        w_decode,      MRB_ARGS_KEY(4, 0) },
 	{ "hash",          w_hash,        MRB_ARGS_KEY(4, 0) },
-	// TODO(mruby) #data-pack: pack / unpack / get_packed_size depend on Lua
-	// 5.3's lstrlib (string.pack); deferred under the mruby port. PORTING.md §A
+	{ "pack",            w_pack,          MRB_ARGS_KEY(5, 0) },
+	{ "unpack",          w_unpack,        MRB_ARGS_KEY(4, 0) },
+	{ "get_packed_size", w_getPackedSize, MRB_ARGS_KEY(1, 0) },
 	{ nullptr, nullptr, 0 }
 };
 

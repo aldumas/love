@@ -189,8 +189,21 @@ The module's functions are class methods on `Love::Data` (the module name "Data"
 collides with the `Data` type; a Ruby class doubling as the namespace resolves
 it). Base `Data` instance methods are registered once and inherited by every
 `Data` subtype via the runtime's love::Type-mirrored class hierarchy.
-- [ ] (#data-pack) `pack` / `unpack` / `get_packed_size` — depend on Lua 5.3's
-      `lstrlib` (`string.pack`); need a native binary-pack implementation.
+- [x] (#data-pack) `pack` / `unpack` / `get_packed_size` — done; the Lua 5.3
+      `lstrlib` (`string.pack`) format engine is reimplemented natively in
+      `wrap_DataModule_mrb.cpp` (no Lua state), faithful to the original size /
+      alignment / endianness / overflow logic. API under the kwarg convention:
+      `pack(format:, values:, container:)` returns a String (default) or a
+      ByteData (`container: "data"`), or — given `data:` (a ByteData) + optional
+      `offset:` — packs in place and returns it; `unpack(format:, data:/string:,
+      offset:)` returns a Hash `{values: [...], offset: <1-based next position>}`
+      (the trailing position Lua's unpack returns); `get_packed_size(format:)`
+      returns an Integer and raises on a variable-length (`s`/`z`) format. All
+      format options carry over (`bBhHiIlLjJTfdn` ints/floats, `c`/`s`/`z`
+      strings, `x`/`X` padding, `<>=!` modifiers). Covered by `data_test.rb`.
+      Note: this harness's mruby caps integer literals at signed 32-bit, so the
+      8-byte `j`/`J` cases and >2^31 values can't be exercised from Ruby here,
+      but the engine handles them (sizes derive from the format, not mrb_int).
 - [ ] (#data-ffi-atomic) `Data#get_pointer` / `#get_ffi_pointer` (raw/FFI
       pointers) and `Data#perform_atomic` (mutex + block) — not exposed.
 
