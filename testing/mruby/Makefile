@@ -173,6 +173,7 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/keyboard/Keyboard.cpp \
 	$(LOVE_SRC)/modules/keyboard/sdl/Keyboard.cpp \
 	$(LOVE_SRC)/modules/mouse/wrap_Mouse_mrb.cpp \
+	$(LOVE_SRC)/modules/mouse/sdl/Mouse.cpp \
 	$(LOVE_SRC)/modules/mouse/Cursor.cpp \
 	$(LOVE_SRC)/modules/mouse/sdl/Cursor.cpp \
 	$(LOVE_SRC)/modules/system/wrap_System_mrb.cpp \

@@ -18,7 +18,7 @@ arguments**.
 | Ported module: window (real `window::sdl::Window` backend; creates the GL context, drives the graphics backbuffer) | `src/modules/window/wrap_Window_mrb.cpp` |
 | Ported module: graphics (real shader-based batched renderer, OpenGL backend; clear/color/rectangle/present + transform stack + render state (blend/scissor/color_mask/line/point/wireframe) + shaders (new_shader/set_shader + Shader type) + canvas/render targets (new_canvas/set_canvas) + stencil/depth state + SpriteBatch + TextBatch + ParticleSystem + Mesh + Video + new_image/new_quad/draw + new_font/print/printf; Texture, Quad, Font, Shader, SpriteBatch, TextBatch, ParticleSystem, Mesh & Video object types) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
 | Ported module: keyboard (real keyboard::sdl::Keyboard backend; canonical key/scancode enum names) | `src/modules/keyboard/wrap_Keyboard_mrb.cpp` |
-| Ported module: mouse (lean SDL state queries; cursor objects deferred) | `src/modules/mouse/wrap_Mouse_mrb.cpp` |
+| Ported module: mouse (real `mouse::sdl::Mouse` backend; position/buttons/visibility/grab/relative + cursor objects) | `src/modules/mouse/wrap_Mouse_mrb.cpp` |
 | Ported module: system (OS/CPU/memory/clipboard/power/locale; real SDL backend) | `src/modules/system/wrap_System_mrb.cpp` |
 | Ported module: data (Data/ByteData/DataView/CompressedData; compress/encode/hash) | `src/modules/data/wrap_DataModule_mrb.cpp` |
 | Ported module: image (ImageData + CompressedImageData decode/encode/pixels; real lodepng/stb/exr/dds backend) | `src/modules/image/wrap_Image_mrb.cpp` |
@@ -248,17 +248,12 @@ narrative overview.
    the lean event backend consults the keyboard module (via
    `keyboard::harnessKeyRepeatEnabled`) and drops auto-repeat keypressed events
    when it is off.
-   `HarnessMouse` follows the same lean pattern: a plain `love::Module` driving
-   SDL's mouse state directly (position, buttons, visibility, grab, relative
-   mode). Button indices keep LÖVE's convention (1 left, 2 right, 3 middle),
-   remapped onto SDL's order. The cursor object family (`new_cursor` /
-   `get_system_cursor` / `set_cursor` / `get_cursor` and the `Love::Cursor` type)
-   is wired up now that the image module is ported -- the lean backend manages
-   cursors itself via the real `love::mouse::sdl::Cursor` (symmetric with the
-   window backend's `set_icon`/`get_icon`).
-   The rest of the input family (`joystick`, `touch`, `sensor`) is still to
-   come; once they land, the lean event backend can be swapped for the full
-   `event/sdl/Event.cpp`.
+   The mouse module is now the **real** `love::mouse::sdl::Mouse` backend
+   (`mouse/sdl/Mouse.cpp`), driving position, buttons, visibility, grab, and
+   relative mode through the abstract `love::mouse::Mouse` interface. Button
+   indices keep LÖVE's convention (1 left, 2 right, 3 middle). The cursor object
+   family (`new_cursor` / `get_system_cursor` / `set_cursor` / `get_cursor` and
+   the `Love::Cursor` type) runs on the real backend's `love::mouse::sdl::Cursor`.
 3. Swap the object/proxy system: the Lua weak-table identity map needs an mruby
    equivalent so the same C++ object always maps to the same Ruby object.
 4. Wire CMake (`CMakeLists.txt`) to build `libmruby.a` and link it instead of

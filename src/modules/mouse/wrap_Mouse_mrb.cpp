@@ -27,24 +27,20 @@
 //   love.mouse.getPosition()         -> Love::Mouse.get_position  # {x:, y:}
 //   love.mouse.isVisible()           -> Love::Mouse.visible?
 //
-// Backend note: like the keyboard module, this is a LEAN backend. The real
-// mouse/sdl/Mouse.cpp is a full love::mouse::Mouse; HarnessMouse is instead a
-// plain love::Module that drives SDL's mouse state directly. The cursor object
-// family (new_cursor / get_system_cursor / set_cursor / get_cursor) is wired up
-// here using the real love::mouse::sdl::Cursor type (now that the image module
-// is ported), so this lean backend manages cursors itself. Everything else
-// (position, buttons, visibility, grab, relative mode) is here too.
+// Backend note: this now drives the REAL love::mouse::sdl::Mouse backend
+// (mouse/Mouse.cpp + mouse/sdl/Mouse.cpp). The Ruby bindings are unchanged --
+// every binding calls through the abstract love::mouse::Mouse interface, which
+// the SDL backend implements (position/buttons/visibility/grab/relative mode +
+// the cursor object family via the real love::mouse::sdl::Cursor).
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
 #include "common/Module.h"
-#include "window/Window.h"
 #include "image/ImageData.h"
+#include "Mouse.h"
+#include "sdl/Mouse.h"
 #include "sdl/Cursor.h"
 
-#include <SDL3/SDL.h>
-
-#include <map>
 #include <vector>
 
 namespace love
@@ -52,162 +48,7 @@ namespace love
 namespace mouse
 {
 
-// TODO(mruby) #mouse-backend: lean backend — plain Module driving SDL state
-// directly instead of the real Mouse base (needs Cursor + image); swap for
-// mouse/sdl/Mouse.cpp (see PORTING.md §B)
-class HarnessMouse : public love::Module
-{
-public:
-
-	HarnessMouse()
-		: love::Module(M_MOUSE, "love.mouse.harness")
-	{
-	}
-
-	void getPosition(double &x, double &y) const
-	{
-		float mx = 0.0f, my = 0.0f;
-		SDL_GetMouseState(&mx, &my);
-		x = (double) mx;
-		y = (double) my;
-	}
-
-	void setPosition(double x, double y)
-	{
-		SDL_WarpMouseInWindow(windowHandle(), (float) x, (float) y);
-		// Warp doesn't update SDL's internal state immediately on some
-		// platforms; pump so the next getPosition reflects the new spot.
-		SDL_PumpEvents();
-	}
-
-	void getGlobalPosition(double &x, double &y, int &displayindex) const
-	{
-		float gx = 0.0f, gy = 0.0f;
-		SDL_GetGlobalMouseState(&gx, &gy);
-
-		double mx = gx, my = gy;
-		int count = 0;
-		SDL_DisplayID *displays = SDL_GetDisplays(&count);
-
-		for (displayindex = 0; displayindex < count; displayindex++)
-		{
-			SDL_Rect r = {};
-			SDL_GetDisplayBounds(displays[displayindex], &r);
-			SDL_FPoint p = {gx, gy};
-			SDL_FRect frect = {(float) r.x, (float) r.y, (float) r.w, (float) r.h};
-			mx = gx - r.x;
-			my = gy - r.y;
-			if (SDL_PointInRectFloat(&p, &frect))
-				break;
-		}
-
-		if (displays != nullptr)
-			SDL_free(displays);
-		if (displayindex >= count)
-			displayindex = 0;
-
-		x = mx;
-		y = my;
-	}
-
-	// LÖVE button index 2 is the RIGHT button and 3 is MIDDLE; SDL is the
-	// reverse. Translate before testing the state mask.
-	bool isDown(int button) const
-	{
-		if (button <= 0)
-			return false;
-		switch (button)
-		{
-		case 2: button = SDL_BUTTON_RIGHT;  break;
-		case 3: button = SDL_BUTTON_MIDDLE; break;
-		}
-		Uint32 state = SDL_GetMouseState(nullptr, nullptr);
-		return (state & SDL_BUTTON_MASK(button)) != 0;
-	}
-
-	void setVisible(bool visible)
-	{
-		if (visible)
-			SDL_ShowCursor();
-		else
-			SDL_HideCursor();
-	}
-
-	bool isVisible() const { return SDL_CursorVisible(); }
-
-	bool isCursorSupported() const { return SDL_GetDefaultCursor() != nullptr; }
-
-	void setGrabbed(bool grab)
-	{
-		SDL_Window *w = windowHandle();
-		if (w != nullptr)
-			SDL_SetWindowMouseGrab(w, grab);
-	}
-
-	bool isGrabbed() const
-	{
-		SDL_Window *w = windowHandle();
-		return w != nullptr && SDL_GetWindowMouseGrab(w);
-	}
-
-	bool setRelativeMode(bool relative)
-	{
-		SDL_Window *w = windowHandle();
-		return w != nullptr && SDL_SetWindowRelativeMouseMode(w, relative);
-	}
-
-	bool getRelativeMode() const
-	{
-		SDL_Window *w = windowHandle();
-		return w != nullptr && SDL_GetWindowRelativeMouseMode(w);
-	}
-
-	// --- cursors (real love::mouse::sdl::Cursor, managed by this backend) --
-
-	love::mouse::Cursor *newCursor(const std::vector<image::ImageData *> &data, int hotx, int hoty)
-	{
-		return new sdl::Cursor(data, hotx, hoty);
-	}
-
-	love::mouse::Cursor *getSystemCursor(Cursor::SystemCursor type)
-	{
-		auto it = systemCursors.find(type);
-		if (it != systemCursors.end())
-			return it->second.get();
-
-		love::mouse::Cursor *cursor = new sdl::Cursor(type);
-		systemCursors[type].set(cursor, Acquire::NORETAIN);
-		return cursor;
-	}
-
-	void setCursor(love::mouse::Cursor *cursor)
-	{
-		curCursor.set(cursor);
-		SDL_SetCursor((SDL_Cursor *) cursor->getHandle());
-	}
-
-	void setCursor()
-	{
-		curCursor.set(nullptr);
-		SDL_SetCursor(SDL_GetDefaultCursor());
-	}
-
-	love::mouse::Cursor *getCursor() const { return curCursor.get(); }
-
-private:
-
-	StrongRef<love::mouse::Cursor> curCursor;
-	std::map<love::mouse::Cursor::SystemCursor, StrongRef<love::mouse::Cursor>> systemCursors;
-
-	static SDL_Window *windowHandle()
-	{
-		auto win = Module::getInstance<love::window::Window>(M_WINDOW);
-		return win != nullptr ? (SDL_Window *) win->getHandle() : nullptr;
-	}
-
-}; // HarnessMouse
-
-#define instance() (Module::getInstance<HarnessMouse>(Module::M_MOUSE))
+#define instance() (Module::getInstance<love::mouse::Mouse>(Module::M_MOUSE))
 
 // =========================================================================
 // Love::Mouse module functions
@@ -295,18 +136,16 @@ static mrb_value w_down(mrb_state *mrb, mrb_value self)
 	mrb_value v[1];
 	mrbx_get_kwargs(mrb, {"button"}, 1, v);
 
-	bool down = false;
+	std::vector<int> buttons;
 	if (mrb_array_p(v[0]))
 	{
 		mrb_int n = RARRAY_LEN(v[0]);
-		for (mrb_int i = 0; i < n && !down; i++)
-			down = instance()->isDown((int) mrbx_checkint(mrb, mrb_ary_ref(mrb, v[0], i)));
+		for (mrb_int i = 0; i < n; i++)
+			buttons.push_back((int) mrbx_checkint(mrb, mrb_ary_ref(mrb, v[0], i)));
 	}
 	else
-	{
-		down = instance()->isDown((int) mrbx_checkint(mrb, v[0]));
-	}
-	return mrbx_boolean(mrb, down);
+		buttons.push_back((int) mrbx_checkint(mrb, v[0]));
+	return mrbx_boolean(mrb, instance()->isDown(buttons));
 }
 
 static mrb_value w_set_visible(mrb_state *mrb, mrb_value self)
@@ -478,7 +317,7 @@ extern "C" void mrb_love_mouse_init(mrb_state *mrb)
 {
 	Module *inst = Module::getInstance<Module>(Module::M_MOUSE);
 	if (inst == nullptr)
-		inst = new HarnessMouse();
+		inst = new sdl::Mouse();
 	else
 		inst->retain();
 

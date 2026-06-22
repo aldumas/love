@@ -340,9 +340,14 @@ them changes when we swap.
       SDL's `"A"`); `modifier_active?` is now the real sticky-modifier set
       (numlock/capslock/scrolllock/mode). Key repeat is real state on the module,
       consulted directly by the event backend.
-- [~] (#mouse-backend) **mouse** — plain `love::Module` driving SDL state
-      directly instead of the real `Mouse` base (it manages cursors itself via
-      the real `sdl::Cursor`). Swap for `mouse/sdl/Mouse.cpp`.
+- [x] (#mouse-backend) **mouse** — done; the module instance is now the real
+      `love::mouse::sdl::Mouse` (`mouse/sdl/Mouse.cpp` linked; the base
+      `mouse/Mouse.h` is header-only). The Ruby bindings were unchanged — every
+      binding calls through the abstract `love::mouse::Mouse` interface, which
+      the SDL backend implements. The one wrapper adjustment: `down?` now builds
+      a `std::vector<int>` for the real `isDown(buttons)` signature. Cursor
+      objects (`new_cursor`/`get_system_cursor`/`set_cursor`/`get_cursor`) and
+      grab/relative-mode/visibility all run on the real backend.
 
 ---
 
