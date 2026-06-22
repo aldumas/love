@@ -41,6 +41,7 @@
 #include "common/mrb_runtime.h"
 #include "common/Data.h"
 #include "DataModule.h"
+#include "thread/threads.h"
 
 #include <type_traits>
 #include <cstring>
@@ -177,6 +178,57 @@ static mrb_value d_getUInt16(mrb_state *mrb, mrb_value self) { return d_getT<uin
 static mrb_value d_getInt32 (mrb_state *mrb, mrb_value self) { return d_getT<int32> (mrb, self); }
 static mrb_value d_getUInt32(mrb_state *mrb, mrb_value self) { return d_getT<uint32>(mrb, self); }
 
+// Raw data pointer as a TT_CPTR value, for native interop (mirrors the Lua
+// lightuserdata getPointer). The window module exposes get_pointer the same way.
+static mrb_value d_getPointer(mrb_state *mrb, mrb_value self)
+{
+	Data *t = mrbx_checktype<Data>(mrb, self);
+	return mrb_cptr_value(mrb, t->getData());
+}
+
+// FFI pointer: a LuaJIT-FFI-only fast path with no mruby analog. The Lua base
+// returns nil (the FFI layer overrode it only when the FFI was available); mruby
+// has no FFI, so this faithfully always yields nil. See PORTING.md §C.
+static mrb_value d_getFFIPointer(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	return mrb_nil_value();
+}
+
+// Forwards the block + receiver through mrb_protect_error so the mutex is
+// released even if the block raises (the C++ stack is not unwound by mruby's
+// longjmp-based exceptions, so RAII can't be relied on here).
+struct AtomicCtx { mrb_value blk; mrb_value self; };
+
+// perform_atomic { |data| ... } -- runs the block with the Data's mutex held,
+// so a read-modify-write on the buffer is atomic. Returns the block's value and
+// re-raises any error after unlocking. Mirrors Lua's Data:performAtomic (which
+// pcall'd under a love::thread::Lock); the channel module's perform_atomic too.
+static mrb_value d_performAtomic(mrb_state *mrb, mrb_value self)
+{
+	Data *t = mrbx_checktype<Data>(mrb, self);
+	mrb_value blk = mrb_nil_value();
+	mrb_get_args(mrb, "&", &blk);
+	if (mrb_nil_p(blk))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "perform_atomic requires a block");
+
+	love::thread::Mutex *mutex = t->getMutex();
+	mutex->lock();
+
+	AtomicCtx ctx = { blk, self };
+	mrb_bool error = FALSE;
+	mrb_value result = mrb_protect_error(mrb, [](mrb_state *m, void *ud) -> mrb_value {
+		AtomicCtx *c = (AtomicCtx *) ud;
+		return mrb_yield_argv(m, c->blk, 1, &c->self);
+	}, &ctx, &error);
+
+	mutex->unlock();
+
+	if (error)
+		mrb_exc_raise(mrb, result);
+	return result;
+}
+
 static const MrbReg dataInstanceFunctions[] =
 {
 	{ "get_string", d_getString, MRB_ARGS_KEY(2, 0) },
@@ -189,8 +241,9 @@ static const MrbReg dataInstanceFunctions[] =
 	{ "get_uint16", d_getUInt16, MRB_ARGS_KEY(2, 0) },
 	{ "get_int32",  d_getInt32,  MRB_ARGS_KEY(2, 0) },
 	{ "get_uint32", d_getUInt32, MRB_ARGS_KEY(2, 0) },
-	// TODO(mruby) #data-ffi-atomic: Data#get_pointer / #get_ffi_pointer (raw/FFI
-	// pointers) and #perform_atomic (mutex + block) not exposed. PORTING.md §A
+	{ "get_pointer",     d_getPointer,     MRB_ARGS_NONE() },
+	{ "get_ffi_pointer", d_getFFIPointer,  MRB_ARGS_NONE() },
+	{ "perform_atomic",  d_performAtomic,  MRB_ARGS_BLOCK() },
 	{ nullptr, nullptr, 0 }
 };
 

@@ -90,6 +90,42 @@ rescue => e
 end
 
 puts
+puts "=== get_pointer / get_ffi_pointer (#data-ffi-atomic) ==="
+pd = d.new_byte_data(size: 8)
+fail += 1 unless check("get_pointer non-nil", !pd.get_pointer.nil?, true)
+fail += 1 unless check("get_ffi_pointer nil (no FFI)", pd.get_ffi_pointer, nil)
+
+puts
+puts "=== perform_atomic (#data-ffi-atomic) ==="
+ad = d.new_byte_data(size: 4)
+# Block runs under the Data's mutex; yields the Data and propagates its result.
+ret = ad.perform_atomic do |x|
+  x.set_string(string: "ABCD")
+  x.get_size
+end
+fail += 1 unless check("block return propagates", ret, 4)
+fail += 1 unless check("mutation under lock took effect", ad.get_string, "ABCD")
+# No block -> ArgumentError.
+begin
+  ad.perform_atomic
+  puts "  FAIL perform_atomic without block did not raise"
+  fail += 1
+rescue => e
+  puts "  ok  no-block raised: #{e.class}: #{e.message}"
+end
+# A raising block propagates the error AND releases the mutex (so the next
+# perform_atomic still works rather than deadlocking).
+begin
+  ad.perform_atomic { raise "boom" }
+  puts "  FAIL raising block did not propagate"
+  fail += 1
+rescue => e
+  puts "  ok  raising block propagated: #{e.class}: #{e.message}"
+end
+again = ad.perform_atomic { 42 }
+fail += 1 unless check("mutex released after raise", again, 42)
+
+puts
 if fail == 0
   puts "ALL PASS"
 else

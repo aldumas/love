@@ -204,8 +204,17 @@ it). Base `Data` instance methods are registered once and inherited by every
       Note: this harness's mruby caps integer literals at signed 32-bit, so the
       8-byte `j`/`J` cases and >2^31 values can't be exercised from Ruby here,
       but the engine handles them (sizes derive from the format, not mrb_int).
-- [ ] (#data-ffi-atomic) `Data#get_pointer` / `#get_ffi_pointer` (raw/FFI
-      pointers) and `Data#perform_atomic` (mutex + block) — not exposed.
+- [x] (#data-ffi-atomic) `Data#get_pointer` / `#get_ffi_pointer` /
+      `#perform_atomic` — done. `get_pointer` returns the raw buffer pointer as a
+      TT_CPTR value (as the window module's `get_pointer` does). `get_ffi_pointer`
+      is a LuaJIT-FFI-only fast path with no mruby analog: the Lua base returned
+      nil unless the FFI overrode it, so under mruby it faithfully always returns
+      nil (see the §C FFI note). `perform_atomic { |data| ... }` runs the block
+      with the Data's mutex held (atomic read-modify-write), yields the Data,
+      returns the block's value, and — via `mrb_protect_error` — releases the
+      mutex even when the block raises before re-raising (mruby's longjmp
+      exceptions don't unwind the C++ stack, so RAII can't be relied on). Mirrors
+      the channel module's `perform_atomic`. Covered by `data_test.rb`.
 
 ### video
 Ported with the **real** theora decode backend (`video::theora::Video`, which
