@@ -35,14 +35,14 @@
 //   rotate / scale / shear / apply_transform / replace_transform /
 //   transform_point / inverse_transform_point), render state (blend mode,
 //   scissor, color mask, line width/style/join, point size, wireframe),
-//   new_image / new_quad / draw, new_font / print / printf, and shaders
-//   (new_shader / set_shader / get_shader + the Shader type)
+//   new_image / new_quad / draw, new_font / print / printf, shaders
+//   (new_shader / set_shader / get_shader + the Shader type), and canvas /
+//   render targets (new_canvas / set_canvas / get_canvas)
 //
 // -- exercising the real batched-draw path (a rectangle goes through the default
 // shader and the streaming vertex buffer). Stencil/depth state and the remaining
-// object types (SpriteBatch, Mesh, ParticleSystem, Canvas, TextBatch, Video) are
-// still to be exposed; the binding will grow onto the same real Graphics
-// instance.
+// object types (SpriteBatch, Mesh, ParticleSystem, TextBatch, Video) are still
+// to be exposed; the binding will grow onto the same real Graphics instance.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -1393,6 +1393,98 @@ static mrb_value w_get_shader(mrb_state *mrb, mrb_value self)
 	return mrbx_pushtype(mrb, shader);
 }
 
+// =========================================================================
+// Canvas / render targets. new_canvas returns a render-target Texture (modern
+// LÖVE merged Canvas into Texture); set_canvas / get_canvas swap the active
+// render target(s). A single 2D target or an Array of them (MRT) is supported;
+// the slice/mipmap/explicit-depthstencil-texture variants are not yet.
+// =========================================================================
+
+// new_canvas(width:, height:, format:, msaa:, readable:) -- width/height
+// default to the screen size. Returns a render-target Love::Texture.
+static mrb_value w_new_canvas(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[5];
+	mrbx_get_kwargs(mrb, {"width", "height", "format", "msaa", "readable"}, 0, v);
+
+	Texture::Settings s;
+	s.renderTarget = true;
+	s.width  = mrbx_optint(mrb, v[0], instance()->getWidth());
+	s.height = mrbx_optint(mrb, v[1], instance()->getHeight());
+	if (!mrb_undef_p(v[2]))
+	{
+		std::string fmt = mrbx_checkstring(mrb, v[2]);
+		PixelFormat pf;
+		if (!love::getConstant(fmt.c_str(), pf))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid pixel format: %s", fmt.c_str());
+		s.format = pf;
+	}
+	if (!mrb_undef_p(v[3]))
+		s.msaa = mrbx_checkint(mrb, v[3]);
+	if (!mrb_undef_p(v[4]))
+		s.readable.set(mrbx_checkboolean(mrb, v[4]));
+	s.dpiScale = instance()->getScreenDPIScale();
+
+	Texture *texture = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { texture = instance()->newTexture(s); }))
+		return mrb_nil_value();
+	mrb_value res = mrbx_pushtype(mrb, texture);
+	texture->release();
+	return res;
+}
+
+// set_canvas(canvas:) -- a render-target Texture, an Array of them (MRT), or
+// nil/omitted to reset to the backbuffer. stencil:/depth: request a temporary
+// depth/stencil buffer (needed for stencil tests while drawing to a canvas).
+static mrb_value w_set_canvas(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"canvas", "stencil", "depth"}, 0, v);
+
+	if (mrb_undef_p(v[0]) || mrb_nil_p(v[0]))
+	{
+		instance()->setRenderTarget();
+		return mrb_nil_value();
+	}
+
+	Graphics::RenderTargets targets;
+	if (mrb_array_p(v[0]))
+	{
+		mrb_int n = RARRAY_LEN(v[0]);
+		for (mrb_int i = 0; i < n; i++)
+			targets.colors.emplace_back(mrbx_checktype<Texture>(mrb, mrb_ary_ref(mrb, v[0], i)), 0);
+	}
+	else
+		targets.colors.emplace_back(mrbx_checktype<Texture>(mrb, v[0]), 0);
+
+	if (mrbx_optboolean(mrb, v[1], false))
+		targets.temporaryRTFlags |= Graphics::TEMPORARY_RT_STENCIL;
+	if (mrbx_optboolean(mrb, v[2], false))
+		targets.temporaryRTFlags |= Graphics::TEMPORARY_RT_DEPTH;
+
+	mrbx_catchexcept(mrb, [&]() { instance()->setRenderTargets(targets); });
+	return mrb_nil_value();
+}
+
+// get_canvas -> the active render-target Texture, an Array (for MRT), or nil
+// when drawing to the backbuffer.
+static mrb_value w_get_canvas(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	Graphics::RenderTargets targets = instance()->getRenderTargets();
+	int n = (int) targets.colors.size();
+	if (n == 0)
+		return mrb_nil_value();
+	if (n == 1)
+		return mrbx_pushtype(mrb, targets.colors[0].texture);
+	mrb_value arr = mrb_ary_new_capa(mrb, n);
+	for (int i = 0; i < n; i++)
+		mrb_ary_push(mrb, arr, mrbx_pushtype(mrb, targets.colors[i].texture));
+	return arr;
+}
+
 static const MrbReg functions[] =
 {
 	{ "active?",              w_active,               MRB_ARGS_NONE() },
@@ -1445,6 +1537,9 @@ static const MrbReg functions[] =
 	{ "new_shader",           w_new_shader,           MRB_ARGS_KEY(4, 0) },
 	{ "set_shader",           w_set_shader,           MRB_ARGS_KEY(1, 0) },
 	{ "get_shader",           w_get_shader,           MRB_ARGS_NONE() },
+	{ "new_canvas",           w_new_canvas,           MRB_ARGS_KEY(5, 0) },
+	{ "set_canvas",           w_set_canvas,           MRB_ARGS_KEY(3, 0) },
+	{ "get_canvas",           w_get_canvas,           MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
 };
 
