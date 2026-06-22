@@ -27,7 +27,7 @@ Legend: `[ ]` not started · `[~]` partial / stubbed · `[x]` done
 
 timer · math · filesystem · event · window · graphics (real backend) · keyboard · mouse
 · system · data · image · font · thread · sound · audio · touch · sensor · joystick
-· boot pipeline (arg/callbacks/boot)
+· video (theora) · boot pipeline (arg/callbacks/boot)
 
 ---
 
@@ -194,6 +194,22 @@ it). Base `Data` instance methods are registered once and inherited by every
 - [ ] (#data-ffi-atomic) `Data#get_pointer` / `#get_ffi_pointer` (raw/FFI
       pointers) and `Data#perform_atomic` (mutex + block) — not exposed.
 
+### video
+Ported with the **real** theora decode backend (`video::theora::Video`, which
+runs a decode worker thread; links system `libtheoradec` + the already-linked
+`libogg`). The module instance is created at init and surfaced through
+`Love::Graphics.new_video`; the `Love::VideoStream` object type exposes playback
+control (`play`/`pause`/`seek`/`rewind`/`tell`/`playing?`/`get_filename`/
+dimensions). The graphics-side `Love::Video` Drawable (YUV→RGB via the standard
+video shader) is registered by the graphics module — see `#gfx-backend`.
+Playback is timer-driven (a `TheoraVideoStream` owns a `DeltaSync` by default),
+so video advances on its worker thread once played.
+- [ ] (#video-audio) the audio track isn't wired: `love.graphics.new_video`
+      doesn't create/attach an audio `Source` (the Lua `newVideo` does this via
+      `getStream():getFilename()` + `love.audio.newSource(..., "stream")`), and
+      `setSource` / `getStream():setSync(source)` aren't exposed. Video plays
+      silently, frame-accurate on the timer sync.
+
 ---
 
 ## B. Temporary backends (lean stand-ins to be swapped wholesale)
@@ -296,10 +312,14 @@ them changes when we swap.
       `get_draw_mode` / `set_draw_range`/`get_draw_range` / `set_vertex_map`/
       `get_vertex_map` (1-based) / `flush`. Custom vertex formats, per-attribute
       access, attached attributes, and explicit index buffers aren't ported. The
-      only remaining object type is Video (theora playback). ParticleSystem#clone
-      isn't ported (needs the object identity map). Text is a plain String (the
-      colored-string-segments form isn't ported); SpriteBatch's add_layer/
-      set_layer (array textures) and
+      `Love::Video` object type is exposed (`new_video` (`file:` an .ogv theora
+      filename, `dpi_scale:`) + `play`/`pause`/`seek`/`rewind`/`tell`/`playing?`
+      / `get_stream` / `get_source` / dimensions / `set_filter`/`get_filter`),
+      backed by the now-linked **love.video** theora module (see its own line
+      below). **With this every graphics object type is exposed.**
+      ParticleSystem#clone isn't ported (needs the object identity map). Text is
+      a plain String (the colored-string-segments form isn't ported);
+      SpriteBatch's add_layer/set_layer (array textures) and
       attach_attribute (custom vertex buffers) aren't ported; nor are the
       slice/mipmap/explicit-depthstencil-texture set_canvas variants or the
       low-level set_stencil_state / set_depth_state.

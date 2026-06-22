@@ -49,6 +49,7 @@ namespace love { namespace audio      { extern "C" void mrb_love_audio_init(mrb_
 namespace love { namespace touch      { extern "C" void mrb_love_touch_init(mrb_state *mrb); } }
 namespace love { namespace sensor     { extern "C" void mrb_love_sensor_init(mrb_state *mrb); } }
 namespace love { namespace joystick   { extern "C" void mrb_love_joystick_init(mrb_state *mrb); } }
+namespace love { namespace video      { extern "C" void mrb_love_video_init(mrb_state *mrb); } }
 
 // Set by the thread module (LuaThread.h); the harness installs open_love so a
 // thread's fresh mrb_state gets the same Love:: modules as the main VM.
@@ -75,6 +76,7 @@ static void open_love(mrb_state *mrb)
 	love::event::mrb_love_event_init(mrb);
 	love::window::mrb_love_window_init(mrb);
 	love::graphics::mrb_love_graphics_init(mrb);
+	love::video::mrb_love_video_init(mrb);
 	love::keyboard::mrb_love_keyboard_init(mrb);
 	love::mouse::mrb_love_mouse_init(mrb);
 	love::system::mrb_love_system_init(mrb);

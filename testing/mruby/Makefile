@@ -47,9 +47,10 @@ CXXFLAGS += -DLOVE_MRUBY_NO_VULKAN
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
 # The sound module's lullaby backend links system libvorbis + libmodplug (the
 # Wave/FLAC/MP3 decoders are bundled — Wuff and dr_flac/dr_mp3, built below).
-# The audio module's real backend is OpenAL (system libopenal).
+# The audio module's real backend is OpenAL (system libopenal). The video
+# module's theora decode backend links system libtheoradec (+ libogg, above).
 LDLIBS   := -lmruby -lSDL3 -lGL -lpthread -lm -lz -lfreetype -lharfbuzz \
-            -lvorbisfile -lvorbis -logg -lmodplug -lopenal
+            -lvorbisfile -lvorbis -logg -lmodplug -lopenal -ltheoradec
 
 # --- physfs (compiled as C into a static archive) ------------------------
 PHYSFS_DIR  := $(LOVE_SRC)/libraries/physfs
@@ -249,7 +250,11 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/joystick/wrap_JoystickModule_mrb.cpp \
 	$(LOVE_SRC)/modules/joystick/Joystick.cpp \
 	$(LOVE_SRC)/modules/joystick/sdl/Joystick.cpp \
-	$(LOVE_SRC)/modules/joystick/sdl/JoystickModule.cpp
+	$(LOVE_SRC)/modules/joystick/sdl/JoystickModule.cpp \
+	$(LOVE_SRC)/modules/video/wrap_Video_mrb.cpp \
+	$(LOVE_SRC)/modules/video/theora/Video.cpp \
+	$(LOVE_SRC)/modules/video/theora/TheoraVideoStream.cpp \
+	$(LOVE_SRC)/modules/video/theora/OggDemuxer.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 

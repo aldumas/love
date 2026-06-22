@@ -39,13 +39,12 @@
 //   (new_shader / set_shader / get_shader + the Shader type), canvas /
 //   render targets (new_canvas / set_canvas / get_canvas), stencil/depth
 //   render state (set_stencil_mode / set_depth_mode), and the SpriteBatch
-//   TextBatch, ParticleSystem, and Mesh object types (new_sprite_batch /
-//   new_text_batch / new_particle_system / new_mesh)
+//   TextBatch, ParticleSystem, Mesh, and Video object types (new_sprite_batch /
+//   new_text_batch / new_particle_system / new_mesh / new_video)
 //
 // -- exercising the real batched-draw path (a rectangle goes through the default
-// shader and the streaming vertex buffer). Video (theora playback) is the last
-// object type still to be exposed; the binding will grow onto the same real
-// Graphics instance.
+// shader and the streaming vertex buffer). All of the graphics object types are
+// now exposed on this real Graphics instance.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -63,7 +62,10 @@
 #include "TextBatch.h"
 #include "ParticleSystem.h"
 #include "Mesh.h"
+#include "Video.h"
 #include "vertex.h"
+#include "video/VideoStream.h"
+#include "video/Video.h"
 #include "math/Transform.h"
 #include "math/MathModule.h"
 #include "image/Image.h"
@@ -2692,6 +2694,173 @@ static mrb_value w_new_mesh(mrb_state *mrb, mrb_value self)
 }
 
 // =========================================================================
+// Love::Video  (a theora video as a Drawable). Playback control delegates to
+// the underlying VideoStream. Drawing the video advances its frames (Video::
+// draw calls update internally). The audio track is not wired here -- a video
+// plays timer-driven via the stream's default DeltaSync.
+// =========================================================================
+
+static mrb_value w_video_get_stream(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_pushtype(mrb, mrbx_checktype<Video>(mrb, self)->getStream());
+}
+
+static mrb_value w_video_get_source(mrb_state *mrb, mrb_value self)
+{
+	love::audio::Source *src = mrbx_checktype<Video>(mrb, self)->getSource();
+	return src ? mrbx_pushtype(mrb, src) : mrb_nil_value();
+}
+
+static mrb_value w_video_play(mrb_state *mrb, mrb_value self)
+{
+	mrbx_checktype<Video>(mrb, self)->getStream()->play();
+	return mrb_nil_value();
+}
+
+static mrb_value w_video_pause(mrb_state *mrb, mrb_value self)
+{
+	mrbx_checktype<Video>(mrb, self)->getStream()->pause();
+	return mrb_nil_value();
+}
+
+static mrb_value w_video_seek(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"offset"}, 1, v);
+	mrbx_checktype<Video>(mrb, self)->getStream()->seek(mrbx_checknumber(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_video_rewind(mrb_state *mrb, mrb_value self)
+{
+	mrbx_checktype<Video>(mrb, self)->getStream()->seek(0.0);
+	return mrb_nil_value();
+}
+
+static mrb_value w_video_tell(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_number(mrb, mrbx_checktype<Video>(mrb, self)->getStream()->tell());
+}
+
+static mrb_value w_video_is_playing(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, mrbx_checktype<Video>(mrb, self)->getStream()->isPlaying());
+}
+
+static mrb_value w_video_get_width(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, mrbx_checktype<Video>(mrb, self)->getWidth());
+}
+
+static mrb_value w_video_get_height(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, mrbx_checktype<Video>(mrb, self)->getHeight());
+}
+
+static mrb_value w_video_get_dimensions(mrb_state *mrb, mrb_value self)
+{
+	Video *vid = mrbx_checktype<Video>(mrb, self);
+	mrb_value arr = mrb_ary_new_capa(mrb, 2);
+	mrb_ary_push(mrb, arr, mrbx_integer(mrb, vid->getWidth()));
+	mrb_ary_push(mrb, arr, mrbx_integer(mrb, vid->getHeight()));
+	return arr;
+}
+
+static mrb_value w_video_set_filter(mrb_state *mrb, mrb_value self)
+{
+	Video *vid = mrbx_checktype<Video>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"min", "mag"}, 1, v);
+	SamplerState s = vid->getSamplerState();
+	std::string minstr = mrbx_checkstring(mrb, v[0]);
+	if (!SamplerState::getConstant(minstr.c_str(), s.minFilter))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid filter mode: %s", minstr.c_str());
+	if (!mrb_undef_p(v[1]))
+	{
+		std::string magstr = mrbx_checkstring(mrb, v[1]);
+		if (!SamplerState::getConstant(magstr.c_str(), s.magFilter))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid filter mode: %s", magstr.c_str());
+	}
+	else
+		s.magFilter = s.minFilter;
+	mrbx_catchexcept(mrb, [&]() { vid->setSamplerState(s); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_video_get_filter(mrb_state *mrb, mrb_value self)
+{
+	const SamplerState &s = mrbx_checktype<Video>(mrb, self)->getSamplerState();
+	const char *mins = nullptr, *mags = nullptr;
+	SamplerState::getConstant(s.minFilter, mins);
+	SamplerState::getConstant(s.magFilter, mags);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "min", mrbx_string(mrb, mins ? mins : ""));
+	hset(mrb, out, "mag", mrbx_string(mrb, mags ? mags : ""));
+	return out;
+}
+
+static const MrbReg videoFunctions[] =
+{
+	{ "get_stream",     w_video_get_stream,     MRB_ARGS_NONE() },
+	{ "get_source",     w_video_get_source,     MRB_ARGS_NONE() },
+	{ "play",           w_video_play,           MRB_ARGS_NONE() },
+	{ "pause",          w_video_pause,          MRB_ARGS_NONE() },
+	{ "seek",           w_video_seek,           MRB_ARGS_KEY(1, 0) },
+	{ "rewind",         w_video_rewind,         MRB_ARGS_NONE() },
+	{ "tell",           w_video_tell,           MRB_ARGS_NONE() },
+	{ "playing?",       w_video_is_playing,     MRB_ARGS_NONE() },
+	{ "get_width",      w_video_get_width,      MRB_ARGS_NONE() },
+	{ "get_height",     w_video_get_height,     MRB_ARGS_NONE() },
+	{ "get_dimensions", w_video_get_dimensions, MRB_ARGS_NONE() },
+	{ "set_filter",     w_video_set_filter,     MRB_ARGS_KEY(2, 0) },
+	{ "get_filter",     w_video_get_filter,     MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// new_video(file:, dpi_scale:) -- file: an .ogv filename (theora). Returns a
+// Love::Video. The audio track is not wired up; the video plays timer-driven.
+static mrb_value w_new_video(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"file", "dpi_scale"}, 1, v);
+	std::string filename = mrbx_checkstring(mrb, v[0]);
+	float dpiscale = mrbx_optfloat(mrb, v[1], 1.0f);
+
+	auto videomod = Module::getInstance<love::video::Video>(Module::M_VIDEO);
+	if (videomod == nullptr)
+		mrb_raise(mrb, E_RUNTIME_ERROR, "The love.video module is not available.");
+	auto fs = Module::getInstance<filesystem::Filesystem>(Module::M_FILESYSTEM);
+	if (fs == nullptr)
+		mrb_raise(mrb, E_RUNTIME_ERROR, "Cannot load a video without the love.filesystem module.");
+
+	love::filesystem::File *file = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { file = fs->openFile(filename.c_str(), love::filesystem::File::MODE_READ); }))
+		return mrb_nil_value();
+
+	love::video::VideoStream *stream = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { stream = videomod->newVideoStream(file); });
+	file->release();
+	if (err)
+		return mrb_nil_value();
+
+	Video *video = nullptr;
+	bool err2 = mrbx_catchexcept(mrb, [&]() { video = instance()->newVideo(stream, dpiscale); });
+	stream->release();
+	if (err2)
+		return mrb_nil_value();
+
+	// TODO(mruby) #video-audio: wire the audio track here -- create a streaming
+	// audio Source from stream->getFilename() (via love.audio) and setSource() it,
+	// then stream->setSync(source's sync), as the Lua newVideo wrapper does. For
+	// now the video plays silently on the stream's default timer-driven DeltaSync.
+
+	mrb_value res = mrbx_pushtype(mrb, video);
+	video->release();
+	return res;
+}
+
+// =========================================================================
 // Canvas / render targets. new_canvas returns a render-target Texture (modern
 // LÖVE merged Canvas into Texture); set_canvas / get_canvas swap the active
 // render target(s). A single 2D target or an Array of them (MRT) is supported;
@@ -2846,6 +3015,7 @@ static const MrbReg functions[] =
 	{ "new_text_batch",       w_new_text_batch,       MRB_ARGS_KEY(2, 0) },
 	{ "new_particle_system",  w_new_particle_system,  MRB_ARGS_KEY(2, 0) },
 	{ "new_mesh",             w_new_mesh,             MRB_ARGS_KEY(4, 0) },
+	{ "new_video",            w_new_video,            MRB_ARGS_KEY(2, 0) },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -2878,6 +3048,7 @@ extern "C" void mrb_love_graphics_init(mrb_state *mrb)
 	mrbx_register_type(mrb, TextBatch::type, textBatchFunctions);
 	mrbx_register_type(mrb, ParticleSystem::type, particleSystemFunctions);
 	mrbx_register_type(mrb, Mesh::type, meshFunctions);
+	mrbx_register_type(mrb, Video::type, videoFunctions);
 }
 
 } // graphics

@@ -16,7 +16,7 @@ arguments**.
 | Ported module: filesystem (functions + File, FileData; real physfs backend) | `src/modules/filesystem/wrap_Filesystem_mrb.cpp` |
 | Ported module: event (queue + full SDL event translation: kbd/mouse/touch/joystick/gamepad/sensor/window/drop) | `src/modules/event/wrap_Event_mrb.cpp` |
 | Ported module: window (real `window::sdl::Window` backend; creates the GL context, drives the graphics backbuffer) | `src/modules/window/wrap_Window_mrb.cpp` |
-| Ported module: graphics (real shader-based batched renderer, OpenGL backend; clear/color/rectangle/present + transform stack + render state (blend/scissor/color_mask/line/point/wireframe) + shaders (new_shader/set_shader + Shader type) + canvas/render targets (new_canvas/set_canvas) + stencil/depth state + SpriteBatch + TextBatch + ParticleSystem + Mesh + new_image/new_quad/draw + new_font/print/printf; Texture, Quad, Font, Shader, SpriteBatch, TextBatch, ParticleSystem & Mesh object types) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
+| Ported module: graphics (real shader-based batched renderer, OpenGL backend; clear/color/rectangle/present + transform stack + render state (blend/scissor/color_mask/line/point/wireframe) + shaders (new_shader/set_shader + Shader type) + canvas/render targets (new_canvas/set_canvas) + stencil/depth state + SpriteBatch + TextBatch + ParticleSystem + Mesh + Video + new_image/new_quad/draw + new_font/print/printf; Texture, Quad, Font, Shader, SpriteBatch, TextBatch, ParticleSystem, Mesh & Video object types) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
 | Ported module: keyboard (real keyboard::sdl::Keyboard backend; canonical key/scancode enum names) | `src/modules/keyboard/wrap_Keyboard_mrb.cpp` |
 | Ported module: mouse (lean SDL state queries; cursor objects deferred) | `src/modules/mouse/wrap_Mouse_mrb.cpp` |
 | Ported module: system (OS/CPU/memory/clipboard/power/locale; real SDL backend) | `src/modules/system/wrap_System_mrb.cpp` |
@@ -29,6 +29,7 @@ arguments**.
 | Ported module: touch (real SDL backend; ids are 64-bit Integers) | `src/modules/touch/wrap_Touch_mrb.cpp` |
 | Ported module: sensor (real SDL backend) | `src/modules/sensor/wrap_Sensor_mrb.cpp` |
 | Ported module: joystick (Joystick type + module class methods; real SDL gamepad backend) | `src/modules/joystick/wrap_JoystickModule_mrb.cpp` |
+| Ported module: video (VideoStream type; real theora decode backend, surfaced via love.graphics.new_video) | `src/modules/video/wrap_Video_mrb.cpp` |
 | Ported boot scripts (arg/callbacks/boot) | `src/modules/love/{arg,callbacks,boot}.rb` |
 | Standalone demo harness | `testing/mruby/harness.cpp` |
 | nanosleep/deprecation stubs (avoid linking SDL for the demo) | `testing/mruby/delay_stub.cpp` |
@@ -37,7 +38,8 @@ arguments**.
 The full `love` executable can't link until all 74 module wrappers are ported,
 so this harness exercises the ported modules (`timer`, `math`, `filesystem`,
 `event`, `window`, `graphics`, `keyboard`, `mouse`, `system`, `data`, `image`,
-`font`, `thread`, `sound`, `audio`, `touch`, `sensor`, `joystick`) end-to-end.
+`font`, `thread`, `sound`, `audio`, `touch`, `sensor`, `joystick`, `video`)
+end-to-end.
 The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the
@@ -56,7 +58,9 @@ bundled header-only dr_flac/dr_mp3), and the audio module links the system
 fallback when no audio device is available). The input family (`touch`,
 `sensor`, `joystick`) uses the real SDL backends (no extra libraries beyond
 `libSDL3`); with no devices attached the lists are empty, but the global
-gamepad-mapping database is exercised.
+gamepad-mapping database is exercised. The video module links the system
+`libtheoradec` (with `libogg`, already linked for sound) for its real theora
+decode backend; `love.graphics.new_video` decodes an `.ogv` on a worker thread.
 
 ## API shape
 
@@ -221,7 +225,9 @@ narrative overview.
    `Love::TextBatch` object type (`new_text_batch` + set/setf/add/addf/metrics),
    the `Love::ParticleSystem` object type (`new_particle_system` + the full
    config + lifecycle API), the `Love::Mesh` object type (`new_mesh` +
-   vertices/texture/draw-mode/vertex-map, standard vertex format),
+   vertices/texture/draw-mode/vertex-map, standard vertex format), the
+   `Love::Video` object type (`new_video` + play/pause/seek/tell and the
+   `Love::VideoStream` type, real theora decode backend),
    plus
    `new_image` / `new_quad` / `draw`, `new_font` / `set_font` / `get_font` /
    `print` / `printf`, and the `Love::Texture`, `Love::Quad`, and `Love::Font`
@@ -232,8 +238,9 @@ narrative overview.
    streaming vertex buffer). Note `Love::Font` is shared between the love.font
    module (class methods) and the graphics Font type (instances), resolving the
    module-name vs type-name collision the same way data/thread/joystick do.
-   Still to expose on the same real instance: the Video object type (theora
-   playback).
+   Every graphics object type is now exposed on the real instance. (The video
+   audio track isn't wired up yet -- see PORTING.md `#video-audio`; video plays
+   silently on its timer-driven sync.)
    `HarnessKeyboard` is likewise a plain `love::Module` that resolves key and
    scancode names through SDL's own name lookups (`SDL_GetKeyFromName` etc.)
    rather than the 621-line `Keyboard.h` enum tables -- symmetric with the lean
