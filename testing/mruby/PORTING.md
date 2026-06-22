@@ -273,9 +273,15 @@ them changes when we swap.
       (`quad:` optional + the standard transform; `add` returns the 1-based
       index), `clear`, `flush`, `set_texture`/`get_texture`, `set_color`/
       `get_color`, `get_count`, `get_buffer_size`, `set_draw_range`/
-      `get_draw_range` (1-based, Hash or nil). Still to expose on this same
-      instance: the remaining object types (Mesh, ParticleSystem, TextBatch,
-      Video). SpriteBatch's add_layer/set_layer (array textures) and
+      `get_draw_range` (1-based, Hash or nil). The `Love::TextBatch` object type
+      is exposed: `new_text_batch` (`font:`, optional `text:` String) and `set`
+      (`text:`) / `setf` (`text:`/`wrap:`/`align:`) / `add` (`text:` + standard
+      transform -> 1-based index) / `addf` (`text:`/`wrap:`/`align:` + transform)
+      / `clear` / `set_font`/`get_font` / `get_width`/`get_height`/
+      `get_dimensions` (optional 1-based `index:`). Still to expose on this same
+      instance: the remaining object types (Mesh, ParticleSystem, Video). Text is
+      a plain String (the colored-string-segments form isn't ported);
+      SpriteBatch's add_layer/set_layer (array textures) and
       attach_attribute (custom vertex buffers) aren't ported; nor are the
       slice/mipmap/explicit-depthstencil-texture set_canvas variants or the
       low-level set_stencil_state / set_depth_state.

@@ -39,12 +39,12 @@
 //   (new_shader / set_shader / get_shader + the Shader type), canvas /
 //   render targets (new_canvas / set_canvas / get_canvas), stencil/depth
 //   render state (set_stencil_mode / set_depth_mode), and the SpriteBatch
-//   object type (new_sprite_batch)
+//   and TextBatch object types (new_sprite_batch / new_text_batch)
 //
 // -- exercising the real batched-draw path (a rectangle goes through the default
 // shader and the streaming vertex buffer). The remaining object types (Mesh,
-// ParticleSystem, TextBatch, Video) are still to be exposed; the binding will
-// grow onto the same real Graphics instance.
+// ParticleSystem, Video) are still to be exposed; the binding will grow onto the
+// same real Graphics instance.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -59,6 +59,7 @@
 #include "Font.h"
 #include "Shader.h"
 #include "SpriteBatch.h"
+#include "TextBatch.h"
 #include "vertex.h"
 #include "math/Transform.h"
 #include "math/MathModule.h"
@@ -1657,6 +1658,173 @@ static mrb_value w_new_sprite_batch(mrb_state *mrb, mrb_value self)
 }
 
 // =========================================================================
+// Love::TextBatch  (pre-laid-out text drawn through a font's glyph atlas).
+// Text is a plain String here (the colored-string-segments table form is not
+// ported); align names come from the Font enum, as in print/printf.
+// =========================================================================
+
+static std::vector<love::font::ColoredString> plain_text(mrb_state *mrb, mrb_value v)
+{
+	std::vector<love::font::ColoredString> text;
+	text.push_back({ mrbx_checkstring(mrb, v), Colorf(1, 1, 1, 1) });
+	return text;
+}
+
+static Font::AlignMode check_align(mrb_state *mrb, mrb_value v)
+{
+	Font::AlignMode align = Font::ALIGN_LEFT;
+	std::string str = mrbx_checkstring(mrb, v);
+	if (!Font::getConstant(str.c_str(), align))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid alignment: %s", str.c_str());
+	return align;
+}
+
+static mrb_value w_tb_set(mrb_state *mrb, mrb_value self)
+{
+	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"text"}, 1, v);
+	auto text = plain_text(mrb, v[0]);
+	mrbx_catchexcept(mrb, [&]() { t->set(text); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_tb_setf(mrb_state *mrb, mrb_value self)
+{
+	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"text", "wrap", "align"}, 3, v);
+	auto text = plain_text(mrb, v[0]);
+	float wrap = mrbx_checkfloat(mrb, v[1]);
+	Font::AlignMode align = check_align(mrb, v[2]);
+	mrbx_catchexcept(mrb, [&]() { t->set(text, wrap, align); });
+	return mrb_nil_value();
+}
+
+// add(text:, x:, y:, r:, sx:, sy:, ox:, oy:, kx:, ky:) -> 1-based index.
+static mrb_value w_tb_add(mrb_state *mrb, mrb_value self)
+{
+	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
+	mrb_value v[10];
+	mrbx_get_kwargs(mrb, {"text", "x", "y", "r", "sx", "sy", "ox", "oy", "kx", "ky"}, 1, v);
+	auto text = plain_text(mrb, v[0]);
+	Matrix4 m = standard_transform(mrb, v, 1);
+	int index = 0;
+	mrbx_catchexcept(mrb, [&]() { index = t->add(text, m); });
+	return mrbx_integer(mrb, index + 1);
+}
+
+// addf(text:, wrap:, align:, x:, ...) -> 1-based index.
+static mrb_value w_tb_addf(mrb_state *mrb, mrb_value self)
+{
+	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
+	mrb_value v[12];
+	mrbx_get_kwargs(mrb, {"text", "wrap", "align", "x", "y", "r", "sx", "sy", "ox", "oy", "kx", "ky"}, 3, v);
+	auto text = plain_text(mrb, v[0]);
+	float wrap = mrbx_checkfloat(mrb, v[1]);
+	Font::AlignMode align = check_align(mrb, v[2]);
+	Matrix4 m = standard_transform(mrb, v, 3);
+	int index = 0;
+	mrbx_catchexcept(mrb, [&]() { index = t->addf(text, wrap, align, m); });
+	return mrbx_integer(mrb, index + 1);
+}
+
+static mrb_value w_tb_clear(mrb_state *mrb, mrb_value self)
+{
+	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
+	mrbx_catchexcept(mrb, [&]() { t->clear(); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_tb_set_font(mrb_state *mrb, mrb_value self)
+{
+	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"font"}, 1, v);
+	Font *f = mrbx_checktype<Font>(mrb, v[0]);
+	mrbx_catchexcept(mrb, [&]() { t->setFont(f); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_tb_get_font(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_pushtype(mrb, mrbx_checktype<TextBatch>(mrb, self)->getFont());
+}
+
+// get_width(index:) / get_height(index:) -- index optional (1-based); omitted
+// measures the whole batch.
+static mrb_value w_tb_get_width(mrb_state *mrb, mrb_value self)
+{
+	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"index"}, 0, v);
+	int index = mrbx_optint(mrb, v[0], 0) - 1;
+	return mrbx_integer(mrb, t->getWidth(index < 0 ? 0 : index));
+}
+
+static mrb_value w_tb_get_height(mrb_state *mrb, mrb_value self)
+{
+	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"index"}, 0, v);
+	int index = mrbx_optint(mrb, v[0], 0) - 1;
+	return mrbx_integer(mrb, t->getHeight(index < 0 ? 0 : index));
+}
+
+static mrb_value w_tb_get_dimensions(mrb_state *mrb, mrb_value self)
+{
+	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"index"}, 0, v);
+	int index = mrbx_optint(mrb, v[0], 0) - 1;
+	if (index < 0) index = 0;
+	mrb_value arr = mrb_ary_new_capa(mrb, 2);
+	mrb_ary_push(mrb, arr, mrbx_integer(mrb, t->getWidth(index)));
+	mrb_ary_push(mrb, arr, mrbx_integer(mrb, t->getHeight(index)));
+	return arr;
+}
+
+static const MrbReg textBatchFunctions[] =
+{
+	{ "set",            w_tb_set,            MRB_ARGS_KEY(1, 0) },
+	{ "setf",           w_tb_setf,           MRB_ARGS_KEY(3, 0) },
+	{ "add",            w_tb_add,            MRB_ARGS_KEY(10, 0) },
+	{ "addf",           w_tb_addf,           MRB_ARGS_KEY(12, 0) },
+	{ "clear",          w_tb_clear,          MRB_ARGS_NONE() },
+	{ "set_font",       w_tb_set_font,       MRB_ARGS_KEY(1, 0) },
+	{ "get_font",       w_tb_get_font,       MRB_ARGS_NONE() },
+	{ "get_width",      w_tb_get_width,      MRB_ARGS_KEY(1, 0) },
+	{ "get_height",     w_tb_get_height,     MRB_ARGS_KEY(1, 0) },
+	{ "get_dimensions", w_tb_get_dimensions, MRB_ARGS_KEY(1, 0) },
+	{ nullptr, nullptr, 0 }
+};
+
+// new_text_batch(font:, text:) -- font required; text optional plain String.
+static mrb_value w_new_text_batch(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"font", "text"}, 1, v);
+	Font *font = mrbx_checktype<Font>(mrb, v[0]);
+
+	TextBatch *t = nullptr;
+	if (mrb_undef_p(v[1]) || mrb_nil_p(v[1]))
+	{
+		if (mrbx_catchexcept(mrb, [&]() { t = instance()->newTextBatch(font); }))
+			return mrb_nil_value();
+	}
+	else
+	{
+		auto text = plain_text(mrb, v[1]);
+		if (mrbx_catchexcept(mrb, [&]() { t = instance()->newTextBatch(font, text); }))
+			return mrb_nil_value();
+	}
+	mrb_value res = mrbx_pushtype(mrb, t);
+	t->release();
+	return res;
+}
+
+// =========================================================================
 // Canvas / render targets. new_canvas returns a render-target Texture (modern
 // LÖVE merged Canvas into Texture); set_canvas / get_canvas swap the active
 // render target(s). A single 2D target or an Array of them (MRT) is supported;
@@ -1808,6 +1976,7 @@ static const MrbReg functions[] =
 	{ "set_canvas",           w_set_canvas,           MRB_ARGS_KEY(3, 0) },
 	{ "get_canvas",           w_get_canvas,           MRB_ARGS_NONE() },
 	{ "new_sprite_batch",     w_new_sprite_batch,     MRB_ARGS_KEY(3, 0) },
+	{ "new_text_batch",       w_new_text_batch,       MRB_ARGS_KEY(2, 0) },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -1837,6 +2006,7 @@ extern "C" void mrb_love_graphics_init(mrb_state *mrb)
 	mrbx_register_type(mrb, Font::type, fontFunctions);
 	mrbx_register_type(mrb, Shader::type, shaderFunctions);
 	mrbx_register_type(mrb, SpriteBatch::type, spriteBatchFunctions);
+	mrbx_register_type(mrb, TextBatch::type, textBatchFunctions);
 }
 
 } // graphics
