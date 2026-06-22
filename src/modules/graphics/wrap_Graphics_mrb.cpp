@@ -35,13 +35,14 @@
 //   rotate / scale / shear / apply_transform / replace_transform /
 //   transform_point / inverse_transform_point), render state (blend mode,
 //   scissor, color mask, line width/style/join, point size, wireframe),
-//   new_image / new_quad / draw, and new_font / print / printf
+//   new_image / new_quad / draw, new_font / print / printf, and shaders
+//   (new_shader / set_shader / get_shader + the Shader type)
 //
 // -- exercising the real batched-draw path (a rectangle goes through the default
-// shader and the streaming vertex buffer). Shaders, stencil/depth state, and the
-// remaining object types (SpriteBatch, Mesh, ParticleSystem, Canvas, TextBatch,
-// Video) are still to be exposed; the binding will grow onto the same real
-// Graphics instance.
+// shader and the streaming vertex buffer). Stencil/depth state and the remaining
+// object types (SpriteBatch, Mesh, ParticleSystem, Canvas, TextBatch, Video) are
+// still to be exposed; the binding will grow onto the same real Graphics
+// instance.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -54,7 +55,9 @@
 #include "Texture.h"
 #include "Quad.h"
 #include "Font.h"
+#include "Shader.h"
 #include "math/Transform.h"
+#include "math/MathModule.h"
 #include "image/Image.h"
 #include "image/ImageData.h"
 #include "image/CompressedImageData.h"
@@ -1090,6 +1093,306 @@ static mrb_value w_printf(mrb_state *mrb, mrb_value self)
 	return mrb_nil_value();
 }
 
+// =========================================================================
+// Love::Shader  (a compiled shader program). A faithful-enough port of
+// wrap_Shader.cpp's send dispatch: floats/ints/uints/bools (scalars, vectors,
+// or arrays of either), matrices (a Love::Transform or a row-major number
+// array), and samplers (a Love::Texture or an array of them).
+// =========================================================================
+
+static float clamp01(float x) { return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); }
+
+// Pull component c of element `el` -- a bare scalar (components==1) or an Array.
+static mrb_value uniform_component(mrb_state *mrb, mrb_value el, int components, int c)
+{
+	if (components == 1 && !mrb_array_p(el))
+		return el;
+	return mrb_ary_ref(mrb, el, c);
+}
+
+static void shader_send_numbers(mrb_state *mrb, Shader *shader,
+	const Shader::UniformInfo *info, mrb_value value, bool colors)
+{
+	int components = info->components;
+
+	// Normalize `value` into a list of elements; each element supplies
+	// `components` scalars.
+	std::vector<mrb_value> elements;
+	if (mrb_array_p(value))
+	{
+		mrb_int n = RARRAY_LEN(value);
+		bool firstIsArray = n > 0 && mrb_array_p(mrb_ary_ref(mrb, value, 0));
+		if (firstIsArray)
+			for (mrb_int i = 0; i < n; i++) elements.push_back(mrb_ary_ref(mrb, value, i));
+		else if (components == 1)
+			for (mrb_int i = 0; i < n; i++) elements.push_back(mrb_ary_ref(mrb, value, i));
+		else
+			elements.push_back(value); // a single flat vector
+	}
+	else
+		elements.push_back(value); // a single scalar
+
+	int count = std::min((int) elements.size(), info->count);
+	if (count < 1)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "No values given to Shader#send.");
+
+	for (int i = 0; i < count; i++)
+	{
+		mrb_value el = elements[i];
+		for (int c = 0; c < components; c++)
+		{
+			mrb_value comp = uniform_component(mrb, el, components, c);
+			int idx = i * components + c;
+			switch (info->baseType)
+			{
+			case Shader::UNIFORM_FLOAT:
+				info->floats[idx] = colors ? clamp01(mrbx_checkfloat(mrb, comp)) : mrbx_checkfloat(mrb, comp);
+				break;
+			case Shader::UNIFORM_INT:
+				info->ints[idx] = mrbx_checkint(mrb, comp);
+				break;
+			case Shader::UNIFORM_UINT:
+				info->uints[idx] = (unsigned int) mrbx_checkint(mrb, comp);
+				break;
+			case Shader::UNIFORM_BOOL:
+				info->ints[idx] = mrbx_checkboolean(mrb, comp) ? 1 : 0;
+				break;
+			default:
+				mrb_raise(mrb, E_ARGUMENT_ERROR, "Unsupported uniform type for Shader#send.");
+			}
+		}
+	}
+
+	if (colors && info->baseType == Shader::UNIFORM_FLOAT && graphics::isGammaCorrect())
+	{
+		int gammacomponents = std::min(components, 3); // alpha stays linear
+		for (int i = 0; i < count; i++)
+			for (int j = 0; j < gammacomponents; j++)
+				info->floats[i * components + j] = math::gammaToLinear(info->floats[i * components + j]);
+	}
+
+	mrbx_catchexcept(mrb, [&]() { shader->updateUniform(info, count); });
+}
+
+static void shader_send_matrices(mrb_state *mrb, Shader *shader,
+	const Shader::UniformInfo *info, mrb_value value)
+{
+	int columns = info->matrix.columns;
+	int rows = info->matrix.rows;
+	int elements = columns * rows;
+
+	auto isMatrixElement = [&](mrb_value v) {
+		return mrb_array_p(v) || mrbx_istype<math::Transform>(mrb, v);
+	};
+
+	std::vector<mrb_value> mats;
+	if (mrbx_istype<math::Transform>(mrb, value))
+		mats.push_back(value);
+	else if (mrb_array_p(value))
+	{
+		mrb_int n = RARRAY_LEN(value);
+		if (n > 0 && isMatrixElement(mrb_ary_ref(mrb, value, 0)))
+			for (mrb_int i = 0; i < n; i++) mats.push_back(mrb_ary_ref(mrb, value, i));
+		else
+			mats.push_back(value); // a single flat, row-major matrix
+	}
+	else
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Expected a Transform or a number array for a matrix uniform.");
+
+	int count = std::min((int) mats.size(), info->count);
+	float *values = info->floats;
+
+	for (int i = 0; i < count; i++)
+	{
+		mrb_value m = mats[i];
+		if (columns == 4 && rows == 4 && mrbx_istype<math::Transform>(mrb, m))
+		{
+			math::Transform *t = mrbx_checktype<math::Transform>(mrb, m);
+			memcpy(&values[i * 16], t->getMatrix().getElements(), sizeof(float) * 16);
+			continue;
+		}
+		// A flat array laid out row-major; store column-major in memory.
+		for (int col = 0; col < columns; col++)
+			for (int row = 0; row < rows; row++)
+				values[i * elements + (col * rows + row)] =
+					mrbx_checkfloat(mrb, mrb_ary_ref(mrb, m, row * columns + col));
+	}
+
+	mrbx_catchexcept(mrb, [&]() { shader->updateUniform(info, count); });
+}
+
+static void shader_send_value(mrb_state *mrb, Shader *shader,
+	const Shader::UniformInfo *info, mrb_value value, bool colors)
+{
+	switch (info->baseType)
+	{
+	case Shader::UNIFORM_SAMPLER:
+	case Shader::UNIFORM_STORAGETEXTURE:
+	{
+		std::vector<Texture *> textures;
+		if (mrb_array_p(value))
+		{
+			mrb_int n = RARRAY_LEN(value);
+			for (mrb_int i = 0; i < n; i++)
+				textures.push_back(mrbx_checktype<Texture>(mrb, mrb_ary_ref(mrb, value, i)));
+		}
+		else
+			textures.push_back(mrbx_checktype<Texture>(mrb, value));
+		int count = std::min((int) textures.size(), info->count);
+		mrbx_catchexcept(mrb, [&]() { shader->sendTextures(info, textures.data(), count); });
+		return;
+	}
+	case Shader::UNIFORM_MATRIX:
+		shader_send_matrices(mrb, shader, info, value);
+		return;
+	default:
+		shader_send_numbers(mrb, shader, info, value, colors);
+		return;
+	}
+}
+
+static const Shader::UniformInfo *shader_lookup(mrb_state *mrb, Shader *shader, const std::string &name)
+{
+	const Shader::UniformInfo *info = shader->getUniformInfo(name);
+	if (info == nullptr || !info->active)
+		mrb_raisef(mrb, E_ARGUMENT_ERROR,
+			"Shader uniform '%s' does not exist or is not used.", name.c_str());
+	return info;
+}
+
+static mrb_value w_shader_send(mrb_state *mrb, mrb_value self)
+{
+	Shader *shader = mrbx_checktype<Shader>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"name", "value"}, 2, v);
+	std::string name = mrbx_checkstring(mrb, v[0]);
+	shader_send_value(mrb, shader, shader_lookup(mrb, shader, name), v[1], false);
+	return mrb_nil_value();
+}
+
+static mrb_value w_shader_send_color(mrb_state *mrb, mrb_value self)
+{
+	Shader *shader = mrbx_checktype<Shader>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"name", "value"}, 2, v);
+	std::string name = mrbx_checkstring(mrb, v[0]);
+	const Shader::UniformInfo *info = shader_lookup(mrb, shader, name);
+	if (info->baseType != Shader::UNIFORM_FLOAT || info->components < 3)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "send_color can only be used with vec3 or vec4 uniforms.");
+	shader_send_numbers(mrb, shader, info, v[1], true);
+	return mrb_nil_value();
+}
+
+static mrb_value w_shader_has_uniform(mrb_state *mrb, mrb_value self)
+{
+	Shader *shader = mrbx_checktype<Shader>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"name"}, 1, v);
+	return mrbx_boolean(mrb, shader->hasUniform(mrbx_checkstring(mrb, v[0])));
+}
+
+static mrb_value w_shader_get_warnings(mrb_state *mrb, mrb_value self)
+{
+	Shader *shader = mrbx_checktype<Shader>(mrb, self);
+	return mrbx_string(mrb, shader->getWarnings());
+}
+
+static const MrbReg shaderFunctions[] =
+{
+	{ "send",         w_shader_send,         MRB_ARGS_KEY(2, 0) },
+	{ "send_color",   w_shader_send_color,   MRB_ARGS_KEY(2, 0) },
+	{ "has_uniform?", w_shader_has_uniform,  MRB_ARGS_KEY(1, 0) },
+	{ "get_warnings", w_shader_get_warnings, MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// Read a shader-stage argument: a source String, or a filename String read via
+// the filesystem, or a FileData. Appends the GLSL source to `stages`.
+static void shader_push_stage(mrb_state *mrb, mrb_value v, std::vector<std::string> &stages)
+{
+	if (mrbx_istype<love::filesystem::FileData>(mrb, v))
+	{
+		auto fd = mrbx_checktype<love::filesystem::FileData>(mrb, v);
+		stages.push_back(std::string((const char *) fd->getData(), fd->getSize()));
+		return;
+	}
+
+	std::string s = mrbx_checkstring(mrb, v);
+	auto fs = Module::getInstance<filesystem::Filesystem>(Module::M_FILESYSTEM);
+	filesystem::Filesystem::Info finfo = {};
+	if (fs != nullptr && fs->getInfo(s.c_str(), finfo) && finfo.type == filesystem::Filesystem::FILETYPE_FILE)
+	{
+		love::filesystem::FileData *fd = nullptr;
+		if (mrbx_catchexcept(mrb, [&]() { fd = fs->read(s.c_str()); }))
+			return;
+		stages.push_back(std::string((const char *) fd->getData(), fd->getSize()));
+		fd->release();
+	}
+	else
+		stages.push_back(s); // treat as inline GLSL source
+}
+
+// new_shader(pixel:, vertex:) -- each optional but at least one required; each
+// is GLSL source, a filename, or a FileData. Plus optional defines: (Hash) and
+// debug_name: (String). The engine auto-detects each stage from its content.
+static mrb_value w_new_shader(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"pixel", "vertex", "defines", "debug_name"}, 0, v);
+
+	std::vector<std::string> stages;
+	if (!mrb_undef_p(v[0])) shader_push_stage(mrb, v[0], stages);
+	if (!mrb_undef_p(v[1])) shader_push_stage(mrb, v[1], stages);
+	if (stages.empty())
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "new_shader needs at least a pixel: or vertex: source.");
+
+	Shader::CompileOptions options;
+	if (!mrb_undef_p(v[2]) && mrb_hash_p(v[2]))
+	{
+		mrb_value keys = mrb_hash_keys(mrb, v[2]);
+		mrb_int n = RARRAY_LEN(keys);
+		for (mrb_int i = 0; i < n; i++)
+		{
+			mrb_value k = mrb_ary_ref(mrb, keys, i);
+			mrb_value val = mrb_hash_get(mrb, v[2], k);
+			options.defines[mrbx_checkstring(mrb, mrb_obj_as_string(mrb, k))] =
+				mrbx_checkstring(mrb, mrb_obj_as_string(mrb, val));
+		}
+	}
+	if (!mrb_undef_p(v[3]))
+		options.debugName = mrbx_checkstring(mrb, v[3]);
+
+	Shader *shader = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { shader = instance()->newShader(stages, options); }))
+		return mrb_nil_value();
+
+	mrb_value res = mrbx_pushtype(mrb, shader);
+	shader->release();
+	return res;
+}
+
+static mrb_value w_set_shader(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"shader"}, 0, v);
+	if (mrb_undef_p(v[0]) || mrb_nil_p(v[0]))
+		instance()->setShader();
+	else
+		instance()->setShader(mrbx_checktype<Shader>(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_get_shader(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	Shader *shader = instance()->getShader();
+	if (shader == nullptr)
+		return mrb_nil_value();
+	return mrbx_pushtype(mrb, shader);
+}
+
 static const MrbReg functions[] =
 {
 	{ "active?",              w_active,               MRB_ARGS_NONE() },
@@ -1139,6 +1442,9 @@ static const MrbReg functions[] =
 	{ "get_font",             w_get_font,             MRB_ARGS_NONE() },
 	{ "print",                w_print,                MRB_ARGS_KEY(11, 0) },
 	{ "printf",               w_printf,               MRB_ARGS_KEY(13, 0) },
+	{ "new_shader",           w_new_shader,           MRB_ARGS_KEY(4, 0) },
+	{ "set_shader",           w_set_shader,           MRB_ARGS_KEY(1, 0) },
+	{ "get_shader",           w_get_shader,           MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -1166,6 +1472,7 @@ extern "C" void mrb_love_graphics_init(mrb_state *mrb)
 	mrbx_register_type(mrb, Texture::type, textureFunctions);
 	mrbx_register_type(mrb, Quad::type, quadFunctions);
 	mrbx_register_type(mrb, Font::type, fontFunctions);
+	mrbx_register_type(mrb, Shader::type, shaderFunctions);
 }
 
 } // graphics

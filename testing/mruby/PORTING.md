@@ -252,10 +252,16 @@ them changes when we swap.
       (`r:`/`g:`/`b:`/`a:`, each optional, default true) / `get_color_mask`,
       `set_line_width` / `get_line_width`, `set_line_style` / `get_line_style`,
       `set_line_join` / `get_line_join`, `set_point_size` / `get_point_size`, and
-      `set_wireframe` / `wireframe?`. Still to expose on this same instance:
-      shaders, stencil/depth state (needs render targets / a stencil buffer), and
-      the remaining object types (SpriteBatch, Mesh, ParticleSystem, Canvas/render
-      targets, TextBatch, Video).
+      `set_wireframe` / `wireframe?`. Shaders are exposed: `new_shader`
+      (`pixel:`/`vertex:` each a GLSL source / filename / FileData, plus optional
+      `defines:` Hash and `debug_name:`), `set_shader` (no arg resets to default)
+      / `get_shader`, and the `Love::Shader` type with `send` (`name:`+`value:`,
+      handling float/int/uint/bool scalars+vectors+arrays, matrices via a
+      `Love::Transform` or row-major number array, and samplers via a
+      `Love::Texture`), `send_color`, `has_uniform?`, and `get_warnings`. Still to
+      expose on this same instance: stencil/depth state (needs render targets / a
+      stencil buffer) and the remaining object types (SpriteBatch, Mesh,
+      ParticleSystem, Canvas/render targets, TextBatch, Video).
 
       Name collision (font vs graphics): the love.font module and the graphics `Font`
       *type* both map to `Love::Font`. Resolved as for data/thread/joystick --
