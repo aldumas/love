@@ -36,13 +36,14 @@
 //   transform_point / inverse_transform_point), render state (blend mode,
 //   scissor, color mask, line width/style/join, point size, wireframe),
 //   new_image / new_quad / draw, new_font / print / printf, shaders
-//   (new_shader / set_shader / get_shader + the Shader type), and canvas /
-//   render targets (new_canvas / set_canvas / get_canvas)
+//   (new_shader / set_shader / get_shader + the Shader type), canvas /
+//   render targets (new_canvas / set_canvas / get_canvas), and stencil/depth
+//   render state (set_stencil_mode / set_depth_mode)
 //
 // -- exercising the real batched-draw path (a rectangle goes through the default
-// shader and the streaming vertex buffer). Stencil/depth state and the remaining
-// object types (SpriteBatch, Mesh, ParticleSystem, TextBatch, Video) are still
-// to be exposed; the binding will grow onto the same real Graphics instance.
+// shader and the streaming vertex buffer). The remaining object types
+// (SpriteBatch, Mesh, ParticleSystem, TextBatch, Video) are still to be exposed;
+// the binding will grow onto the same real Graphics instance.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -554,6 +555,82 @@ static mrb_value w_is_wireframe(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
 	return mrbx_boolean(mrb, instance()->isWireframe());
+}
+
+// set_stencil_mode(mode:, value:) -- mode omitted resets to "off"; value
+// defaults to 1. Drawing with a stencil mode reads/writes the stencil buffer
+// (request one via set_canvas(stencil: true) for a canvas, or the window's
+// stencil backbuffer).
+static mrb_value w_set_stencil_mode(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"mode", "value"}, 0, v);
+
+	if (mrb_undef_p(v[0]))
+	{
+		mrbx_catchexcept(mrb, [&]() { instance()->setStencilMode(); });
+		return mrb_nil_value();
+	}
+
+	std::string modestr = mrbx_checkstring(mrb, v[0]);
+	StencilMode mode;
+	if (!getConstant(modestr.c_str(), mode))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid stencil mode: %s", modestr.c_str());
+	int value = mrbx_optint(mrb, v[1], 1);
+	mrbx_catchexcept(mrb, [&]() { instance()->setStencilMode(mode, value); });
+	return mrb_nil_value();
+}
+
+// get_stencil_mode -> Hash {mode:, value:}.
+static mrb_value w_get_stencil_mode(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	int value = 0;
+	StencilMode mode = instance()->getStencilMode(value);
+	const char *modestr = nullptr;
+	getConstant(mode, modestr);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "mode", mrbx_string(mrb, modestr ? modestr : ""));
+	hset(mrb, out, "value", mrbx_integer(mrb, value));
+	return out;
+}
+
+// set_depth_mode(compare:, write:) -- both omitted resets to always/no-write.
+static mrb_value w_set_depth_mode(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"compare", "write"}, 0, v);
+
+	if (mrb_undef_p(v[0]) && mrb_undef_p(v[1]))
+	{
+		mrbx_catchexcept(mrb, [&]() { instance()->setDepthMode(); });
+		return mrb_nil_value();
+	}
+
+	std::string str = mrbx_checkstring(mrb, v[0]);
+	CompareMode compare;
+	if (!getConstant(str.c_str(), compare))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid compare mode: %s", str.c_str());
+	bool write = mrbx_optboolean(mrb, v[1], false);
+	mrbx_catchexcept(mrb, [&]() { instance()->setDepthMode(compare, write); });
+	return mrb_nil_value();
+}
+
+// get_depth_mode -> Hash {compare:, write:}.
+static mrb_value w_get_depth_mode(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	CompareMode compare = COMPARE_ALWAYS;
+	bool write = false;
+	instance()->getDepthMode(compare, write);
+	const char *str = nullptr;
+	getConstant(compare, str);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "compare", mrbx_string(mrb, str ? str : ""));
+	hset(mrb, out, "write", mrbx_boolean(mrb, write));
+	return out;
 }
 
 // =========================================================================
@@ -1522,6 +1599,10 @@ static const MrbReg functions[] =
 	{ "get_point_size",       w_get_point_size,       MRB_ARGS_NONE() },
 	{ "set_wireframe",        w_set_wireframe,        MRB_ARGS_KEY(1, 0) },
 	{ "wireframe?",           w_is_wireframe,         MRB_ARGS_NONE() },
+	{ "set_stencil_mode",     w_set_stencil_mode,     MRB_ARGS_KEY(2, 0) },
+	{ "get_stencil_mode",     w_get_stencil_mode,     MRB_ARGS_NONE() },
+	{ "set_depth_mode",       w_set_depth_mode,       MRB_ARGS_KEY(2, 0) },
+	{ "get_depth_mode",       w_get_depth_mode,       MRB_ARGS_NONE() },
 	{ "present",              w_present,              MRB_ARGS_NONE() },
 	{ "get_width",            w_get_width,            MRB_ARGS_NONE() },
 	{ "get_height",           w_get_height,           MRB_ARGS_NONE() },

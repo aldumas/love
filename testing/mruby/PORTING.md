@@ -263,12 +263,15 @@ them changes when we swap.
       screen, plus optional `format:`/`msaa:`/`readable:`) returns a render-target
       `Love::Texture`; `set_canvas` (`canvas:` a Texture or Array of them for MRT,
       nil/omitted resets to the backbuffer; `stencil:`/`depth:` request a
-      temporary depth/stencil buffer) / `get_canvas`. Still to expose on this same
-      instance: stencil/depth render state (the set_stencil_mode / set_depth_mode
-      setters -- the temporary depth/stencil buffer they need is already wired
-      through set_canvas) and the remaining object types (SpriteBatch, Mesh,
+      temporary depth/stencil buffer) / `get_canvas`. Stencil/depth render state
+      is exposed: `set_stencil_mode` (`mode:` "off"/"draw"/"test"/"custom",
+      omitted resets to off; `value:` defaults 1) / `get_stencil_mode` (-> Hash
+      {mode:, value:}) and `set_depth_mode` (`compare:`, `write:`; both omitted
+      reset) / `get_depth_mode` (-> Hash {compare:, write:}). Still to expose on
+      this same instance: the remaining object types (SpriteBatch, Mesh,
       ParticleSystem, TextBatch, Video). The slice/mipmap/explicit-depthstencil-
-      texture set_canvas variants aren't ported.
+      texture set_canvas variants and the low-level set_stencil_state /
+      set_depth_state aren't ported.
 
       Name collision (font vs graphics): the love.font module and the graphics `Font`
       *type* both map to `Love::Font`. Resolved as for data/thread/joystick --
