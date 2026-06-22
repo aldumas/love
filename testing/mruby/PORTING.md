@@ -287,11 +287,19 @@ them changes when we swap.
       relative_rotation) and the lifecycle (`start`/`stop`/`pause`/`reset`/
       `emit`(`count:`)/`update`(`dt:`)/`get_count`/`active?`/`paused?`/`stopped?`/
       `empty?`/`full?`). min/max (or x/y component) pairs are keyword args, and
-      multi-value getters return Hashes; colors are Arrays of [r,g,b,a]. Still to
-      expose on this same instance: the remaining object types (Mesh, Video).
-      ParticleSystem#clone isn't ported (needs the object identity map). Text is
-      a plain String (the colored-string-segments form isn't ported);
-      SpriteBatch's add_layer/set_layer (array textures) and
+      multi-value getters return Hashes; colors are Arrays of [r,g,b,a]. The
+      `Love::Mesh` object type is exposed for the **standard vertex format** (a
+      vertex is `[x, y, u, v, r, g, b, a]`): `new_mesh` (`vertices:` an Array of
+      such, or `count:` for an empty mesh; `mode:` "fan"/"strip"/"triangles"/
+      "points"; `usage:`) and `set_vertex`/`get_vertex` (1-based) / `set_vertices`
+      / `get_vertex_count` / `set_texture`/`get_texture` / `set_draw_mode`/
+      `get_draw_mode` / `set_draw_range`/`get_draw_range` / `set_vertex_map`/
+      `get_vertex_map` (1-based) / `flush`. Custom vertex formats, per-attribute
+      access, attached attributes, and explicit index buffers aren't ported. The
+      only remaining object type is Video (theora playback). ParticleSystem#clone
+      isn't ported (needs the object identity map). Text is a plain String (the
+      colored-string-segments form isn't ported); SpriteBatch's add_layer/
+      set_layer (array textures) and
       attach_attribute (custom vertex buffers) aren't ported; nor are the
       slice/mipmap/explicit-depthstencil-texture set_canvas variants or the
       low-level set_stencil_state / set_depth_state.

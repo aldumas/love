@@ -39,12 +39,12 @@
 //   (new_shader / set_shader / get_shader + the Shader type), canvas /
 //   render targets (new_canvas / set_canvas / get_canvas), stencil/depth
 //   render state (set_stencil_mode / set_depth_mode), and the SpriteBatch
-//   TextBatch, and ParticleSystem object types (new_sprite_batch /
-//   new_text_batch / new_particle_system)
+//   TextBatch, ParticleSystem, and Mesh object types (new_sprite_batch /
+//   new_text_batch / new_particle_system / new_mesh)
 //
 // -- exercising the real batched-draw path (a rectangle goes through the default
-// shader and the streaming vertex buffer). The remaining object types (Mesh,
-// Video) are still to be exposed; the binding will grow onto the same real
+// shader and the streaming vertex buffer). Video (theora playback) is the last
+// object type still to be exposed; the binding will grow onto the same real
 // Graphics instance.
 
 #include "common/config.h"
@@ -62,6 +62,7 @@
 #include "SpriteBatch.h"
 #include "TextBatch.h"
 #include "ParticleSystem.h"
+#include "Mesh.h"
 #include "vertex.h"
 #include "math/Transform.h"
 #include "math/MathModule.h"
@@ -2425,6 +2426,272 @@ static mrb_value w_new_particle_system(mrb_state *mrb, mrb_value self)
 }
 
 // =========================================================================
+// Love::Mesh  (standard-format only: a vertex is [x, y, u, v, r, g, b, a], the
+// default position/texcoord/color layout). Custom vertex formats, per-attribute
+// access, attached attributes, and index buffers are not ported.
+// =========================================================================
+
+static PrimitiveType check_mesh_mode(mrb_state *mrb, mrb_value v, PrimitiveType def)
+{
+	if (mrb_undef_p(v))
+		return def;
+	std::string str = mrbx_checkstring(mrb, v);
+	PrimitiveType mode;
+	if (!getConstant(str.c_str(), mode))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid mesh draw mode: %s", str.c_str());
+	return mode;
+}
+
+// Read a vertex array element [x, y, u, v, r, g, b, a] (u..a optional) into the
+// default-format Vertex struct.
+static Vertex read_std_vertex(mrb_state *mrb, mrb_value el)
+{
+	if (!mrb_array_p(el))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Each vertex must be an [x, y, u, v, r, g, b, a] array.");
+	auto num = [&](int i, float def) {
+		mrb_value c = mrb_ary_ref(mrb, el, i);
+		return mrb_undef_p(c) ? def : mrbx_checkfloat(mrb, c);
+	};
+	Vertex v;
+	v.x = num(0, 0.0f);
+	v.y = num(1, 0.0f);
+	v.s = num(2, 0.0f);
+	v.t = num(3, 0.0f);
+	v.color.r = (unsigned char) (clamp01(num(4, 1.0f)) * 255.0f);
+	v.color.g = (unsigned char) (clamp01(num(5, 1.0f)) * 255.0f);
+	v.color.b = (unsigned char) (clamp01(num(6, 1.0f)) * 255.0f);
+	v.color.a = (unsigned char) (clamp01(num(7, 1.0f)) * 255.0f);
+	return v;
+}
+
+static void mesh_write_vertex(mrb_state *mrb, Mesh *t, size_t index, mrb_value el)
+{
+	Vertex v = read_std_vertex(mrb, el);
+	char *data = nullptr;
+	size_t offset = 0;
+	if (mrbx_catchexcept(mrb, [&]() { data = (char *) t->checkVertexDataOffset(index, &offset); }))
+		return;
+	memcpy(data, &v, sizeof(Vertex));
+	t->setVertexDataModified(offset, t->getVertexStride());
+}
+
+static mrb_value w_mesh_set_vertex(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"index", "vertex"}, 2, v);
+	mesh_write_vertex(mrb, t, (size_t) mrbx_checkint(mrb, v[0]) - 1, v[1]);
+	return mrb_nil_value();
+}
+
+static mrb_value w_mesh_get_vertex(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"index"}, 1, v);
+	const char *data = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { data = (const char *) t->checkVertexDataOffset((size_t) mrbx_checkint(mrb, v[0]) - 1, nullptr); }))
+		return mrb_nil_value();
+	Vertex vert;
+	memcpy(&vert, data, sizeof(Vertex));
+	mrb_value arr = mrb_ary_new_capa(mrb, 8);
+	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.x));
+	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.y));
+	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.s));
+	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.t));
+	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.color.r / 255.0));
+	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.color.g / 255.0));
+	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.color.b / 255.0));
+	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.color.a / 255.0));
+	return arr;
+}
+
+// set_vertices(vertices:) -- overwrite from vertex 1 (1-based).
+static mrb_value w_mesh_set_vertices(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"vertices"}, 1, v);
+	if (!mrb_array_p(v[0]))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "vertices: must be an Array of vertex arrays.");
+	mrb_int n = RARRAY_LEN(v[0]);
+	for (mrb_int i = 0; i < n; i++)
+		mesh_write_vertex(mrb, t, (size_t) i, mrb_ary_ref(mrb, v[0], i));
+	return mrb_nil_value();
+}
+
+static mrb_value w_mesh_get_vertex_count(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, (int) mrbx_checktype<Mesh>(mrb, self)->getVertexCount());
+}
+
+static mrb_value w_mesh_set_texture(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"texture"}, 0, v);
+	if (mrb_undef_p(v[0]) || mrb_nil_p(v[0]))
+		t->setTexture();
+	else
+		t->setTexture(mrbx_checktype<Texture>(mrb, v[0]));
+	return mrb_nil_value();
+}
+
+static mrb_value w_mesh_get_texture(mrb_state *mrb, mrb_value self)
+{
+	Texture *tex = mrbx_checktype<Mesh>(mrb, self)->getTexture();
+	return tex ? mrbx_pushtype(mrb, tex) : mrb_nil_value();
+}
+
+static mrb_value w_mesh_set_draw_mode(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"mode"}, 1, v);
+	t->setDrawMode(check_mesh_mode(mrb, v[0], PRIMITIVE_TRIANGLE_FAN));
+	return mrb_nil_value();
+}
+
+static mrb_value w_mesh_get_draw_mode(mrb_state *mrb, mrb_value self)
+{
+	const char *str = nullptr;
+	getConstant(mrbx_checktype<Mesh>(mrb, self)->getDrawMode(), str);
+	return mrbx_string(mrb, str ? str : "");
+}
+
+static mrb_value w_mesh_set_draw_range(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"start", "count"}, 0, v);
+	if (mrb_undef_p(v[0]) && mrb_undef_p(v[1]))
+		t->setDrawRange();
+	else
+	{
+		int start = mrbx_checkint(mrb, v[0]) - 1;
+		int count = mrbx_checkint(mrb, v[1]);
+		mrbx_catchexcept(mrb, [&]() { t->setDrawRange(start, count); });
+	}
+	return mrb_nil_value();
+}
+
+static mrb_value w_mesh_get_draw_range(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	int start = 0, count = 0;
+	if (!t->getDrawRange(start, count))
+		return mrb_nil_value();
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "start", mrbx_integer(mrb, start + 1));
+	hset(mrb, out, "count", mrbx_integer(mrb, count));
+	return out;
+}
+
+// set_vertex_map(map:) -- an Array of 1-based vertex indices; omitted clears.
+static mrb_value w_mesh_set_vertex_map(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"map"}, 0, v);
+	if (mrb_undef_p(v[0]) || mrb_nil_p(v[0]))
+	{
+		t->setVertexMap();
+		return mrb_nil_value();
+	}
+	if (!mrb_array_p(v[0]))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "map: must be an Array of 1-based indices.");
+	std::vector<uint32> map;
+	mrb_int n = RARRAY_LEN(v[0]);
+	for (mrb_int i = 0; i < n; i++)
+		map.push_back((uint32) (mrbx_checkint(mrb, mrb_ary_ref(mrb, v[0], i)) - 1));
+	mrbx_catchexcept(mrb, [&]() { t->setVertexMap(map); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_mesh_get_vertex_map(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	std::vector<uint32> map;
+	if (!t->getVertexMap(map))
+		return mrb_nil_value();
+	mrb_value arr = mrb_ary_new_capa(mrb, (mrb_int) map.size());
+	for (uint32 idx : map)
+		mrb_ary_push(mrb, arr, mrbx_integer(mrb, (int) idx + 1));
+	return arr;
+}
+
+static mrb_value w_mesh_flush(mrb_state *mrb, mrb_value self)
+{
+	mrbx_checktype<Mesh>(mrb, self)->flush();
+	return mrb_nil_value();
+}
+
+static const MrbReg meshFunctions[] =
+{
+	{ "set_vertex",       w_mesh_set_vertex,       MRB_ARGS_KEY(2, 0) },
+	{ "get_vertex",       w_mesh_get_vertex,       MRB_ARGS_KEY(1, 0) },
+	{ "set_vertices",     w_mesh_set_vertices,     MRB_ARGS_KEY(1, 0) },
+	{ "get_vertex_count", w_mesh_get_vertex_count, MRB_ARGS_NONE() },
+	{ "set_texture",      w_mesh_set_texture,      MRB_ARGS_KEY(1, 0) },
+	{ "get_texture",      w_mesh_get_texture,      MRB_ARGS_NONE() },
+	{ "set_draw_mode",    w_mesh_set_draw_mode,    MRB_ARGS_KEY(1, 0) },
+	{ "get_draw_mode",    w_mesh_get_draw_mode,    MRB_ARGS_NONE() },
+	{ "set_draw_range",   w_mesh_set_draw_range,   MRB_ARGS_KEY(2, 0) },
+	{ "get_draw_range",   w_mesh_get_draw_range,   MRB_ARGS_NONE() },
+	{ "set_vertex_map",   w_mesh_set_vertex_map,   MRB_ARGS_KEY(1, 0) },
+	{ "get_vertex_map",   w_mesh_get_vertex_map,   MRB_ARGS_NONE() },
+	{ "flush",            w_mesh_flush,            MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// new_mesh(vertices:, count:, mode:, usage:) -- give vertices: (an Array of
+// [x,y,u,v,r,g,b,a]) or count: (an empty mesh of N vertices). mode defaults to
+// "fan", usage to "dynamic". Standard vertex format only.
+static mrb_value w_new_mesh(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"vertices", "count", "mode", "usage"}, 0, v);
+
+	PrimitiveType drawmode = check_mesh_mode(mrb, v[2], PRIMITIVE_TRIANGLE_FAN);
+	BufferDataUsage usage = BUFFERDATAUSAGE_DYNAMIC;
+	if (!mrb_undef_p(v[3]))
+	{
+		std::string str = mrbx_checkstring(mrb, v[3]);
+		if (!getConstant(str.c_str(), usage))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid usage hint: %s", str.c_str());
+	}
+
+	std::vector<Buffer::DataDeclaration> format = Mesh::getDefaultVertexFormat();
+	Mesh *t = nullptr;
+
+	if (!mrb_undef_p(v[0]) && mrb_array_p(v[0]))
+	{
+		mrb_int n = RARRAY_LEN(v[0]);
+		std::vector<Vertex> vertices;
+		vertices.reserve(n);
+		for (mrb_int i = 0; i < n; i++)
+			vertices.push_back(read_std_vertex(mrb, mrb_ary_ref(mrb, v[0], i)));
+		if (mrbx_catchexcept(mrb, [&]() {
+			t = instance()->newMesh(format, vertices.data(), vertices.size() * sizeof(Vertex), drawmode, usage);
+		}))
+			return mrb_nil_value();
+	}
+	else if (!mrb_undef_p(v[1]))
+	{
+		int count = mrbx_checkint(mrb, v[1]);
+		if (mrbx_catchexcept(mrb, [&]() { t = instance()->newMesh(format, count, drawmode, usage); }))
+			return mrb_nil_value();
+	}
+	else
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "new_mesh needs vertices: or count:.");
+
+	mrb_value res = mrbx_pushtype(mrb, t);
+	t->release();
+	return res;
+}
+
+// =========================================================================
 // Canvas / render targets. new_canvas returns a render-target Texture (modern
 // LÖVE merged Canvas into Texture); set_canvas / get_canvas swap the active
 // render target(s). A single 2D target or an Array of them (MRT) is supported;
@@ -2578,6 +2845,7 @@ static const MrbReg functions[] =
 	{ "new_sprite_batch",     w_new_sprite_batch,     MRB_ARGS_KEY(3, 0) },
 	{ "new_text_batch",       w_new_text_batch,       MRB_ARGS_KEY(2, 0) },
 	{ "new_particle_system",  w_new_particle_system,  MRB_ARGS_KEY(2, 0) },
+	{ "new_mesh",             w_new_mesh,             MRB_ARGS_KEY(4, 0) },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -2609,6 +2877,7 @@ extern "C" void mrb_love_graphics_init(mrb_state *mrb)
 	mrbx_register_type(mrb, SpriteBatch::type, spriteBatchFunctions);
 	mrbx_register_type(mrb, TextBatch::type, textBatchFunctions);
 	mrbx_register_type(mrb, ParticleSystem::type, particleSystemFunctions);
+	mrbx_register_type(mrb, Mesh::type, meshFunctions);
 }
 
 } // graphics

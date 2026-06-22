@@ -16,7 +16,7 @@ arguments**.
 | Ported module: filesystem (functions + File, FileData; real physfs backend) | `src/modules/filesystem/wrap_Filesystem_mrb.cpp` |
 | Ported module: event (queue + full SDL event translation: kbd/mouse/touch/joystick/gamepad/sensor/window/drop) | `src/modules/event/wrap_Event_mrb.cpp` |
 | Ported module: window (real `window::sdl::Window` backend; creates the GL context, drives the graphics backbuffer) | `src/modules/window/wrap_Window_mrb.cpp` |
-| Ported module: graphics (real shader-based batched renderer, OpenGL backend; clear/color/rectangle/present + transform stack + render state (blend/scissor/color_mask/line/point/wireframe) + shaders (new_shader/set_shader + Shader type) + canvas/render targets (new_canvas/set_canvas) + stencil/depth state + SpriteBatch + TextBatch + ParticleSystem + new_image/new_quad/draw + new_font/print/printf; Texture, Quad, Font, Shader, SpriteBatch, TextBatch & ParticleSystem object types) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
+| Ported module: graphics (real shader-based batched renderer, OpenGL backend; clear/color/rectangle/present + transform stack + render state (blend/scissor/color_mask/line/point/wireframe) + shaders (new_shader/set_shader + Shader type) + canvas/render targets (new_canvas/set_canvas) + stencil/depth state + SpriteBatch + TextBatch + ParticleSystem + Mesh + new_image/new_quad/draw + new_font/print/printf; Texture, Quad, Font, Shader, SpriteBatch, TextBatch, ParticleSystem & Mesh object types) | `src/modules/graphics/wrap_Graphics_mrb.cpp` |
 | Ported module: keyboard (real keyboard::sdl::Keyboard backend; canonical key/scancode enum names) | `src/modules/keyboard/wrap_Keyboard_mrb.cpp` |
 | Ported module: mouse (lean SDL state queries; cursor objects deferred) | `src/modules/mouse/wrap_Mouse_mrb.cpp` |
 | Ported module: system (OS/CPU/memory/clipboard/power/locale; real SDL backend) | `src/modules/system/wrap_System_mrb.cpp` |
@@ -220,7 +220,8 @@ narrative overview.
    object type (`new_sprite_batch` + add/set/clear/color/draw-range), the
    `Love::TextBatch` object type (`new_text_batch` + set/setf/add/addf/metrics),
    the `Love::ParticleSystem` object type (`new_particle_system` + the full
-   config + lifecycle API),
+   config + lifecycle API), the `Love::Mesh` object type (`new_mesh` +
+   vertices/texture/draw-mode/vertex-map, standard vertex format),
    plus
    `new_image` / `new_quad` / `draw`, `new_font` / `set_font` / `get_font` /
    `print` / `printf`, and the `Love::Texture`, `Love::Quad`, and `Love::Font`
@@ -231,8 +232,8 @@ narrative overview.
    streaming vertex buffer). Note `Love::Font` is shared between the love.font
    module (class methods) and the graphics Font type (instances), resolving the
    module-name vs type-name collision the same way data/thread/joystick do.
-   Still to expose on the same real instance: the remaining object types
-   (Mesh, Video).
+   Still to expose on the same real instance: the Video object type (theora
+   playback).
    `HarnessKeyboard` is likewise a plain `love::Module` that resolves key and
    scancode names through SDL's own name lookups (`SDL_GetKeyFromName` etc.)
    rather than the 621-line `Keyboard.h` enum tables -- symmetric with the lean
