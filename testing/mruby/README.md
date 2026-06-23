@@ -52,10 +52,14 @@ with VM calls embedded in the engine class (World's collision callbacks, the
 `lua_State`-taking helpers on World/Body/Shape); those Lua-only sections are
 guarded with `#ifndef LOVE_MRUBY` and tracked in PORTING.md. The World-level
 result-returning spatial queries are in too — `get_shapes_in_area` (AABB query)
-and `ray_cast_any` / `ray_cast_closest`. Joints, contacts, collision callbacks,
-and the **user-callback** query/ray-cast variants (which need an mruby
-callback-reference mechanism) are deferred to later slices — see PORTING.md §A
-for the full breakdown.
+and `ray_cast_any` / `ray_cast_closest`. All 11 joint types are ported as well:
+the `Physics.new_*_joint` factories (keyword arguments), the per-joint
+setters/getters and multi-return getters as Hashes (`get_anchors`, `get_limits`,
+`get_axis`, `get_target`, `get_ground_anchors`, `get_linear_offset`), and
+`World`/`Body` `get_joints`. Contacts, collision callbacks, arbitrary user data
+(and the wrapper-identity registry it brings), and the **user-callback**
+query/ray-cast variants (which need an mruby callback-reference mechanism) are
+deferred to later slices — see PORTING.md §A for the full breakdown.
 The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the

@@ -131,6 +131,8 @@ public:
 	 **/
 	float getUpperLimit() const;
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-joints: getLimits / getAxis push 2 Lua values (wrapper).
 	/**
 	 * Gets the limits, usually in meters.
 	 * @returns The upper limit.
@@ -144,6 +146,7 @@ public:
 	 * @returns The Y component of the axis unit vector.
 	 **/
 	int getAxis(lua_State *L);
+#endif // LOVE_MRUBY (#phys-joints)
 
 	/**
 	 * Gets the reference angle.

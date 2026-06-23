@@ -147,12 +147,15 @@ float RevoluteJoint::getUpperLimit() const
 	return joint->GetUpperLimit();
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-joints: getLimits pushes 2 Lua values (see wrapper).
 int RevoluteJoint::getLimits(lua_State *L)
 {
 	lua_pushnumber(L, joint->GetLowerLimit());
 	lua_pushnumber(L, joint->GetUpperLimit());
 	return 2;
 }
+#endif // LOVE_MRUBY (#phys-joints)
 
 float RevoluteJoint::getReferenceAngle() const
 {

@@ -66,12 +66,15 @@ void MotorJoint::setLinearOffset(float x, float y)
 	joint->SetLinearOffset(Physics::scaleDown(b2Vec2(x, y)));
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-joints: getLinearOffset pushes 2 Lua values (wrapper).
 int MotorJoint::getLinearOffset(lua_State *L) const
 {
 	lua_pushnumber(L, Physics::scaleUp(joint->GetLinearOffset().x));
 	lua_pushnumber(L, Physics::scaleUp(joint->GetLinearOffset().y));
 	return 2;
 }
+#endif // LOVE_MRUBY (#phys-joints)
 
 void MotorJoint::setAngularOffset(float angularOffset)
 {

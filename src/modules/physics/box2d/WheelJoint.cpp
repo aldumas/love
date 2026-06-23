@@ -116,6 +116,8 @@ float WheelJoint::getDamping() const
 	return joint->GetDamping();
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-joints: getAxis pushes 2 Lua values (see wrapper).
 int WheelJoint::getAxis(lua_State *L)
 {
 	b2Vec2 axis = joint->GetLocalAxisA();
@@ -124,6 +126,7 @@ int WheelJoint::getAxis(lua_State *L)
 	lua_pushnumber(L, axis.y);
 	return 2;
 }
+#endif // LOVE_MRUBY (#phys-joints)
 
 } // box2d
 } // physics

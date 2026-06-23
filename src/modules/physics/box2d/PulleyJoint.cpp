@@ -50,6 +50,8 @@ PulleyJoint::~PulleyJoint()
 {
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-joints: getGroundAnchors pushes 4 Lua values (wrapper).
 int PulleyJoint::getGroundAnchors(lua_State *L)
 {
 	lua_pushnumber(L, Physics::scaleUp(joint->GetGroundAnchorA().x));
@@ -58,6 +60,7 @@ int PulleyJoint::getGroundAnchors(lua_State *L)
 	lua_pushnumber(L, Physics::scaleUp(joint->GetGroundAnchorB().y));
 	return 4;
 }
+#endif // LOVE_MRUBY (#phys-joints)
 
 float PulleyJoint::getLengthA() const
 {

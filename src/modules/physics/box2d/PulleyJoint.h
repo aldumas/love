@@ -50,11 +50,14 @@ public:
 
 	virtual ~PulleyJoint();
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-joints: getGroundAnchors pushes 4 Lua values (wrapper).
 	/**
 	 * Gets the ground anchors position in world
 	 * coordinates.
 	 **/
 	int getGroundAnchors(lua_State *L);
+#endif // LOVE_MRUBY (#phys-joints)
 
 	/**
 	 * Gets the current length of the segment attached to bodyA.

@@ -272,6 +272,7 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/video/theora/OggDemuxer.cpp \
 	$(LOVE_SRC)/modules/physics/Body.cpp \
 	$(LOVE_SRC)/modules/physics/Shape.cpp \
+	$(LOVE_SRC)/modules/physics/Joint.cpp \
 	$(LOVE_SRC)/modules/physics/box2d/wrap_Physics_mrb.cpp \
 	$(LOVE_SRC)/modules/physics/box2d/Physics.cpp \
 	$(LOVE_SRC)/modules/physics/box2d/World.cpp \
@@ -280,7 +281,19 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/physics/box2d/CircleShape.cpp \
 	$(LOVE_SRC)/modules/physics/box2d/PolygonShape.cpp \
 	$(LOVE_SRC)/modules/physics/box2d/EdgeShape.cpp \
-	$(LOVE_SRC)/modules/physics/box2d/ChainShape.cpp
+	$(LOVE_SRC)/modules/physics/box2d/ChainShape.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/Joint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/MouseJoint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/DistanceJoint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/PrismaticJoint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/RevoluteJoint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/PulleyJoint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/GearJoint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/FrictionJoint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/WeldJoint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/WheelJoint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/RopeJoint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/MotorJoint.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 

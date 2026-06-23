@@ -131,12 +131,15 @@ public:
 	 **/
 	float getUpperLimit() const;
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-joints: getLimits pushes 2 Lua values (see wrapper).
 	/**
 	 * Gets the limits in degrees.
 	 * @returns The lower limit.
 	 * @returns The upper limit.
 	 **/
 	int getLimits(lua_State *L);
+#endif // LOVE_MRUBY (#phys-joints)
 
 	/**
 	 * Gets the reference angle.

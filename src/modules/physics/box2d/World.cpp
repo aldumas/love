@@ -282,15 +282,9 @@ void World::SayGoodbye(b2Fixture *fixture)
 
 void World::SayGoodbye(b2Joint *joint)
 {
-#ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-joints: notify the wrapping Joint of implicit destruction.
-	// No joint types ported yet, so there is never a love Joint to notify.
 	Joint *j = (Joint *)(joint->GetUserData().pointer);
 	// Hint implicit destruction with true.
 	if (j) j->destroyJoint(true);
-#else
-	(void) joint;
-#endif
 }
 
 World::World()
@@ -356,16 +350,12 @@ void World::update(float dt, int velocityIterations, int positionIterations)
 		// Release for reference in vector.
 		s->release();
 	}
-#ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-joints: deferred-destruction of joints created during a
-	// time step. No joint types ported yet, so destructJoints is always empty.
 	for (Joint *j : destructJoints)
 	{
 		if (j->isValid()) j->destroyJoint();
 		// Release for reference in vector.
 		j->release();
 	}
-#endif
 	destructBodies.clear();
 	destructShapes.clear();
 	destructJoints.clear();

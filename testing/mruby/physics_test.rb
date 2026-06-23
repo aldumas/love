@@ -189,6 +189,99 @@ fail_count += 1 unless assert("ray_cast_closest miss -> nil", qworld.ray_cast_cl
 qworld.destroy
 
 puts
+puts "=== joints ==="
+jworld = P.new_world(gx: 0, gy: 0)
+ja = P.new_body(world: jworld, x: 0, y: 0, type: "dynamic")
+jb = P.new_body(world: jworld, x: 100, y: 0, type: "dynamic")
+P.new_circle_shape(body: ja, radius: 5)
+P.new_circle_shape(body: jb, radius: 5)
+
+# DistanceJoint: factory, base methods, and type-specific setters/getters.
+dj = P.new_distance_joint(body1: ja, body2: jb, x1: 0, y1: 0, x2: 100, y2: 0)
+fail_count += 1 unless assert("distance joint type", dj.get_type == "distance")
+fail_count += 1 unless assert("joint valid?", dj.valid?)
+fail_count += 1 unless assert("joint not destroyed?", !dj.destroyed?)
+# Body identity is not preserved across wrappers yet (deferred #phys-userdata),
+# so compare the bodies by position rather than object equality.
+fail_count += 1 unless assert("joint body_a at ja", dj.get_body_a.get_x.abs < 1e-3)
+fail_count += 1 unless assert("joint body_b at jb", (dj.get_body_b.get_x - 100).abs < 1e-3)
+fail_count += 1 unless assert("collide_connected? default false", !dj.collide_connected?)
+anchors = dj.get_anchors
+fail_count += 1 unless assert("get_anchors x1", (anchors[:x1] - 0).abs < 1e-3)
+fail_count += 1 unless assert("get_anchors x2 ~ 100", (anchors[:x2] - 100).abs < 1e-3)
+rf = dj.get_reaction_force(dt: 1.0 / 60)
+fail_count += 1 unless assert("get_reaction_force is a hash", rf.key?(:x) && rf.key?(:y))
+fail_count += 1 unless assert("get_reaction_torque numeric", dj.get_reaction_torque(dt: 1.0 / 60).is_a?(Numeric))
+dj.set_length(length: 150)
+fail_count += 1 unless assert("distance set/get length", (dj.get_length - 150).abs < 1e-3)
+dj.set_damping(damping: 0.5)
+fail_count += 1 unless assert("distance set/get damping", (dj.get_damping - 0.5).abs < 1e-3)
+
+# get_joints from both the world and a body sees the joint we just made.
+fail_count += 1 unless assert("world get_joints count", jworld.get_joints.length == 1)
+fail_count += 1 unless assert("world get_joint_count", jworld.get_joint_count == 1)
+fail_count += 1 unless assert("body get_joints count", ja.get_joints.length == 1)
+fail_count += 1 unless assert("body get_joints type", ja.get_joints[0].get_type == "distance")
+
+# RevoluteJoint: motor + limits (limits are in degrees, unscaled).
+rj = P.new_revolute_joint(body1: ja, body2: jb, x1: 50, y1: 0)
+fail_count += 1 unless assert("revolute joint type", rj.get_type == "revolute")
+rj.set_motor_enabled(enable: true)
+fail_count += 1 unless assert("revolute motor_enabled?", rj.motor_enabled?)
+rj.set_motor_speed(speed: 2.0)
+fail_count += 1 unless assert("revolute motor speed", (rj.get_motor_speed - 2.0).abs < 1e-3)
+rj.set_limits_enabled(enable: true)
+rj.set_limits(lower: -1.0, upper: 1.0)
+lim = rj.get_limits
+fail_count += 1 unless assert("revolute limits lower", (lim[:lower] - -1.0).abs < 1e-3)
+fail_count += 1 unless assert("revolute limits upper", (lim[:upper] - 1.0).abs < 1e-3)
+
+# PrismaticJoint: axis readback as a hash, motor force.
+pj = P.new_prismatic_joint(body1: ja, body2: jb, x1: 0, y1: 0, ax: 1, ay: 0)
+fail_count += 1 unless assert("prismatic joint type", pj.get_type == "prismatic")
+ax = pj.get_axis
+fail_count += 1 unless assert("prismatic axis x ~ 1", (ax[:x] - 1.0).abs < 1e-3)
+fail_count += 1 unless assert("prismatic axis y ~ 0", ax[:y].abs < 1e-3)
+
+# MouseJoint: target round-trips through scaling.
+mj = P.new_mouse_joint(body: ja, x: 10, y: 20)
+fail_count += 1 unless assert("mouse joint type", mj.get_type == "mouse")
+mj.set_target(x: 30, y: 40)
+tgt = mj.get_target
+fail_count += 1 unless assert("mouse target x", (tgt[:x] - 30).abs < 1e-2)
+fail_count += 1 unless assert("mouse target y", (tgt[:y] - 40).abs < 1e-2)
+
+# WeldJoint / RopeJoint / MotorJoint smoke tests.
+wj = P.new_weld_joint(body1: ja, body2: jb, x1: 50, y1: 0)
+fail_count += 1 unless assert("weld joint type", wj.get_type == "weld")
+roj = P.new_rope_joint(body1: ja, body2: jb, x1: 0, y1: 0, x2: 100, y2: 0, max_length: 200)
+# RopeJoint is implemented on top of a b2DistanceJoint, so get_type reports
+# "distance" (same quirk as the Lua build); its rope methods still work.
+fail_count += 1 unless assert("rope joint type", roj.get_type == "distance")
+fail_count += 1 unless assert("rope max length", (roj.get_max_length - 200).abs < 1e-3)
+moj = P.new_motor_joint(body1: ja, body2: jb)
+fail_count += 1 unless assert("motor joint type", moj.get_type == "motor")
+moj.set_linear_offset(x: 5, y: 7)
+loff = moj.get_linear_offset
+fail_count += 1 unless assert("motor linear offset x", (loff[:x] - 5).abs < 1e-2)
+
+# GearJoint binds two joints; Box2D requires each to be anchored to a fixed
+# body (body1) and the moving bodies to differ, so build dedicated joints
+# between a static ground and each dynamic body.
+ground = P.new_body(world: jworld, type: "static")
+grj = P.new_revolute_joint(body1: ground, body2: ja, x1: 0, y1: 0)
+gpj = P.new_prismatic_joint(body1: ground, body2: jb, x1: 100, y1: 0, ax: 1, ay: 0)
+gj = P.new_gear_joint(joint1: grj, joint2: gpj, ratio: 2.0)
+fail_count += 1 unless assert("gear joint type", gj.get_type == "gear")
+fail_count += 1 unless assert("gear ratio", (gj.get_ratio - 2.0).abs < 1e-3)
+fail_count += 1 unless assert("gear joint_a is revolute", gj.get_joint_a.get_type == "revolute")
+
+# Destroying a joint flips destroyed? and drops it from the world list.
+dj.destroy
+fail_count += 1 unless assert("joint destroyed?", dj.destroyed?)
+jworld.destroy
+
+puts
 puts "=== destroy ==="
 body.destroy
 fail_count += 1 unless assert("body destroyed?", body.destroyed?)

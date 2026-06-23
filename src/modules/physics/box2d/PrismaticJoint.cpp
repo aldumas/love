@@ -147,6 +147,8 @@ float PrismaticJoint::getUpperLimit() const
 	return Physics::scaleUp(joint->GetUpperLimit());
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-joints: getLimits / getAxis push 2 Lua values (wrapper).
 int PrismaticJoint::getLimits(lua_State *L)
 {
 	lua_pushnumber(L, Physics::scaleUp(joint->GetLowerLimit()));
@@ -162,6 +164,7 @@ int PrismaticJoint::getAxis(lua_State *L)
 	lua_pushnumber(L, axis.y);
 	return 2;
 }
+#endif // LOVE_MRUBY (#phys-joints)
 
 float PrismaticJoint::getReferenceAngle() const
 {

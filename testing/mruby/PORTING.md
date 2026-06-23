@@ -346,9 +346,20 @@ Deferred to later physics slices (functionality not in the mruby build yet):
       an mruby callback-reference mechanism + the Contact type. `ShouldCollide`
       still applies the standard category/mask/group filtering (no user filter).
 - [ ] (#phys-contact) the `Contact` object type + `World`/`Body` `getContacts`.
-- [ ] (#phys-joints) all joint types + the `Physics` joint factories + `getJoints`
-      (the heaviest remaining chunk — 11 joint wrappers).
-- [ ] (#phys-userdata) `Body`/`Shape` `setUserData`/`getUserData` (Lua Reference).
+- [~] (#phys-joints) all 11 joint types + the `Physics` joint factories +
+      `World`/`Body` `getJoints` are ported (keyword-argument factories, snake_case
+      methods, multi-return getters as Hashes). Joint lifecycle (implicit/deferred
+      destruction in `World::SayGoodbye` and the time-step destruct queue) is also
+      un-guarded. The remaining `#ifndef LOVE_MRUBY` markers only guard the Lua
+      multi-return methods (`getAnchors`/`getReactionForce`/`getTarget`/`getLimits`/
+      `getAxis`/`getGroundAnchors`/`getLinearOffset`) and the Lua `getJoints`
+      readbacks — all reimplemented in the wrapper over `getBox2DJoint()`; the Lua
+      bodies survive behind the guard for the Lua build. Joint object **identity**
+      is not preserved across wrappers yet (a fresh wrapper per `mrbx_pushtype`) —
+      that waits on the registry from #phys-userdata.
+- [ ] (#phys-userdata) `Body`/`Shape`/`Joint` `setUserData`/`getUserData` (Lua
+      Reference); also the wrapper-identity registry so the same engine object
+      round-trips to one Ruby object (`==`).
 
 ---
 

@@ -62,12 +62,15 @@ void MouseJoint::setTarget(float x, float y)
 	joint->SetTarget(Physics::scaleDown(b2Vec2(x, y)));
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-joints: getTarget pushes 2 Lua values (see wrapper).
 int MouseJoint::getTarget(lua_State *L)
 {
 	lua_pushnumber(L, Physics::scaleUp(joint->GetTarget().x));
 	lua_pushnumber(L, Physics::scaleUp(joint->GetTarget().y));
 	return 2;
 }
+#endif // LOVE_MRUBY (#phys-joints)
 
 void MouseJoint::setMaxForce(float force)
 {

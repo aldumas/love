@@ -22,7 +22,13 @@
 #define LOVE_PHYSICS_BOX2D_JOINT_H
 
 // LOVE
+#ifndef LOVE_MRUBY
+// common/runtime.h pulls in <lua.h>, absent from the mruby build. The Lua-only
+// methods below are guarded by #ifndef LOVE_MRUBY; the surviving pointer members
+// just need the forward decls from common/Reference.h (included below).
 #include "common/runtime.h"
+#endif
+#include "common/Reference.h"
 #include "physics/Joint.h"
 
 // Box2D
@@ -77,6 +83,16 @@ public:
 	virtual Body *getBodyA() const;
 	virtual Body *getBodyB() const;
 
+	// mruby: exposes the raw b2Joint so the wrapper (not a friend) can
+	// reimplement the multi-returning helpers (getAnchors / getReactionForce and
+	// the per-joint getTarget / getLimits / getAxis / getGroundAnchors /
+	// getLinearOffset). The concrete b2*Joint pointer is the same object, so the
+	// wrapper static_casts this for the derived types.
+	b2Joint *getBox2DJoint() const { return joint; }
+
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-joints: getAnchors / getReactionForce push multiple Lua
+	// return values (reimplemented in the wrapper over getBox2DJoint()).
 	/**
 	 * Gets the anchor positions of the Joint in world
 	 * coordinates. This is useful for debugdrawing the joint.
@@ -87,6 +103,7 @@ public:
 	 * Gets the reaction force on body2 at the joint anchor.
 	 **/
 	int getReactionForce(lua_State *L);
+#endif // LOVE_MRUBY (#phys-joints)
 
 	/**
 	 * Gets the reaction torque on body2.
@@ -97,6 +114,8 @@ public:
 
 	bool getCollideConnected() const;
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-userdata: arbitrary user data via a Lua Reference.
 	/**
 	 * This function stores an in-C reference to arbitrary Lua data in the Box2D
 	 * Joint object.
@@ -107,6 +126,7 @@ public:
 	 * Gets the data set with setUserData. If no data is set, nil is returned.
 	 **/
 	int getUserData(lua_State *L);
+#endif // LOVE_MRUBY (#phys-userdata)
 
 	/**
 	 * Joints require pointers to a Box2D joint objects at

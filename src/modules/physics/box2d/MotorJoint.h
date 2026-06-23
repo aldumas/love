@@ -48,7 +48,10 @@ public:
 
 	/// Set/get the target linear offset, in frame A, in meters.
 	void setLinearOffset(float x, float y);
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-joints: getLinearOffset pushes 2 Lua values (wrapper).
 	int getLinearOffset(lua_State *L) const;
+#endif // LOVE_MRUBY (#phys-joints)
 
 	/// Set/get the target angular offset, in radians.
 	void setAngularOffset(float angularOffset);

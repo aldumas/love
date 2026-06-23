@@ -52,8 +52,12 @@ Joint::Joint(Body *body1, Body *body2)
 
 Joint::~Joint()
 {
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-userdata: ref is only populated by the Lua-only
+	// setUserData, so it stays null in the mruby build (Reference needs lua.h).
 	if (ref)
 		delete ref;
+#endif // LOVE_MRUBY (#phys-userdata)
 }
 
 Joint::Type Joint::getType() const
@@ -118,6 +122,9 @@ bool Joint::isValid() const
 	return joint != nullptr;
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-joints: getAnchors / getReactionForce push multiple Lua
+// return values (reimplemented in the wrapper over getBox2DJoint()).
 int Joint::getAnchors(lua_State *L)
 {
 	lua_pushnumber(L, Physics::scaleUp(joint->GetAnchorA().x));
@@ -135,6 +142,7 @@ int Joint::getReactionForce(lua_State *L)
 	lua_pushnumber(L, v.y);
 	return 2;
 }
+#endif // LOVE_MRUBY (#phys-joints)
 
 float Joint::getReactionTorque(float dt)
 {
@@ -164,9 +172,12 @@ void Joint::destroyJoint(bool implicit)
 		world->world->DestroyJoint(joint);
 	joint = nullptr;
 
-	// Remove userdata reference to avoid it sticking around after GC
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-userdata: remove userdata reference to avoid it sticking
+	// around after GC. ref is null in the mruby build (see the destructor).
 	if (ref)
 		ref->unref();
+#endif // LOVE_MRUBY (#phys-userdata)
 
 	// Release the reference of the Box2D joint.
 	this->release();
@@ -182,6 +193,8 @@ bool Joint::getCollideConnected() const
 	return joint->GetCollideConnected();
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-userdata: arbitrary user data via a Lua Reference.
 int Joint::setUserData(lua_State *L)
 {
 	love::luax_assert_argc(L, 1, 1);
@@ -203,6 +216,7 @@ int Joint::getUserData(lua_State *L)
 
 	return 1;
 }
+#endif // LOVE_MRUBY (#phys-userdata)
 
 } // box2d
 } // physics

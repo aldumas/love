@@ -58,10 +58,13 @@ public:
 	 **/
 	void setTarget(float x, float y);
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-joints: getTarget pushes 2 Lua values (see wrapper).
 	/**
 	 * Gets the current anchor2 target.
 	 **/
 	int getTarget(lua_State *L);
+#endif // LOVE_MRUBY (#phys-joints)
 
 	/**
 	 * Sets the maximum constraint force that can be exerted

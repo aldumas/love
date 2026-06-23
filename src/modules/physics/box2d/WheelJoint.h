@@ -115,12 +115,15 @@ public:
 	 **/
 	float getDamping() const;
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-joints: getAxis pushes 2 Lua values (see wrapper).
 	/**
 	 * Gets the axis unit vector, relative to body1.
 	 * @returns The X component of the axis unit vector.
 	 * @returns The Y component of the axis unit vector.
 	 **/
 	int getAxis(lua_State *L);
+#endif // LOVE_MRUBY (#phys-joints)
 
 private:
 

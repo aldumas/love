@@ -39,6 +39,18 @@
 #include "PolygonShape.h"
 #include "EdgeShape.h"
 #include "ChainShape.h"
+#include "Joint.h"
+#include "MouseJoint.h"
+#include "DistanceJoint.h"
+#include "PrismaticJoint.h"
+#include "RevoluteJoint.h"
+#include "PulleyJoint.h"
+#include "GearJoint.h"
+#include "FrictionJoint.h"
+#include "WeldJoint.h"
+#include "WheelJoint.h"
+#include "RopeJoint.h"
+#include "MotorJoint.h"
 
 #include <bitset>
 #include <vector>
@@ -110,6 +122,31 @@ static mrb_value pushShape(mrb_state *mrb, Shape *shape)
 	case Shape::SHAPE_EDGE:    return mrbx_pushtype(mrb, EdgeShape::type,    shape);
 	case Shape::SHAPE_CHAIN:   return mrbx_pushtype(mrb, ChainShape::type,   shape);
 	default:                   return mrbx_pushtype(mrb, Shape::type,        shape);
+	}
+}
+
+// Pushes a Joint with its concrete Ruby class so type-specific methods resolve
+// (the Lua wrapper's luax_pushjoint did the same dispatch on the joint type).
+static mrb_value pushJoint(mrb_state *mrb, Joint *joint)
+{
+	if (joint == nullptr)
+		return mrb_nil_value();
+
+	using PJ = love::physics::Joint;
+	switch (joint->getType())
+	{
+	case PJ::JOINT_DISTANCE:  return mrbx_pushtype(mrb, DistanceJoint::type,  joint);
+	case PJ::JOINT_REVOLUTE:  return mrbx_pushtype(mrb, RevoluteJoint::type,  joint);
+	case PJ::JOINT_PRISMATIC: return mrbx_pushtype(mrb, PrismaticJoint::type, joint);
+	case PJ::JOINT_MOUSE:     return mrbx_pushtype(mrb, MouseJoint::type,     joint);
+	case PJ::JOINT_PULLEY:    return mrbx_pushtype(mrb, PulleyJoint::type,    joint);
+	case PJ::JOINT_GEAR:      return mrbx_pushtype(mrb, GearJoint::type,      joint);
+	case PJ::JOINT_FRICTION:  return mrbx_pushtype(mrb, FrictionJoint::type,  joint);
+	case PJ::JOINT_WELD:      return mrbx_pushtype(mrb, WeldJoint::type,      joint);
+	case PJ::JOINT_WHEEL:     return mrbx_pushtype(mrb, WheelJoint::type,     joint);
+	case PJ::JOINT_ROPE:      return mrbx_pushtype(mrb, RopeJoint::type,      joint);
+	case PJ::JOINT_MOTOR:     return mrbx_pushtype(mrb, MotorJoint::type,     joint);
+	default:                  return mrbx_pushtype(mrb, PJ::type,             joint);
 	}
 }
 
@@ -1020,6 +1057,19 @@ static mrb_value body_getShapes(mrb_state *mrb, mrb_value self)
 	}
 	return arr;
 }
+// #phys-joints: getJoints over body->GetJointList() (Body::getJoints built a
+// Lua table). Returns an Array of the joints attached to this body.
+static mrb_value body_getJoints(mrb_state *mrb, mrb_value self)
+{
+	Body *b = BODY;
+	mrb_value arr = mrb_ary_new(mrb);
+	for (const b2JointEdge *je = b->body->GetJointList(); je != nullptr; je = je->next)
+	{
+		Joint *joint = (Joint *)(je->joint->GetUserData().pointer);
+		if (joint) mrb_ary_push(mrb, arr, pushJoint(mrb, joint));
+	}
+	return arr;
+}
 static mrb_value body_isDestroyed(mrb_state *mrb, mrb_value self)
 {
 	return mrbx_boolean(mrb, BODY->body == nullptr);
@@ -1089,6 +1139,7 @@ static const MrbReg body_functions[] =
 	{ "get_world",              body_getWorld,              MRB_ARGS_NONE() },
 	{ "get_shape",              body_getShape,              MRB_ARGS_NONE() },
 	{ "get_shapes",             body_getShapes,             MRB_ARGS_NONE() },
+	{ "get_joints",             body_getJoints,             MRB_ARGS_NONE() },
 	{ "destroyed?",             body_isDestroyed,           MRB_ARGS_NONE() },
 	{ "destroy",                body_destroy,               MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
@@ -1215,6 +1266,20 @@ static mrb_value world_getBodies(mrb_state *mrb, mrb_value self)
 	return arr;
 }
 
+// #phys-joints: getJoints over the raw b2World joint list (World::getJoints
+// built a Lua table). Returns an Array of all joints in the world.
+static mrb_value world_getJoints(mrb_state *mrb, mrb_value self)
+{
+	World *w = WORLD;
+	mrb_value arr = mrb_ary_new(mrb);
+	for (b2Joint *j = w->getBox2DWorld()->GetJointList(); j != nullptr; j = j->GetNext())
+	{
+		Joint *joint = (Joint *)(j->GetUserData().pointer);
+		if (joint) mrb_ary_push(mrb, arr, pushJoint(mrb, joint));
+	}
+	return arr;
+}
+
 // #phys-query: getShapesInArea reimplemented over getBox2DWorld()->QueryAABB +
 // the ShapeCollector above. `categories:` is an optional array of 1..16 (default
 // all categories). queryShapesInArea (Lua user callback) stays deferred.
@@ -1295,11 +1360,667 @@ static const MrbReg world_functions[] =
 	{ "get_joint_count",     world_getJointCount,      MRB_ARGS_NONE() },
 	{ "get_contact_count",   world_getContactCount,    MRB_ARGS_NONE() },
 	{ "get_bodies",          world_getBodies,          MRB_ARGS_NONE() },
+	{ "get_joints",          world_getJoints,          MRB_ARGS_NONE() },
 	{ "get_shapes_in_area",  world_getShapesInArea,    MRB_ARGS_KEY(5, 0) },
 	{ "ray_cast_any",        world_rayCastAny,         MRB_ARGS_KEY(5, 0) },
 	{ "ray_cast_closest",    world_rayCastClosest,     MRB_ARGS_KEY(5, 0) },
 	{ "destroyed?",          world_isDestroyed,        MRB_ARGS_NONE() },
 	{ "destroy",             world_destroy,            MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::Joint (base) — inherited by every concrete joint type.
+//
+// #phys-joints: the engine's per-joint setters/getters already apply
+// Physics::scaleUp/scaleDown internally, so the wrappers call them directly.
+// Only the multi-return helpers (getAnchors / getReactionForce and the
+// per-joint getTarget / getLimits / getAxis / getGroundAnchors /
+// getLinearOffset) are reimplemented here over getBox2DJoint(), reapplying the
+// same scaling the original Lua methods did.
+// =========================================================================
+
+#define JOINT (mrbx_checktype<Joint>(mrb, self))
+
+static mrb_value joint_getType(mrb_state *mrb, mrb_value self)
+{
+	const char *str = nullptr;
+	Joint::getConstant(JOINT->getType(), str);
+	return str ? mrbx_string(mrb, str) : mrb_nil_value();
+}
+
+static mrb_value joint_isValid(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, JOINT->isValid());
+}
+
+static mrb_value joint_getBodyA(mrb_state *mrb, mrb_value self)
+{
+	Body *b = JOINT->getBodyA();
+	return b ? mrbx_pushtype(mrb, b) : mrb_nil_value();
+}
+
+static mrb_value joint_getBodyB(mrb_state *mrb, mrb_value self)
+{
+	Body *b = JOINT->getBodyB();
+	return b ? mrbx_pushtype(mrb, b) : mrb_nil_value();
+}
+
+static mrb_value joint_getAnchors(mrb_state *mrb, mrb_value self)
+{
+	b2Joint *j = JOINT->getBox2DJoint();
+	b2Vec2 a = Physics::scaleUp(j->GetAnchorA());
+	b2Vec2 b = Physics::scaleUp(j->GetAnchorB());
+	mrb_value h = mrb_hash_new(mrb);
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "x1")), mrbx_number(mrb, a.x));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "y1")), mrbx_number(mrb, a.y));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "x2")), mrbx_number(mrb, b.x));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "y2")), mrbx_number(mrb, b.y));
+	return h;
+}
+
+static mrb_value joint_getReactionForce(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"dt"}, 1, v);
+	b2Vec2 f = Physics::scaleUp(JOINT->getBox2DJoint()->GetReactionForce(mrbx_checkfloat(mrb, v[0])));
+	return pushXY(mrb, f.x, f.y);
+}
+
+static mrb_value joint_getReactionTorque(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"dt"}, 1, v);
+	return mrbx_number(mrb, JOINT->getReactionTorque(mrbx_checkfloat(mrb, v[0])));
+}
+
+static mrb_value joint_isEnabled(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, JOINT->isEnabled());
+}
+
+static mrb_value joint_getCollideConnected(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, JOINT->getCollideConnected());
+}
+
+static mrb_value joint_isDestroyed(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, !JOINT->isValid());
+}
+
+static mrb_value joint_destroy(mrb_state *mrb, mrb_value self)
+{
+	Joint *j = JOINT;
+	mrbx_catchexcept(mrb, [&]() { j->destroyJoint(); });
+	return mrb_nil_value();
+}
+
+#undef JOINT
+
+static const MrbReg joint_functions[] =
+{
+	{ "get_type",            joint_getType,            MRB_ARGS_NONE() },
+	{ "valid?",              joint_isValid,            MRB_ARGS_NONE() },
+	{ "get_body_a",          joint_getBodyA,           MRB_ARGS_NONE() },
+	{ "get_body_b",          joint_getBodyB,           MRB_ARGS_NONE() },
+	{ "get_anchors",         joint_getAnchors,         MRB_ARGS_NONE() },
+	{ "get_reaction_force",  joint_getReactionForce,   MRB_ARGS_KEY(1, 0) },
+	{ "get_reaction_torque", joint_getReactionTorque,  MRB_ARGS_KEY(1, 0) },
+	{ "enabled?",            joint_isEnabled,          MRB_ARGS_NONE() },
+	{ "collide_connected?",  joint_getCollideConnected, MRB_ARGS_NONE() },
+	{ "destroyed?",          joint_isDestroyed,        MRB_ARGS_NONE() },
+	{ "destroy",             joint_destroy,            MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::DistanceJoint
+// =========================================================================
+
+#define DJOINT (mrbx_checktype<DistanceJoint>(mrb, self))
+
+static mrb_value distance_setLength(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"length"}, 1, v);
+	DJOINT->setLength(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value distance_getLength(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, DJOINT->getLength()); }
+static mrb_value distance_setStiffness(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"stiffness"}, 1, v);
+	DJOINT->setStiffness(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value distance_getStiffness(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, DJOINT->getStiffness()); }
+static mrb_value distance_setDamping(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"damping"}, 1, v);
+	DJOINT->setDamping(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value distance_getDamping(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, DJOINT->getDamping()); }
+
+#undef DJOINT
+
+static const MrbReg distance_functions[] =
+{
+	{ "set_length",    distance_setLength,    MRB_ARGS_KEY(1, 0) },
+	{ "get_length",    distance_getLength,    MRB_ARGS_NONE() },
+	{ "set_stiffness", distance_setStiffness, MRB_ARGS_KEY(1, 0) },
+	{ "get_stiffness", distance_getStiffness, MRB_ARGS_NONE() },
+	{ "set_damping",   distance_setDamping,   MRB_ARGS_KEY(1, 0) },
+	{ "get_damping",   distance_getDamping,   MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::MouseJoint
+// =========================================================================
+
+#define MJOINT (mrbx_checktype<MouseJoint>(mrb, self))
+
+static mrb_value mouse_setTarget(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2]; mrbx_get_kwargs(mrb, {"x", "y"}, 2, v);
+	MJOINT->setTarget(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1])); return self;
+}
+static mrb_value mouse_getTarget(mrb_state *mrb, mrb_value self)
+{
+	b2Vec2 t = Physics::scaleUp(((b2MouseJoint *) MJOINT->getBox2DJoint())->GetTarget());
+	return pushXY(mrb, t.x, t.y);
+}
+static mrb_value mouse_setMaxForce(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"force"}, 1, v);
+	MJOINT->setMaxForce(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value mouse_getMaxForce(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, MJOINT->getMaxForce()); }
+static mrb_value mouse_setStiffness(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"stiffness"}, 1, v);
+	MJOINT->setStiffness(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value mouse_getStiffness(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, MJOINT->getStiffness()); }
+static mrb_value mouse_setDamping(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"damping"}, 1, v);
+	MJOINT->setDamping(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value mouse_getDamping(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, MJOINT->getDamping()); }
+
+#undef MJOINT
+
+static const MrbReg mouse_functions[] =
+{
+	{ "set_target",        mouse_setTarget,       MRB_ARGS_KEY(2, 0) },
+	{ "get_target",        mouse_getTarget,       MRB_ARGS_NONE() },
+	{ "set_max_force",     mouse_setMaxForce,     MRB_ARGS_KEY(1, 0) },
+	{ "get_max_force",     mouse_getMaxForce,     MRB_ARGS_NONE() },
+	{ "set_stiffness",     mouse_setStiffness,    MRB_ARGS_KEY(1, 0) },
+	{ "get_stiffness",     mouse_getStiffness,    MRB_ARGS_NONE() },
+	{ "set_damping",       mouse_setDamping,      MRB_ARGS_KEY(1, 0) },
+	{ "get_damping",       mouse_getDamping,      MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::RevoluteJoint
+// =========================================================================
+
+#define RJOINT (mrbx_checktype<RevoluteJoint>(mrb, self))
+
+static mrb_value revolute_getJointAngle(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, RJOINT->getJointAngle()); }
+static mrb_value revolute_getJointSpeed(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, RJOINT->getJointSpeed()); }
+static mrb_value revolute_setMotorEnabled(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"enable"}, 1, v);
+	RJOINT->setMotorEnabled(mrbx_checkboolean(mrb, v[0])); return self;
+}
+static mrb_value revolute_isMotorEnabled(mrb_state *mrb, mrb_value self) { return mrbx_boolean(mrb, RJOINT->isMotorEnabled()); }
+static mrb_value revolute_setMaxMotorTorque(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"torque"}, 1, v);
+	RJOINT->setMaxMotorTorque(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value revolute_getMaxMotorTorque(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, RJOINT->getMaxMotorTorque()); }
+static mrb_value revolute_setMotorSpeed(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"speed"}, 1, v);
+	RJOINT->setMotorSpeed(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value revolute_getMotorSpeed(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, RJOINT->getMotorSpeed()); }
+static mrb_value revolute_getMotorTorque(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"dt"}, 1, v);
+	return mrbx_number(mrb, RJOINT->getMotorTorque(mrbx_checkfloat(mrb, v[0])));
+}
+static mrb_value revolute_setLimitsEnabled(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"enable"}, 1, v);
+	RJOINT->setLimitsEnabled(mrbx_checkboolean(mrb, v[0])); return self;
+}
+static mrb_value revolute_areLimitsEnabled(mrb_state *mrb, mrb_value self) { return mrbx_boolean(mrb, RJOINT->areLimitsEnabled()); }
+static mrb_value revolute_setUpperLimit(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"limit"}, 1, v);
+	RevoluteJoint *j = RJOINT; mrbx_catchexcept(mrb, [&]() { j->setUpperLimit(mrbx_checkfloat(mrb, v[0])); }); return self;
+}
+static mrb_value revolute_setLowerLimit(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"limit"}, 1, v);
+	RevoluteJoint *j = RJOINT; mrbx_catchexcept(mrb, [&]() { j->setLowerLimit(mrbx_checkfloat(mrb, v[0])); }); return self;
+}
+static mrb_value revolute_setLimits(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2]; mrbx_get_kwargs(mrb, {"lower", "upper"}, 2, v);
+	RevoluteJoint *j = RJOINT;
+	mrbx_catchexcept(mrb, [&]() { j->setLimits(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1])); });
+	return self;
+}
+static mrb_value revolute_getLowerLimit(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, RJOINT->getLowerLimit()); }
+static mrb_value revolute_getUpperLimit(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, RJOINT->getUpperLimit()); }
+static mrb_value revolute_getLimits(mrb_state *mrb, mrb_value self)
+{
+	RevoluteJoint *j = RJOINT;
+	// Revolute limits are in degrees and are NOT scaled (faithful to the engine).
+	mrb_value h = mrb_hash_new(mrb);
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "lower")), mrbx_number(mrb, j->getLowerLimit()));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "upper")), mrbx_number(mrb, j->getUpperLimit()));
+	return h;
+}
+static mrb_value revolute_getReferenceAngle(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, RJOINT->getReferenceAngle()); }
+
+#undef RJOINT
+
+static const MrbReg revolute_functions[] =
+{
+	{ "get_joint_angle",      revolute_getJointAngle,     MRB_ARGS_NONE() },
+	{ "get_joint_speed",      revolute_getJointSpeed,     MRB_ARGS_NONE() },
+	{ "set_motor_enabled",    revolute_setMotorEnabled,   MRB_ARGS_KEY(1, 0) },
+	{ "motor_enabled?",       revolute_isMotorEnabled,    MRB_ARGS_NONE() },
+	{ "set_max_motor_torque", revolute_setMaxMotorTorque, MRB_ARGS_KEY(1, 0) },
+	{ "get_max_motor_torque", revolute_getMaxMotorTorque, MRB_ARGS_NONE() },
+	{ "set_motor_speed",      revolute_setMotorSpeed,     MRB_ARGS_KEY(1, 0) },
+	{ "get_motor_speed",      revolute_getMotorSpeed,     MRB_ARGS_NONE() },
+	{ "get_motor_torque",     revolute_getMotorTorque,    MRB_ARGS_KEY(1, 0) },
+	{ "set_limits_enabled",   revolute_setLimitsEnabled,  MRB_ARGS_KEY(1, 0) },
+	{ "limits_enabled?",      revolute_areLimitsEnabled,  MRB_ARGS_NONE() },
+	{ "set_upper_limit",      revolute_setUpperLimit,     MRB_ARGS_KEY(1, 0) },
+	{ "set_lower_limit",      revolute_setLowerLimit,     MRB_ARGS_KEY(1, 0) },
+	{ "set_limits",           revolute_setLimits,         MRB_ARGS_KEY(2, 0) },
+	{ "get_lower_limit",      revolute_getLowerLimit,     MRB_ARGS_NONE() },
+	{ "get_upper_limit",      revolute_getUpperLimit,     MRB_ARGS_NONE() },
+	{ "get_limits",           revolute_getLimits,         MRB_ARGS_NONE() },
+	{ "get_reference_angle",  revolute_getReferenceAngle, MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::PrismaticJoint
+// =========================================================================
+
+#define PJOINT (mrbx_checktype<PrismaticJoint>(mrb, self))
+
+static mrb_value prismatic_getJointTranslation(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, PJOINT->getJointTranslation()); }
+static mrb_value prismatic_getJointSpeed(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, PJOINT->getJointSpeed()); }
+static mrb_value prismatic_setMotorEnabled(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"enable"}, 1, v);
+	PJOINT->setMotorEnabled(mrbx_checkboolean(mrb, v[0])); return self;
+}
+static mrb_value prismatic_isMotorEnabled(mrb_state *mrb, mrb_value self) { return mrbx_boolean(mrb, PJOINT->isMotorEnabled()); }
+static mrb_value prismatic_setMaxMotorForce(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"force"}, 1, v);
+	PJOINT->setMaxMotorForce(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value prismatic_getMaxMotorForce(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, PJOINT->getMaxMotorForce()); }
+static mrb_value prismatic_setMotorSpeed(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"speed"}, 1, v);
+	PJOINT->setMotorSpeed(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value prismatic_getMotorSpeed(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, PJOINT->getMotorSpeed()); }
+static mrb_value prismatic_getMotorForce(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"inv_dt"}, 1, v);
+	return mrbx_number(mrb, PJOINT->getMotorForce(mrbx_checkfloat(mrb, v[0])));
+}
+static mrb_value prismatic_setLimitsEnabled(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"enable"}, 1, v);
+	PJOINT->setLimitsEnabled(mrbx_checkboolean(mrb, v[0])); return self;
+}
+static mrb_value prismatic_areLimitsEnabled(mrb_state *mrb, mrb_value self) { return mrbx_boolean(mrb, PJOINT->areLimitsEnabled()); }
+static mrb_value prismatic_setUpperLimit(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"limit"}, 1, v);
+	PrismaticJoint *j = PJOINT; mrbx_catchexcept(mrb, [&]() { j->setUpperLimit(mrbx_checkfloat(mrb, v[0])); }); return self;
+}
+static mrb_value prismatic_setLowerLimit(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"limit"}, 1, v);
+	PrismaticJoint *j = PJOINT; mrbx_catchexcept(mrb, [&]() { j->setLowerLimit(mrbx_checkfloat(mrb, v[0])); }); return self;
+}
+static mrb_value prismatic_setLimits(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2]; mrbx_get_kwargs(mrb, {"lower", "upper"}, 2, v);
+	PrismaticJoint *j = PJOINT;
+	mrbx_catchexcept(mrb, [&]() { j->setLimits(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1])); });
+	return self;
+}
+static mrb_value prismatic_getLowerLimit(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, PJOINT->getLowerLimit()); }
+static mrb_value prismatic_getUpperLimit(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, PJOINT->getUpperLimit()); }
+static mrb_value prismatic_getLimits(mrb_state *mrb, mrb_value self)
+{
+	PrismaticJoint *j = PJOINT;
+	mrb_value h = mrb_hash_new(mrb);
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "lower")), mrbx_number(mrb, j->getLowerLimit()));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "upper")), mrbx_number(mrb, j->getUpperLimit()));
+	return h;
+}
+static mrb_value prismatic_getAxis(mrb_state *mrb, mrb_value self)
+{
+	PrismaticJoint *j = PJOINT;
+	b2Vec2 axis = ((b2PrismaticJoint *) j->getBox2DJoint())->GetLocalAxisA();
+	j->getBodyA()->getWorldVector(axis.x, axis.y, axis.x, axis.y);
+	return pushXY(mrb, axis.x, axis.y);
+}
+static mrb_value prismatic_getReferenceAngle(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, PJOINT->getReferenceAngle()); }
+
+#undef PJOINT
+
+static const MrbReg prismatic_functions[] =
+{
+	{ "get_joint_translation", prismatic_getJointTranslation, MRB_ARGS_NONE() },
+	{ "get_joint_speed",       prismatic_getJointSpeed,       MRB_ARGS_NONE() },
+	{ "set_motor_enabled",     prismatic_setMotorEnabled,     MRB_ARGS_KEY(1, 0) },
+	{ "motor_enabled?",        prismatic_isMotorEnabled,      MRB_ARGS_NONE() },
+	{ "set_max_motor_force",   prismatic_setMaxMotorForce,    MRB_ARGS_KEY(1, 0) },
+	{ "get_max_motor_force",   prismatic_getMaxMotorForce,    MRB_ARGS_NONE() },
+	{ "set_motor_speed",       prismatic_setMotorSpeed,       MRB_ARGS_KEY(1, 0) },
+	{ "get_motor_speed",       prismatic_getMotorSpeed,       MRB_ARGS_NONE() },
+	{ "get_motor_force",       prismatic_getMotorForce,       MRB_ARGS_KEY(1, 0) },
+	{ "set_limits_enabled",    prismatic_setLimitsEnabled,    MRB_ARGS_KEY(1, 0) },
+	{ "limits_enabled?",       prismatic_areLimitsEnabled,    MRB_ARGS_NONE() },
+	{ "set_upper_limit",       prismatic_setUpperLimit,       MRB_ARGS_KEY(1, 0) },
+	{ "set_lower_limit",       prismatic_setLowerLimit,       MRB_ARGS_KEY(1, 0) },
+	{ "set_limits",            prismatic_setLimits,           MRB_ARGS_KEY(2, 0) },
+	{ "get_lower_limit",       prismatic_getLowerLimit,       MRB_ARGS_NONE() },
+	{ "get_upper_limit",       prismatic_getUpperLimit,       MRB_ARGS_NONE() },
+	{ "get_limits",            prismatic_getLimits,           MRB_ARGS_NONE() },
+	{ "get_axis",              prismatic_getAxis,             MRB_ARGS_NONE() },
+	{ "get_reference_angle",   prismatic_getReferenceAngle,   MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::PulleyJoint
+// =========================================================================
+
+#define PULJOINT (mrbx_checktype<PulleyJoint>(mrb, self))
+
+static mrb_value pulley_getGroundAnchors(mrb_state *mrb, mrb_value self)
+{
+	b2PulleyJoint *j = (b2PulleyJoint *) PULJOINT->getBox2DJoint();
+	b2Vec2 a = Physics::scaleUp(j->GetGroundAnchorA());
+	b2Vec2 b = Physics::scaleUp(j->GetGroundAnchorB());
+	mrb_value h = mrb_hash_new(mrb);
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "x1")), mrbx_number(mrb, a.x));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "y1")), mrbx_number(mrb, a.y));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "x2")), mrbx_number(mrb, b.x));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "y2")), mrbx_number(mrb, b.y));
+	return h;
+}
+static mrb_value pulley_getLengthA(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, PULJOINT->getLengthA()); }
+static mrb_value pulley_getLengthB(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, PULJOINT->getLengthB()); }
+static mrb_value pulley_getRatio(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, PULJOINT->getRatio()); }
+
+#undef PULJOINT
+
+static const MrbReg pulley_functions[] =
+{
+	{ "get_ground_anchors", pulley_getGroundAnchors, MRB_ARGS_NONE() },
+	{ "get_length_a",       pulley_getLengthA,       MRB_ARGS_NONE() },
+	{ "get_length_b",       pulley_getLengthB,       MRB_ARGS_NONE() },
+	{ "get_ratio",          pulley_getRatio,         MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::GearJoint
+// =========================================================================
+
+#define GJOINT (mrbx_checktype<GearJoint>(mrb, self))
+
+static mrb_value gear_setRatio(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"ratio"}, 1, v);
+	GJOINT->setRatio(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value gear_getRatio(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, GJOINT->getRatio()); }
+static mrb_value gear_getJointA(mrb_state *mrb, mrb_value self) { return pushJoint(mrb, GJOINT->getJointA()); }
+static mrb_value gear_getJointB(mrb_state *mrb, mrb_value self) { return pushJoint(mrb, GJOINT->getJointB()); }
+
+#undef GJOINT
+
+static const MrbReg gear_functions[] =
+{
+	{ "set_ratio",   gear_setRatio,  MRB_ARGS_KEY(1, 0) },
+	{ "get_ratio",   gear_getRatio,  MRB_ARGS_NONE() },
+	{ "get_joint_a", gear_getJointA, MRB_ARGS_NONE() },
+	{ "get_joint_b", gear_getJointB, MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::FrictionJoint
+// =========================================================================
+
+#define FJOINT (mrbx_checktype<FrictionJoint>(mrb, self))
+
+static mrb_value friction_setMaxForce(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"force"}, 1, v);
+	FrictionJoint *j = FJOINT; mrbx_catchexcept(mrb, [&]() { j->setMaxForce(mrbx_checkfloat(mrb, v[0])); }); return self;
+}
+static mrb_value friction_getMaxForce(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, FJOINT->getMaxForce()); }
+static mrb_value friction_setMaxTorque(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"torque"}, 1, v);
+	FrictionJoint *j = FJOINT; mrbx_catchexcept(mrb, [&]() { j->setMaxTorque(mrbx_checkfloat(mrb, v[0])); }); return self;
+}
+static mrb_value friction_getMaxTorque(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, FJOINT->getMaxTorque()); }
+
+#undef FJOINT
+
+static const MrbReg friction_functions[] =
+{
+	{ "set_max_force",  friction_setMaxForce,  MRB_ARGS_KEY(1, 0) },
+	{ "get_max_force",  friction_getMaxForce,  MRB_ARGS_NONE() },
+	{ "set_max_torque", friction_setMaxTorque, MRB_ARGS_KEY(1, 0) },
+	{ "get_max_torque", friction_getMaxTorque, MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::WeldJoint
+// =========================================================================
+
+#define WJOINT (mrbx_checktype<WeldJoint>(mrb, self))
+
+static mrb_value weld_setStiffness(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"stiffness"}, 1, v);
+	WJOINT->setStiffness(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value weld_getStiffness(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, WJOINT->getStiffness()); }
+static mrb_value weld_setDamping(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"damping"}, 1, v);
+	WJOINT->setDamping(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value weld_getDamping(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, WJOINT->getDamping()); }
+static mrb_value weld_getReferenceAngle(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, WJOINT->getReferenceAngle()); }
+
+#undef WJOINT
+
+static const MrbReg weld_functions[] =
+{
+	{ "set_stiffness",       weld_setStiffness,      MRB_ARGS_KEY(1, 0) },
+	{ "get_stiffness",       weld_getStiffness,      MRB_ARGS_NONE() },
+	{ "set_damping",         weld_setDamping,        MRB_ARGS_KEY(1, 0) },
+	{ "get_damping",         weld_getDamping,        MRB_ARGS_NONE() },
+	{ "get_reference_angle", weld_getReferenceAngle, MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::WheelJoint
+// =========================================================================
+
+#define WHJOINT (mrbx_checktype<WheelJoint>(mrb, self))
+
+static mrb_value wheel_getJointTranslation(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, WHJOINT->getJointTranslation()); }
+static mrb_value wheel_getJointSpeed(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, WHJOINT->getJointSpeed()); }
+static mrb_value wheel_setMotorEnabled(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"enable"}, 1, v);
+	WHJOINT->setMotorEnabled(mrbx_checkboolean(mrb, v[0])); return self;
+}
+static mrb_value wheel_isMotorEnabled(mrb_state *mrb, mrb_value self) { return mrbx_boolean(mrb, WHJOINT->isMotorEnabled()); }
+static mrb_value wheel_setMotorSpeed(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"speed"}, 1, v);
+	WHJOINT->setMotorSpeed(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value wheel_getMotorSpeed(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, WHJOINT->getMotorSpeed()); }
+static mrb_value wheel_setMaxMotorTorque(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"torque"}, 1, v);
+	WHJOINT->setMaxMotorTorque(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value wheel_getMaxMotorTorque(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, WHJOINT->getMaxMotorTorque()); }
+static mrb_value wheel_getMotorTorque(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"dt"}, 1, v);
+	return mrbx_number(mrb, WHJOINT->getMotorTorque(mrbx_checkfloat(mrb, v[0])));
+}
+static mrb_value wheel_setStiffness(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"stiffness"}, 1, v);
+	WHJOINT->setStiffness(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value wheel_getStiffness(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, WHJOINT->getStiffness()); }
+static mrb_value wheel_setDamping(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"damping"}, 1, v);
+	WHJOINT->setDamping(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value wheel_getDamping(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, WHJOINT->getDamping()); }
+static mrb_value wheel_getAxis(mrb_state *mrb, mrb_value self)
+{
+	WheelJoint *j = WHJOINT;
+	b2Vec2 axis = ((b2WheelJoint *) j->getBox2DJoint())->GetLocalAxisA();
+	j->getBodyA()->getWorldVector(axis.x, axis.y, axis.x, axis.y);
+	return pushXY(mrb, axis.x, axis.y);
+}
+
+#undef WHJOINT
+
+static const MrbReg wheel_functions[] =
+{
+	{ "get_joint_translation", wheel_getJointTranslation, MRB_ARGS_NONE() },
+	{ "get_joint_speed",       wheel_getJointSpeed,       MRB_ARGS_NONE() },
+	{ "set_motor_enabled",     wheel_setMotorEnabled,     MRB_ARGS_KEY(1, 0) },
+	{ "motor_enabled?",        wheel_isMotorEnabled,      MRB_ARGS_NONE() },
+	{ "set_motor_speed",       wheel_setMotorSpeed,       MRB_ARGS_KEY(1, 0) },
+	{ "get_motor_speed",       wheel_getMotorSpeed,       MRB_ARGS_NONE() },
+	{ "set_max_motor_torque",  wheel_setMaxMotorTorque,   MRB_ARGS_KEY(1, 0) },
+	{ "get_max_motor_torque",  wheel_getMaxMotorTorque,   MRB_ARGS_NONE() },
+	{ "get_motor_torque",      wheel_getMotorTorque,      MRB_ARGS_KEY(1, 0) },
+	{ "set_stiffness",         wheel_setStiffness,        MRB_ARGS_KEY(1, 0) },
+	{ "get_stiffness",         wheel_getStiffness,        MRB_ARGS_NONE() },
+	{ "set_damping",           wheel_setDamping,          MRB_ARGS_KEY(1, 0) },
+	{ "get_damping",           wheel_getDamping,          MRB_ARGS_NONE() },
+	{ "get_axis",              wheel_getAxis,             MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::RopeJoint
+// =========================================================================
+
+#define ROJOINT (mrbx_checktype<RopeJoint>(mrb, self))
+
+static mrb_value rope_getMaxLength(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, ROJOINT->getMaxLength()); }
+static mrb_value rope_setMaxLength(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"length"}, 1, v);
+	ROJOINT->setMaxLength(mrbx_checkfloat(mrb, v[0])); return self;
+}
+
+#undef ROJOINT
+
+static const MrbReg rope_functions[] =
+{
+	{ "get_max_length", rope_getMaxLength, MRB_ARGS_NONE() },
+	{ "set_max_length", rope_setMaxLength, MRB_ARGS_KEY(1, 0) },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
+// Love::MotorJoint
+// =========================================================================
+
+#define MOJOINT (mrbx_checktype<MotorJoint>(mrb, self))
+
+static mrb_value motor_setLinearOffset(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[2]; mrbx_get_kwargs(mrb, {"x", "y"}, 2, v);
+	MOJOINT->setLinearOffset(mrbx_checkfloat(mrb, v[0]), mrbx_checkfloat(mrb, v[1])); return self;
+}
+static mrb_value motor_getLinearOffset(mrb_state *mrb, mrb_value self)
+{
+	b2Vec2 o = Physics::scaleUp(((b2MotorJoint *) MOJOINT->getBox2DJoint())->GetLinearOffset());
+	return pushXY(mrb, o.x, o.y);
+}
+static mrb_value motor_setAngularOffset(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"offset"}, 1, v);
+	MOJOINT->setAngularOffset(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value motor_getAngularOffset(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, MOJOINT->getAngularOffset()); }
+static mrb_value motor_setMaxForce(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"force"}, 1, v);
+	MotorJoint *j = MOJOINT; mrbx_catchexcept(mrb, [&]() { j->setMaxForce(mrbx_checkfloat(mrb, v[0])); }); return self;
+}
+static mrb_value motor_getMaxForce(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, MOJOINT->getMaxForce()); }
+static mrb_value motor_setMaxTorque(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"torque"}, 1, v);
+	MotorJoint *j = MOJOINT; mrbx_catchexcept(mrb, [&]() { j->setMaxTorque(mrbx_checkfloat(mrb, v[0])); }); return self;
+}
+static mrb_value motor_getMaxTorque(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, MOJOINT->getMaxTorque()); }
+static mrb_value motor_setCorrectionFactor(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"factor"}, 1, v);
+	MotorJoint *j = MOJOINT; mrbx_catchexcept(mrb, [&]() { j->setCorrectionFactor(mrbx_checkfloat(mrb, v[0])); }); return self;
+}
+static mrb_value motor_getCorrectionFactor(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, MOJOINT->getCorrectionFactor()); }
+
+#undef MOJOINT
+
+static const MrbReg motor_functions[] =
+{
+	{ "set_linear_offset",     motor_setLinearOffset,     MRB_ARGS_KEY(2, 0) },
+	{ "get_linear_offset",     motor_getLinearOffset,     MRB_ARGS_NONE() },
+	{ "set_angular_offset",    motor_setAngularOffset,    MRB_ARGS_KEY(1, 0) },
+	{ "get_angular_offset",    motor_getAngularOffset,    MRB_ARGS_NONE() },
+	{ "set_max_force",         motor_setMaxForce,         MRB_ARGS_KEY(1, 0) },
+	{ "get_max_force",         motor_getMaxForce,         MRB_ARGS_NONE() },
+	{ "set_max_torque",        motor_setMaxTorque,        MRB_ARGS_KEY(1, 0) },
+	{ "get_max_torque",        motor_getMaxTorque,        MRB_ARGS_NONE() },
+	{ "set_correction_factor", motor_setCorrectionFactor, MRB_ARGS_KEY(1, 0) },
+	{ "get_correction_factor", motor_getCorrectionFactor, MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -1569,6 +2290,244 @@ static mrb_value w_getDistance(mrb_state *mrb, mrb_value self)
 	return h;
 }
 
+// #phys-joints: joint factories. Keyword arguments make the positional
+// defaulting in the Lua factories explicit: x2/y2 default to x1/y1 when
+// omitted, reference_angle: selects the angle overload, collide_connected:
+// follows the Lua defaults (true only for pulleys), and ratio: defaults to 1.
+static mrb_value w_newDistanceJoint(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[7];
+	mrbx_get_kwargs(mrb, {"body1", "body2", "x1", "y1", "x2", "y2", "collide_connected"}, 4, v);
+	Body *b1 = mrbx_checktype<Body>(mrb, v[0]);
+	Body *b2 = mrbx_checktype<Body>(mrb, v[1]);
+	float x1 = mrbx_checkfloat(mrb, v[2]);
+	float y1 = mrbx_checkfloat(mrb, v[3]);
+	float x2 = mrbx_optfloat(mrb, v[4], x1);
+	float y2 = mrbx_optfloat(mrb, v[5], y1);
+	bool cc = mrbx_optboolean(mrb, v[6], false);
+	DistanceJoint *j = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { j = instance()->newDistanceJoint(b1, b2, x1, y1, x2, y2, cc); });
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, DistanceJoint::type, j);
+	j->release();
+	return out;
+}
+
+static mrb_value w_newMouseJoint(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"body", "x", "y"}, 3, v);
+	Body *b = mrbx_checktype<Body>(mrb, v[0]);
+	float x = mrbx_checkfloat(mrb, v[1]);
+	float y = mrbx_checkfloat(mrb, v[2]);
+	MouseJoint *j = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { j = instance()->newMouseJoint(b, x, y); });
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, MouseJoint::type, j);
+	j->release();
+	return out;
+}
+
+static mrb_value w_newRevoluteJoint(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[8];
+	mrbx_get_kwargs(mrb, {"body1", "body2", "x1", "y1", "x2", "y2", "collide_connected", "reference_angle"}, 4, v);
+	Body *b1 = mrbx_checktype<Body>(mrb, v[0]);
+	Body *b2 = mrbx_checktype<Body>(mrb, v[1]);
+	float xA = mrbx_checkfloat(mrb, v[2]);
+	float yA = mrbx_checkfloat(mrb, v[3]);
+	float xB = mrbx_optfloat(mrb, v[4], xA);
+	float yB = mrbx_optfloat(mrb, v[5], yA);
+	bool cc = mrbx_optboolean(mrb, v[6], false);
+	RevoluteJoint *j = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() {
+		if (!mrb_undef_p(v[7]))
+			j = instance()->newRevoluteJoint(b1, b2, xA, yA, xB, yB, cc, mrbx_checkfloat(mrb, v[7]));
+		else
+			j = instance()->newRevoluteJoint(b1, b2, xA, yA, xB, yB, cc);
+	});
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, RevoluteJoint::type, j);
+	j->release();
+	return out;
+}
+
+static mrb_value w_newPrismaticJoint(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[10];
+	mrbx_get_kwargs(mrb, {"body1", "body2", "x1", "y1", "ax", "ay", "x2", "y2", "collide_connected", "reference_angle"}, 6, v);
+	Body *b1 = mrbx_checktype<Body>(mrb, v[0]);
+	Body *b2 = mrbx_checktype<Body>(mrb, v[1]);
+	float xA = mrbx_checkfloat(mrb, v[2]);
+	float yA = mrbx_checkfloat(mrb, v[3]);
+	float ax = mrbx_checkfloat(mrb, v[4]);
+	float ay = mrbx_checkfloat(mrb, v[5]);
+	float xB = mrbx_optfloat(mrb, v[6], xA);
+	float yB = mrbx_optfloat(mrb, v[7], yA);
+	bool cc = mrbx_optboolean(mrb, v[8], false);
+	PrismaticJoint *j = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() {
+		if (!mrb_undef_p(v[9]))
+			j = instance()->newPrismaticJoint(b1, b2, xA, yA, xB, yB, ax, ay, cc, mrbx_checkfloat(mrb, v[9]));
+		else
+			j = instance()->newPrismaticJoint(b1, b2, xA, yA, xB, yB, ax, ay, cc);
+	});
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, PrismaticJoint::type, j);
+	j->release();
+	return out;
+}
+
+static mrb_value w_newPulleyJoint(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[12];
+	mrbx_get_kwargs(mrb, {"body1", "body2", "gx1", "gy1", "gx2", "gy2", "x1", "y1", "x2", "y2", "ratio", "collide_connected"}, 10, v);
+	Body *b1 = mrbx_checktype<Body>(mrb, v[0]);
+	Body *b2 = mrbx_checktype<Body>(mrb, v[1]);
+	b2Vec2 ga1(mrbx_checkfloat(mrb, v[2]), mrbx_checkfloat(mrb, v[3]));
+	b2Vec2 ga2(mrbx_checkfloat(mrb, v[4]), mrbx_checkfloat(mrb, v[5]));
+	b2Vec2 a1(mrbx_checkfloat(mrb, v[6]), mrbx_checkfloat(mrb, v[7]));
+	b2Vec2 a2(mrbx_checkfloat(mrb, v[8]), mrbx_checkfloat(mrb, v[9]));
+	float ratio = mrbx_optfloat(mrb, v[10], 1.0f);
+	bool cc = mrbx_optboolean(mrb, v[11], true); // pulleys default to colliding connected bodies
+	PulleyJoint *j = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { j = instance()->newPulleyJoint(b1, b2, ga1, ga2, a1, a2, ratio, cc); });
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, PulleyJoint::type, j);
+	j->release();
+	return out;
+}
+
+static mrb_value w_newGearJoint(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"joint1", "joint2", "ratio", "collide_connected"}, 2, v);
+	Joint *j1 = mrbx_checktype<Joint>(mrb, v[0]);
+	Joint *j2 = mrbx_checktype<Joint>(mrb, v[1]);
+	float ratio = mrbx_optfloat(mrb, v[2], 1.0f);
+	bool cc = mrbx_optboolean(mrb, v[3], false);
+	GearJoint *j = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { j = instance()->newGearJoint(j1, j2, ratio, cc); });
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, GearJoint::type, j);
+	j->release();
+	return out;
+}
+
+static mrb_value w_newFrictionJoint(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[7];
+	mrbx_get_kwargs(mrb, {"body1", "body2", "x1", "y1", "x2", "y2", "collide_connected"}, 4, v);
+	Body *b1 = mrbx_checktype<Body>(mrb, v[0]);
+	Body *b2 = mrbx_checktype<Body>(mrb, v[1]);
+	float xA = mrbx_checkfloat(mrb, v[2]);
+	float yA = mrbx_checkfloat(mrb, v[3]);
+	float xB = mrbx_optfloat(mrb, v[4], xA);
+	float yB = mrbx_optfloat(mrb, v[5], yA);
+	bool cc = mrbx_optboolean(mrb, v[6], false);
+	FrictionJoint *j = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { j = instance()->newFrictionJoint(b1, b2, xA, yA, xB, yB, cc); });
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, FrictionJoint::type, j);
+	j->release();
+	return out;
+}
+
+static mrb_value w_newWeldJoint(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[8];
+	mrbx_get_kwargs(mrb, {"body1", "body2", "x1", "y1", "x2", "y2", "collide_connected", "reference_angle"}, 4, v);
+	Body *b1 = mrbx_checktype<Body>(mrb, v[0]);
+	Body *b2 = mrbx_checktype<Body>(mrb, v[1]);
+	float xA = mrbx_checkfloat(mrb, v[2]);
+	float yA = mrbx_checkfloat(mrb, v[3]);
+	float xB = mrbx_optfloat(mrb, v[4], xA);
+	float yB = mrbx_optfloat(mrb, v[5], yA);
+	bool cc = mrbx_optboolean(mrb, v[6], false);
+	WeldJoint *j = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() {
+		if (!mrb_undef_p(v[7]))
+			j = instance()->newWeldJoint(b1, b2, xA, yA, xB, yB, cc, mrbx_checkfloat(mrb, v[7]));
+		else
+			j = instance()->newWeldJoint(b1, b2, xA, yA, xB, yB, cc);
+	});
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, WeldJoint::type, j);
+	j->release();
+	return out;
+}
+
+static mrb_value w_newWheelJoint(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[9];
+	mrbx_get_kwargs(mrb, {"body1", "body2", "x1", "y1", "ax", "ay", "x2", "y2", "collide_connected"}, 6, v);
+	Body *b1 = mrbx_checktype<Body>(mrb, v[0]);
+	Body *b2 = mrbx_checktype<Body>(mrb, v[1]);
+	float xA = mrbx_checkfloat(mrb, v[2]);
+	float yA = mrbx_checkfloat(mrb, v[3]);
+	float ax = mrbx_checkfloat(mrb, v[4]);
+	float ay = mrbx_checkfloat(mrb, v[5]);
+	float xB = mrbx_optfloat(mrb, v[6], xA);
+	float yB = mrbx_optfloat(mrb, v[7], yA);
+	bool cc = mrbx_optboolean(mrb, v[8], false);
+	WheelJoint *j = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { j = instance()->newWheelJoint(b1, b2, xA, yA, xB, yB, ax, ay, cc); });
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, WheelJoint::type, j);
+	j->release();
+	return out;
+}
+
+static mrb_value w_newRopeJoint(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[8];
+	mrbx_get_kwargs(mrb, {"body1", "body2", "x1", "y1", "x2", "y2", "max_length", "collide_connected"}, 7, v);
+	Body *b1 = mrbx_checktype<Body>(mrb, v[0]);
+	Body *b2 = mrbx_checktype<Body>(mrb, v[1]);
+	float x1 = mrbx_checkfloat(mrb, v[2]);
+	float y1 = mrbx_checkfloat(mrb, v[3]);
+	float x2 = mrbx_checkfloat(mrb, v[4]);
+	float y2 = mrbx_checkfloat(mrb, v[5]);
+	float maxLength = mrbx_checkfloat(mrb, v[6]);
+	bool cc = mrbx_optboolean(mrb, v[7], false);
+	RopeJoint *j = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { j = instance()->newRopeJoint(b1, b2, x1, y1, x2, y2, maxLength, cc); });
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, RopeJoint::type, j);
+	j->release();
+	return out;
+}
+
+static mrb_value w_newMotorJoint(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"body1", "body2", "correction_factor", "collide_connected"}, 2, v);
+	Body *b1 = mrbx_checktype<Body>(mrb, v[0]);
+	Body *b2 = mrbx_checktype<Body>(mrb, v[1]);
+	MotorJoint *j = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() {
+		if (!mrb_undef_p(v[2]))
+			j = instance()->newMotorJoint(b1, b2, mrbx_checkfloat(mrb, v[2]), mrbx_optboolean(mrb, v[3], false));
+		else
+			j = instance()->newMotorJoint(b1, b2);
+	});
+	if (err) return mrb_nil_value();
+	mrb_value out = mrbx_pushtype(mrb, MotorJoint::type, j);
+	j->release();
+	return out;
+}
+
 static const MrbReg functions[] =
 {
 	{ "set_meter",            w_setMeter,           MRB_ARGS_KEY(1, 0) },
@@ -1586,6 +2545,17 @@ static const MrbReg functions[] =
 	{ "new_polygon_body",     w_newPolygonBody,     MRB_ARGS_KEY(3, 0) },
 	{ "new_edge_body",        w_newEdgeBody,        MRB_ARGS_KEY(6, 0) },
 	{ "new_chain_body",       w_newChainBody,       MRB_ARGS_KEY(4, 0) },
+	{ "new_distance_joint",   w_newDistanceJoint,   MRB_ARGS_KEY(7, 0) },
+	{ "new_mouse_joint",      w_newMouseJoint,      MRB_ARGS_KEY(3, 0) },
+	{ "new_revolute_joint",   w_newRevoluteJoint,   MRB_ARGS_KEY(8, 0) },
+	{ "new_prismatic_joint",  w_newPrismaticJoint,  MRB_ARGS_KEY(10, 0) },
+	{ "new_pulley_joint",     w_newPulleyJoint,     MRB_ARGS_KEY(12, 0) },
+	{ "new_gear_joint",       w_newGearJoint,       MRB_ARGS_KEY(4, 0) },
+	{ "new_friction_joint",   w_newFrictionJoint,   MRB_ARGS_KEY(7, 0) },
+	{ "new_weld_joint",       w_newWeldJoint,       MRB_ARGS_KEY(8, 0) },
+	{ "new_wheel_joint",      w_newWheelJoint,      MRB_ARGS_KEY(9, 0) },
+	{ "new_rope_joint",       w_newRopeJoint,       MRB_ARGS_KEY(8, 0) },
+	{ "new_motor_joint",      w_newMotorJoint,      MRB_ARGS_KEY(4, 0) },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -1616,6 +2586,21 @@ extern "C" void mrb_love_physics_init(mrb_state *mrb)
 	mrbx_register_type(mrb, PolygonShape::type, polygon_functions);
 	mrbx_register_type(mrb, EdgeShape::type, edge_functions);
 	mrbx_register_type(mrb, ChainShape::type, chain_functions);
+
+	// Register the base Joint before the concrete joint types so they inherit
+	// its methods through the love::Type-mirrored hierarchy.
+	mrbx_register_type(mrb, love::physics::Joint::type, joint_functions);
+	mrbx_register_type(mrb, DistanceJoint::type, distance_functions);
+	mrbx_register_type(mrb, MouseJoint::type, mouse_functions);
+	mrbx_register_type(mrb, RevoluteJoint::type, revolute_functions);
+	mrbx_register_type(mrb, PrismaticJoint::type, prismatic_functions);
+	mrbx_register_type(mrb, PulleyJoint::type, pulley_functions);
+	mrbx_register_type(mrb, GearJoint::type, gear_functions);
+	mrbx_register_type(mrb, FrictionJoint::type, friction_functions);
+	mrbx_register_type(mrb, WeldJoint::type, weld_functions);
+	mrbx_register_type(mrb, WheelJoint::type, wheel_functions);
+	mrbx_register_type(mrb, RopeJoint::type, rope_functions);
+	mrbx_register_type(mrb, MotorJoint::type, motor_functions);
 }
 
 } // box2d

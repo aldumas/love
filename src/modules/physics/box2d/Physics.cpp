@@ -234,10 +234,9 @@ ChainShape *Physics::newChainShape(Body *body, bool loop, const Vector2 *coords,
 	return new ChainShape(body, s);
 }
 
-#ifndef LOVE_MRUBY
-// TODO(mruby) #phys-joints: the joint factories build love::physics joint
-// objects whose wrappers aren't ported yet. Guarded out so Physics.cpp links
-// without the joint .cpp files; restore when the joint types are ported.
+// #phys-joints: the joint factories build love::physics joint objects; the joint
+// types are mruby-safe (their Lua-only methods are guarded), so these are part of
+// the mruby build and reimplemented in wrap_Physics_mrb.cpp.
 DistanceJoint *Physics::newDistanceJoint(Body *body1, Body *body2, float x1, float y1, float x2, float y2, bool collideConnected)
 {
 	return new DistanceJoint(body1, body2, x1, y1, x2, y2, collideConnected);
@@ -312,7 +311,6 @@ MotorJoint *Physics::newMotorJoint(Body *body1, Body *body2, float correctionFac
 {
 	return new MotorJoint(body1, body2, correctionFactor, collideConnected);
 }
-#endif // LOVE_MRUBY (#phys-joints)
 
 #ifndef LOVE_MRUBY
 // TODO(mruby) #phys-distance: getDistance pushes 5 Lua return values and reads
