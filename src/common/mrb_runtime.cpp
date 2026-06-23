@@ -123,11 +123,24 @@ mrb_value mrbx_string(mrb_state *mrb, const std::string &s)
 
 // --- Object <-> Ruby binding ---------------------------------------------
 
+// Identity registry: (mrb_state*, love::Object*) -> the one live Ruby wrapper
+// for that object in that VM. This is a *weak* map — it is not GC-protected, so
+// it never keeps a wrapper (or the C++ object the wrapper retains) alive. The
+// wrapper's free callback (mrbx_object_free) evicts the entry when the wrapper
+// is collected, so a later mrbx_pushtype mints a fresh one. While a wrapper is
+// alive, every push of the same engine object returns it, so the two compare
+// equal (==) — matching the Lua-era weak-valued userdata table.
+static std::map<std::pair<mrb_state *, love::Object *>, mrb_value> objectWrappers;
+
 static void mrbx_object_free(mrb_state *mrb, void *p)
 {
-	(void) mrb;
 	if (p != nullptr)
+	{
+		// Drop the weak identity entry before releasing: this wrapper is gone, so
+		// the next push of the same object must build a new one.
+		objectWrappers.erase(std::make_pair(mrb, (love::Object *) p));
 		((love::Object *) p)->release();
+	}
 }
 
 const mrb_data_type mrbx_object_data_type = { "love::Object", mrbx_object_free };
@@ -242,6 +255,16 @@ void mrbx_forgetstate(mrb_state *mrb)
 		else
 			++it;
 	}
+
+	// And the weak identity entries: the wrappers die with the VM, so drop the
+	// dangling keys before mrb_close runs their free callbacks.
+	for (auto it = objectWrappers.begin(); it != objectWrappers.end(); )
+	{
+		if (it->first.first == mrb)
+			it = objectWrappers.erase(it);
+		else
+			++it;
+	}
 }
 
 mrb_value mrbx_pushtype(mrb_state *mrb, love::Type &type, love::Object *object)
@@ -249,15 +272,21 @@ mrb_value mrbx_pushtype(mrb_state *mrb, love::Type &type, love::Object *object)
 	if (object == nullptr)
 		return mrb_nil_value();
 
-	// TODO(mruby) #phys-identity: this mints a fresh Ruby wrapper every call, so
-	// two wrappers for the same love::Object compare unequal. A general identity
-	// cache needs weak-reference semantics core mruby lacks (caching here
-	// unconditionally would pin every engine object for the VM's lifetime).
+	// Return the existing wrapper for this object if one is still alive, so all
+	// Ruby handles to the same engine object are identical (==). See the
+	// objectWrappers note above for why this weak cache can't leak.
+	auto key = std::make_pair(mrb, object);
+	auto it = objectWrappers.find(key);
+	if (it != objectWrappers.end())
+		return it->second;
+
 	struct RClass *cls = mrbx_gettypeclass(mrb, type);
 
 	object->retain();
 	struct RData *data = mrb_data_object_alloc(mrb, cls, object, &mrbx_object_data_type);
-	return mrb_obj_value(data);
+	mrb_value wrapper = mrb_obj_value(data);
+	objectWrappers[key] = wrapper;
+	return wrapper;
 }
 
 bool mrbx_istype(mrb_state *mrb, mrb_value v, const love::Type &type)

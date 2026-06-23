@@ -201,10 +201,10 @@ dj = P.new_distance_joint(body1: ja, body2: jb, x1: 0, y1: 0, x2: 100, y2: 0)
 fail_count += 1 unless assert("distance joint type", dj.get_type == "distance")
 fail_count += 1 unless assert("joint valid?", dj.valid?)
 fail_count += 1 unless assert("joint not destroyed?", !dj.destroyed?)
-# Body identity is not preserved across wrappers yet (deferred #phys-userdata),
-# so compare the bodies by position rather than object equality.
-fail_count += 1 unless assert("joint body_a at ja", dj.get_body_a.get_x.abs < 1e-3)
-fail_count += 1 unless assert("joint body_b at jb", (dj.get_body_b.get_x - 100).abs < 1e-3)
+# Wrapper identity is preserved (#phys-identity): get_body_a returns the very
+# same Ruby object as the body passed to the factory.
+fail_count += 1 unless assert("joint body_a is ja", dj.get_body_a.equal?(ja))
+fail_count += 1 unless assert("joint body_b is jb", dj.get_body_b.equal?(jb))
 fail_count += 1 unless assert("collide_connected? default false", !dj.collide_connected?)
 anchors = dj.get_anchors
 fail_count += 1 unless assert("get_anchors x1", (anchors[:x1] - 0).abs < 1e-3)
@@ -359,6 +359,37 @@ ubody.set_user_data(value: nil)
 fail_count += 1 unless assert("body user data cleared with nil", ubody.get_user_data.nil?)
 
 uworld.destroy
+
+puts
+puts "=== wrapper identity ==="
+# The same engine object always round-trips to the same Ruby wrapper (==),
+# courtesy of the weak identity registry in mrbx_pushtype.
+iworld = P.new_world(gx: 0, gy: 0)
+ibody = P.new_body(world: iworld, x: 0, y: 0, type: "dynamic")
+ishape = P.new_circle_shape(body: ibody, radius: 5)
+
+fail_count += 1 unless assert("body re-fetched from shape is identical", ishape.get_body.equal?(ibody))
+fail_count += 1 unless assert("shape from get_shape is identical", ibody.get_shape.equal?(ishape))
+fail_count += 1 unless assert("world from body is identical", ibody.get_world.equal?(iworld))
+fail_count += 1 unless assert("get_bodies entry is the same body", iworld.get_bodies[0].equal?(ibody))
+
+# Identity also lets user data be reached through any handle to the object.
+ibody.set_user_data(value: :marker)
+fail_count += 1 unless assert("user data via identical re-fetched wrapper",
+  ishape.get_body.get_user_data == :marker)
+
+# A contact wrapper is stable across calls too.
+ic1 = P.new_body(world: iworld, x: 0, y: 0, type: "dynamic")
+ic2 = P.new_body(world: iworld, x: 5, y: 0, type: "dynamic")
+P.new_circle_shape(body: ic1, radius: 10)
+P.new_circle_shape(body: ic2, radius: 10)
+iworld.update(dt: 1.0 / 60)
+icontacts = iworld.get_contacts
+if icontacts.length >= 1
+  fail_count += 1 unless assert("contact wrapper stable across calls",
+    iworld.get_contacts[0].equal?(icontacts[0]))
+end
+iworld.destroy
 
 puts
 puts "=== destroy ==="

@@ -63,10 +63,13 @@ keep their identity across calls via the World object memoizer. Arbitrary
 **user data** is ported too — `Body`/`Shape`/`Joint` `set_user_data` /
 `get_user_data` store one arbitrary Ruby value per engine object (GC-protected,
 keyed by the C++ object so it round-trips through a re-fetched wrapper or a
-callback). Collision callbacks, the body/shape/joint wrapper-identity registry
-(so two wrappers for the same object compare `==`), and the **user-callback**
-query/ray-cast variants (which need an mruby callback-reference mechanism) are
-deferred to later slices — see PORTING.md §A for the full breakdown.
+callback). **Wrapper identity** is ported engine-wide too: `mrbx_pushtype` keeps
+a weak per-VM registry so every Ruby handle to one engine object is the same
+object (`==`), the mruby equivalent of LÖVE's Lua weak-valued userdata table
+(no leak — the wrapper's free callback evicts the entry on collection).
+Collision callbacks and the **user-callback** query/ray-cast variants (which
+need an mruby callback-reference mechanism) are deferred to later slices — see
+PORTING.md §A for the full breakdown.
 The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the
@@ -283,8 +286,9 @@ narrative overview.
    indices keep LÖVE's convention (1 left, 2 right, 3 middle). The cursor object
    family (`new_cursor` / `get_system_cursor` / `set_cursor` / `get_cursor` and
    the `Love::Cursor` type) runs on the real backend's `love::mouse::sdl::Cursor`.
-3. Swap the object/proxy system: the Lua weak-table identity map needs an mruby
-   equivalent so the same C++ object always maps to the same Ruby object.
+3. Swap the object/proxy system — **done** for object identity: `mrbx_pushtype`
+   keeps a weak per-VM registry so the same C++ object always maps to the same
+   Ruby object (the mruby equivalent of the Lua weak-table identity map).
 4. Wire CMake (`CMakeLists.txt`) to build `libmruby.a` and link it instead of
    `lovedep::Lua`; drop `src/libraries/lua53` and the LuaJIT path.
 5. Port the FFI-dependent fast paths (love uses LuaJIT FFI in a few wrappers).

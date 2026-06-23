@@ -356,9 +356,9 @@ Deferred to later physics slices (functionality not in the mruby build yet):
       invalidation of a wrapping `Contact` is live. The remaining markers only guard
       the Lua `getPositions`/`getNormal` and the Lua `World`/`Body` `getContacts`
       readbacks, reimplemented in the wrapper. Contact wrapper **identity** across
-      calls is preserved via the World object memoizer (`findObject`), unlike
-      bodies/shapes/joints which still mint fresh wrappers (waits on #phys-identity).
-      Covered by `physics_test.rb`.
+      calls is preserved via the World object memoizer (`findObject`) for the C++
+      Contact, and the Ruby wrapper is now also stable via the #phys-identity
+      registry. Covered by `physics_test.rb`.
 - [~] (#phys-joints) all 11 joint types + the `Physics` joint factories +
       `World`/`Body` `getJoints` are ported (keyword-argument factories, snake_case
       methods, multi-return getters as Hashes). Joint lifecycle (implicit/deferred
@@ -368,8 +368,7 @@ Deferred to later physics slices (functionality not in the mruby build yet):
       `getAxis`/`getGroundAnchors`/`getLinearOffset`) and the Lua `getJoints`
       readbacks — all reimplemented in the wrapper over `getBox2DJoint()`; the Lua
       bodies survive behind the guard for the Lua build. Joint object **identity**
-      is not preserved across wrappers yet (a fresh wrapper per `mrbx_pushtype`) —
-      that waits on the registry from #phys-identity.
+      across wrappers is now preserved by the #phys-identity registry.
 - [x] (#phys-userdata) `Body`/`Shape`/`Joint` `set_user_data`/`get_user_data`
       are ported. The mruby build stores one arbitrary Ruby value per engine
       object via `mrbx_set_userdata`/`mrbx_get_userdata`/`mrbx_clear_userdata`
@@ -383,15 +382,20 @@ Deferred to later physics slices (functionality not in the mruby build yet):
       `setUserData`/`getUserData` survive behind `#ifndef LOVE_MRUBY` for the Lua
       build (they need a `lua_State`); that is a permanent dual-build split, not
       a deferral, so it carries no marker. Covered by `physics_test.rb`.
-- [ ] (#phys-identity) wrapper-identity registry so the same engine object
-      round-trips to one Ruby object (`==`). Today `mrbx_pushtype` mints a fresh
-      Ruby wrapper each call, so two wrappers for the same Body/Shape/Joint
-      compare unequal (Contact is the exception — it reuses the World object
-      memoizer via `findObject`). A general registry needs weak-reference or
-      object-destruction-hook semantics that core mruby lacks, so caching every
-      `mrbx_pushtype` wrapper unconditionally would leak across the whole engine;
-      it is its own design problem, split out of #phys-userdata. User data does
-      **not** depend on this (it is keyed by the C++ object, not the wrapper).
+- [x] (#phys-identity) wrapper-identity registry: the same engine object now
+      round-trips to one Ruby object (`==`). `mrbx_pushtype` keeps a **weak**
+      `(mrb_state*, love::Object*) -> wrapper` map (`objectWrappers` in
+      common/mrb_runtime.cpp) and returns the live wrapper if one exists. The map
+      is *not* GC-protected, so it never keeps a wrapper (or the C++ object it
+      retains) alive; the wrapper's existing free callback (`mrbx_object_free`)
+      evicts the entry when the wrapper is collected, and `mrbx_forgetstate`
+      drops a closing VM's entries. That weak behaviour is the mruby equivalent
+      of the Lua weak-valued userdata table, so it works for **every** love::Object
+      type, not just physics, with no leak. Relies on mruby's non-moving GC (the
+      stored mrb_value stays a valid heap pointer) and on pushes always using the
+      object's concrete type (pushShape/pushJoint dispatch on the runtime type;
+      single inheritance keeps the love::Object address identical across static
+      types). Covered by the `=== wrapper identity ===` block in physics_test.rb.
 
 ---
 
