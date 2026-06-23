@@ -50,9 +50,12 @@ per-shape geometry queries are in too — `ray_cast` / `compute_aabb` /
 vertex readback, and `Physics.get_distance`. It is also the first engine code
 with VM calls embedded in the engine class (World's collision callbacks, the
 `lua_State`-taking helpers on World/Body/Shape); those Lua-only sections are
-guarded with `#ifndef LOVE_MRUBY` and tracked in PORTING.md. Joints, contacts,
-collision callbacks, and the **World-level** ray-cast / AABB-query families are
-deferred to later slices — see PORTING.md §A for the full breakdown.
+guarded with `#ifndef LOVE_MRUBY` and tracked in PORTING.md. The World-level
+result-returning spatial queries are in too — `get_shapes_in_area` (AABB query)
+and `ray_cast_any` / `ray_cast_closest`. Joints, contacts, collision callbacks,
+and the **user-callback** query/ray-cast variants (which need an mruby
+callback-reference mechanism) are deferred to later slices — see PORTING.md §A
+for the full breakdown.
 The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the

@@ -164,6 +164,31 @@ fail_count += 1 unless assert("get_distance has x1/y1/x2/y2",
   d.key?(:x1) && d.key?(:y1) && d.key?(:x2) && d.key?(:y2))
 
 puts
+puts "=== world spatial queries ==="
+# A fresh world with one static circle (radius 10) at (50, 50) makes the
+# AABB query and ray casts deterministic.
+qworld = P.new_world(gx: 0, gy: 0)
+qbody = P.new_body(world: qworld, x: 50, y: 50, type: "static")
+qshape = P.new_circle_shape(body: qbody, radius: 10)
+
+# get_shapes_in_area: a box around the circle finds it; a far box finds nothing.
+inside = qworld.get_shapes_in_area(x1: 0, y1: 0, x2: 100, y2: 100)
+fail_count += 1 unless assert("get_shapes_in_area finds 1", inside.length == 1)
+fail_count += 1 unless assert("found shape is the circle", inside[0].get_type == "circle")
+outside = qworld.get_shapes_in_area(x1: 200, y1: 200, x2: 300, y2: 300)
+fail_count += 1 unless assert("get_shapes_in_area far box is empty", outside.length == 0)
+
+# ray_cast_closest: a vertical ray through the centre hits the circle...
+rc = qworld.ray_cast_closest(x1: 50, y1: -100, x2: 50, y2: 100)
+fail_count += 1 unless assert("ray_cast_closest hits", !rc.nil?)
+fail_count += 1 unless assert("hit shape is the circle", rc && rc[:shape].get_type == "circle")
+fail_count += 1 unless assert("hit fraction in (0,1)", rc && rc[:fraction] > 0 && rc[:fraction] < 1)
+# ray_cast_any also reports a hit; a ray well clear of the circle misses.
+fail_count += 1 unless assert("ray_cast_any hits", !qworld.ray_cast_any(x1: 50, y1: -100, x2: 50, y2: 100).nil?)
+fail_count += 1 unless assert("ray_cast_closest miss -> nil", qworld.ray_cast_closest(x1: 200, y1: -100, x2: 200, y2: 100).nil?)
+qworld.destroy
+
+puts
 puts "=== destroy ==="
 body.destroy
 fail_count += 1 unless assert("body destroyed?", body.destroyed?)

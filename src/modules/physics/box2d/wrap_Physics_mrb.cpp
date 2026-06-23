@@ -1100,6 +1100,45 @@ static const MrbReg body_functions[] =
 
 #define WORLD (mrbx_checktype<World>(mrb, self))
 
+// #phys-query: an AABB-query callback that just collects the overlapping
+// shapes into a vector (the Lua CollectCallback built a Lua table). Applies the
+// same category-mask filter as the engine's CollectCallback.
+namespace
+{
+class ShapeCollector : public b2QueryCallback
+{
+public:
+	ShapeCollector(uint16 mask) : categoryMask(mask) {}
+	bool ReportFixture(b2Fixture *f) override
+	{
+		if (categoryMask != 0xFFFF && (categoryMask & f->GetFilterData().categoryBits) == 0)
+			return true;
+		Shape *s = (Shape *)(f->GetUserData().pointer);
+		if (s) shapes.push_back(s);
+		return true;
+	}
+	std::vector<Shape *> shapes;
+private:
+	uint16 categoryMask;
+};
+} // anonymous
+
+// #phys-raycast: a single ray hit -> { shape:, x:, y:, normal_x:, normal_y:,
+// fraction: } (the engine pushed the shape + five numbers).
+static mrb_value pushRayHit(mrb_state *mrb, const World::RayCastOneCallback &rc)
+{
+	Shape *s = (Shape *)(rc.hitFixture->GetUserData().pointer);
+	b2Vec2 hp = Physics::scaleUp(rc.hitPoint);
+	mrb_value h = mrb_hash_new(mrb);
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "shape")),    pushShape(mrb, s));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "x")),        mrbx_number(mrb, hp.x));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "y")),        mrbx_number(mrb, hp.y));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "normal_x")), mrbx_number(mrb, rc.hitNormal.x));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "normal_y")), mrbx_number(mrb, rc.hitNormal.y));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "fraction")), mrbx_number(mrb, rc.hitFraction));
+	return h;
+}
+
 static mrb_value world_update(mrb_state *mrb, mrb_value self)
 {
 	mrb_value v[3];
@@ -1176,6 +1215,60 @@ static mrb_value world_getBodies(mrb_state *mrb, mrb_value self)
 	return arr;
 }
 
+// #phys-query: getShapesInArea reimplemented over getBox2DWorld()->QueryAABB +
+// the ShapeCollector above. `categories:` is an optional array of 1..16 (default
+// all categories). queryShapesInArea (Lua user callback) stays deferred.
+static mrb_value world_getShapesInArea(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[5];
+	mrbx_get_kwargs(mrb, {"x1", "y1", "x2", "y2", "categories"}, 4, v);
+	World *w = WORLD;
+	float lx = mrbx_checkfloat(mrb, v[0]);
+	float ly = mrbx_checkfloat(mrb, v[1]);
+	float ux = mrbx_checkfloat(mrb, v[2]);
+	float uy = mrbx_checkfloat(mrb, v[3]);
+	uint16 mask = mrb_undef_p(v[4]) ? 0xFFFF : bitsFromArray(mrb, v[4]);
+	b2AABB box;
+	box.lowerBound = Physics::scaleDown(b2Vec2(lx, ly));
+	box.upperBound = Physics::scaleDown(b2Vec2(ux, uy));
+	ShapeCollector collector(mask);
+	mrbx_catchexcept(mrb, [&]() { w->getBox2DWorld()->QueryAABB(&collector, box); });
+	mrb_value arr = mrb_ary_new_capa(mrb, (mrb_int) collector.shapes.size());
+	for (Shape *s : collector.shapes)
+		mrb_ary_push(mrb, arr, pushShape(mrb, s));
+	return arr;
+}
+
+// #phys-raycast: rayCastAny / rayCastClosest, sharing the engine's
+// RayCastOneCallback. Returns the ray-hit Hash or nil. The full rayCast (a Lua
+// callback invoked per fixture hit) stays deferred.
+static mrb_value worldRayCastOne(mrb_state *mrb, mrb_value self, bool any)
+{
+	mrb_value v[5];
+	mrbx_get_kwargs(mrb, {"x1", "y1", "x2", "y2", "categories"}, 4, v);
+	World *w = WORLD;
+	float x1 = mrbx_checkfloat(mrb, v[0]);
+	float y1 = mrbx_checkfloat(mrb, v[1]);
+	float x2 = mrbx_checkfloat(mrb, v[2]);
+	float y2 = mrbx_checkfloat(mrb, v[3]);
+	uint16 mask = mrb_undef_p(v[4]) ? 0xFFFF : bitsFromArray(mrb, v[4]);
+	b2Vec2 p1 = Physics::scaleDown(b2Vec2(x1, y1));
+	b2Vec2 p2 = Physics::scaleDown(b2Vec2(x2, y2));
+	World::RayCastOneCallback rc(mask, any);
+	mrbx_catchexcept(mrb, [&]() { w->getBox2DWorld()->RayCast(&rc, p1, p2); });
+	return rc.hitFixture ? pushRayHit(mrb, rc) : mrb_nil_value();
+}
+
+static mrb_value world_rayCastAny(mrb_state *mrb, mrb_value self)
+{
+	return worldRayCastOne(mrb, self, true);
+}
+
+static mrb_value world_rayCastClosest(mrb_state *mrb, mrb_value self)
+{
+	return worldRayCastOne(mrb, self, false);
+}
+
 static mrb_value world_isDestroyed(mrb_state *mrb, mrb_value self)
 {
 	return mrbx_boolean(mrb, !WORLD->isValid());
@@ -1202,6 +1295,9 @@ static const MrbReg world_functions[] =
 	{ "get_joint_count",     world_getJointCount,      MRB_ARGS_NONE() },
 	{ "get_contact_count",   world_getContactCount,    MRB_ARGS_NONE() },
 	{ "get_bodies",          world_getBodies,          MRB_ARGS_NONE() },
+	{ "get_shapes_in_area",  world_getShapesInArea,    MRB_ARGS_KEY(5, 0) },
+	{ "ray_cast_any",        world_rayCastAny,         MRB_ARGS_KEY(5, 0) },
+	{ "ray_cast_closest",    world_rayCastClosest,     MRB_ARGS_KEY(5, 0) },
 	{ "destroyed?",          world_isDestroyed,        MRB_ARGS_NONE() },
 	{ "destroy",             world_destroy,            MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }

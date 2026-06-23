@@ -320,19 +320,32 @@ marker is permanent and the item is `[~]` rather than `[x]`):
       over `Shape::getFixture()`; both shapes must be active in a World. Returns a
       Hash `{distance:, x1:, y1:, x2:, y2:}` (distance + the nearest point on each
       shape). Covered by `physics_test.rb`.
+- [~] (#phys-query) `World.get_shapes_in_area(x1:, y1:, x2:, y2:, categories:)` —
+      the **result-returning** AABB query, reimplemented over
+      `getBox2DWorld()->QueryAABB` + a small in-wrapper `ShapeCollector`
+      (b2QueryCallback). `categories:` is an optional array of 1..16 (default all).
+      Returns an Array of the overlapping shapes. The **user-callback** variant
+      `queryShapesInArea` (a Ruby block per fixture) stays deferred — it needs the
+      callback-reference mechanism (with #phys-callbacks). Covered by `physics_test.rb`.
+- [~] (#phys-raycast) `World.ray_cast_any` / `ray_cast_closest`
+      (`x1:, y1:, x2:, y2:, categories:`) — the two **result-returning** ray casts,
+      reimplemented over `getBox2DWorld()->RayCast` + the engine's shared
+      `RayCastOneCallback` (which is not LOVE_MRUBY-guarded). Each returns a Hash
+      `{shape:, x:, y:, normal_x:, normal_y:, fraction:}` or nil on a miss. The
+      full `rayCast` (a Ruby block invoked per fixture hit, returning the next
+      fraction) stays deferred with #phys-callbacks. Covered by `physics_test.rb`.
 
-The Lua-build paths for the three `[~]` items above stay behind `#ifndef
-LOVE_MRUBY` in Shape.cpp / PolygonShape.cpp / EdgeShape.cpp / Physics.cpp, so
+The Lua-build paths for the `[~]` items above stay behind `#ifndef LOVE_MRUBY`
+in Shape.cpp / PolygonShape.cpp / EdgeShape.cpp / Physics.cpp / World.cpp, so
 their markers are permanent (like #phys-shape-filter) and they are `[~]`, not `[x]`.
 
 Deferred to later physics slices (functionality not in the mruby build yet):
 - [ ] (#phys-callbacks) World collision callbacks: `set_callbacks`/`get_callbacks`,
-      contact filter, and the `ContactCallback`/`ContactFilter` machinery. Needs
+      contact filter, the `ContactCallback`/`ContactFilter` machinery, **and** the
+      user-callback query/raycast variants (`queryShapesInArea`, `rayCast`). Needs
       an mruby callback-reference mechanism + the Contact type. `ShouldCollide`
       still applies the standard category/mask/group filtering (no user filter).
 - [ ] (#phys-contact) the `Contact` object type + `World`/`Body` `getContacts`.
-- [ ] (#phys-query) `World` `queryShapesInArea` / `getShapesInArea` (AABB query).
-- [ ] (#phys-raycast) `World` `rayCast` / `rayCastAny` / `rayCastClosest`.
 - [ ] (#phys-joints) all joint types + the `Physics` joint factories + `getJoints`
       (the heaviest remaining chunk — 11 joint wrappers).
 - [ ] (#phys-userdata) `Body`/`Shape` `setUserData`/`getUserData` (Lua Reference).
