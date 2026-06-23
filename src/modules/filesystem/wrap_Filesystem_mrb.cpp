@@ -33,11 +33,14 @@
 //
 // Functions returning multiple values in Lua (read -> contents, size) return a
 // single Ruby value here (the string; its bytesize is the count). Iterators
-// (lines) return arrays. Lua-loader-specific functions (load, require paths),
-// CommonPath mounting, symlinks, fused/android settings are intentionally left
-// for later passes.
-// TODO(mruby) #fs-deferred: Lua-loader/require paths, CommonPath mounting,
-// symlinks, fused/android settings, Data-based mounting (see PORTING.md §A)
+// (lines) return arrays. Archive mounting (incl. Data/FileData-backed archives,
+// plus the full-path and common-path mount family) and symlink toggling are
+// ported; the Lua-loader/require search paths and the fused/Android platform
+// settings remain deferred.
+// TODO(mruby) #fs-loader: Lua-loader functions (load) + require search paths
+// have no direct mruby analog yet — needs reinterpreting for mruby. PORTING.md §A.
+// TODO(mruby) #fs-platform: fused-mode + Android save-storage settings
+// (is_fused / set_android_save_external etc.) not exposed. PORTING.md §A.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -351,24 +354,152 @@ static mrb_value w_getSource(mrb_state *mrb, mrb_value self)
 	return mrbx_string(mrb, instance()->getSource());
 }
 
+// Resolve a love::Data + archive name from the `data:`/`name:` kwargs. A
+// FileData carries its own filename, so `name:` is optional for it; any other
+// Data requires an explicit `name:` (the virtual archive name physfs sees).
+static Data *getmountdata(mrb_state *mrb, mrb_value vdata, mrb_value vname, std::string &archivename)
+{
+	Data *data = mrbx_checktype<Data>(mrb, vdata);
+	if (mrbx_istype<FileData>(mrb, vdata) && (mrb_undef_p(vname) || mrb_nil_p(vname)))
+		archivename = ((FileData *) data)->getFilename();
+	else
+		archivename = mrbx_checkstring(mrb, vname);
+	return data;
+}
+
+// mount(mountpoint:, append_to_path:, archive:/data:[, name:]) — mounts an
+// archive (or directory) into the virtual filesystem. Either `archive:` (a path
+// String) or `data:` (a Data/FileData whose bytes are mounted as an archive; a
+// non-FileData Data needs an archive `name:`).
 static mrb_value w_mount(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	mrb_value v[3];
-	mrbx_get_kwargs(mrb, {"archive", "mountpoint", "append_to_path"}, 2, v);
-	std::string archive = mrbx_checkstring(mrb, v[0]);
-	std::string mountpoint = mrbx_checkstring(mrb, v[1]);
-	bool append = mrbx_optboolean(mrb, v[2], false);
+	mrb_value v[5]; // mountpoint, archive, data, name, append_to_path
+	mrbx_get_kwargs(mrb, {"mountpoint", "archive", "data", "name", "append_to_path"}, 1, v);
+
+	std::string mountpoint = mrbx_checkstring(mrb, v[0]);
+	bool append = mrbx_optboolean(mrb, v[4], false);
+
+	if (!mrb_undef_p(v[2]) && !mrb_nil_p(v[2]))
+	{
+		std::string archivename;
+		Data *data = getmountdata(mrb, v[2], v[3], archivename);
+		return mrbx_boolean(mrb, instance()->mount(data, archivename.c_str(), mountpoint.c_str(), append));
+	}
+
+	std::string archive = mrbx_checkstring(mrb, v[1]);
 	return mrbx_boolean(mrb, instance()->mount(archive.c_str(), mountpoint.c_str(), append));
 }
 
+// unmount(archive:/data:) — unmounts a previously mounted archive path or Data.
 static mrb_value w_unmount(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2]; // archive, data
+	mrbx_get_kwargs(mrb, {"archive", "data"}, 0, v);
+
+	if (!mrb_undef_p(v[1]) && !mrb_nil_p(v[1]))
+	{
+		Data *data = mrbx_checktype<Data>(mrb, v[1]);
+		return mrbx_boolean(mrb, instance()->unmount(data));
+	}
+
+	std::string archive = mrbx_checkstring(mrb, v[0]);
+	return mrbx_boolean(mrb, instance()->unmount(archive.c_str()));
+}
+
+// --- enum helpers for the full-path / common-path mount family -----------
+
+static Filesystem::CommonPath checkcommonpath(mrb_state *mrb, mrb_value v)
+{
+	std::string s = mrbx_checkstring(mrb, v);
+	Filesystem::CommonPath cp;
+	if (!Filesystem::getConstant(s.c_str(), cp))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "invalid common path: %s", s.c_str());
+	return cp;
+}
+
+static Filesystem::MountPermissions optpermissions(mrb_state *mrb, mrb_value v)
+{
+	if (mrb_undef_p(v) || mrb_nil_p(v))
+		return Filesystem::MOUNT_PERMISSIONS_READ;
+	std::string s = mrbx_checkstring(mrb, v);
+	Filesystem::MountPermissions p;
+	if (!Filesystem::getConstant(s.c_str(), p))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "invalid mount permissions: %s", s.c_str());
+	return p;
+}
+
+// mount_full_path(archive:, mountpoint:, permissions:, append_to_path:) — mounts
+// an absolute OS path; `permissions:` is "read" (default) or "readwrite".
+static mrb_value w_mountFullPath(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[4]; // archive, mountpoint, permissions, append_to_path
+	mrbx_get_kwargs(mrb, {"archive", "mountpoint", "permissions", "append_to_path"}, 2, v);
+	std::string archive = mrbx_checkstring(mrb, v[0]);
+	std::string mountpoint = mrbx_checkstring(mrb, v[1]);
+	Filesystem::MountPermissions perms = optpermissions(mrb, v[2]);
+	bool append = mrbx_optboolean(mrb, v[3], false);
+	return mrbx_boolean(mrb, instance()->mountFullPath(archive.c_str(), mountpoint.c_str(), perms, append));
+}
+
+// mount_common_path(common_path:, mountpoint:, permissions:, append_to_path:) —
+// mounts one of the engine's common paths (e.g. "appsavedir", "userhome").
+static mrb_value w_mountCommonPath(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[4]; // common_path, mountpoint, permissions, append_to_path
+	mrbx_get_kwargs(mrb, {"common_path", "mountpoint", "permissions", "append_to_path"}, 2, v);
+	Filesystem::CommonPath cp = checkcommonpath(mrb, v[0]);
+	std::string mountpoint = mrbx_checkstring(mrb, v[1]);
+	Filesystem::MountPermissions perms = optpermissions(mrb, v[2]);
+	bool append = mrbx_optboolean(mrb, v[3], false);
+	return mrbx_boolean(mrb, instance()->mountCommonPath(cp, mountpoint.c_str(), perms, append));
+}
+
+static mrb_value w_unmountFullPath(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
 	mrb_value v[1];
 	mrbx_get_kwargs(mrb, {"archive"}, 1, v);
-	std::string archive = mrbx_checkstring(mrb, v[0]);
-	return mrbx_boolean(mrb, instance()->unmount(archive.c_str()));
+	std::string fullpath = mrbx_checkstring(mrb, v[0]);
+	return mrbx_boolean(mrb, instance()->unmountFullPath(fullpath.c_str()));
+}
+
+static mrb_value w_unmountCommonPath(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"common_path"}, 1, v);
+	Filesystem::CommonPath cp = checkcommonpath(mrb, v[0]);
+	return mrbx_boolean(mrb, instance()->unmount(cp));
+}
+
+// get_full_common_path(common_path:) -> the absolute OS path for a common path.
+static mrb_value w_getFullCommonPath(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"common_path"}, 1, v);
+	Filesystem::CommonPath cp = checkcommonpath(mrb, v[0]);
+	std::string path = instance()->getFullCommonPath(cp);
+	return mrb_str_new(mrb, path.data(), path.size());
+}
+
+static mrb_value w_setSymlinksEnabled(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"enable"}, 1, v);
+	instance()->setSymlinksEnabled(mrbx_optboolean(mrb, v[0], true));
+	return mrb_nil_value();
+}
+
+static mrb_value w_areSymlinksEnabled(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	return mrbx_boolean(mrb, instance()->areSymlinksEnabled());
 }
 
 static mrb_value w_openFile(mrb_state *mrb, mrb_value self)
@@ -596,8 +727,15 @@ static const MrbReg functions[] =
 	{ "get_identity",           w_getIdentity,        MRB_ARGS_NONE() },
 	{ "set_source",             w_setSource,          MRB_ARGS_KEY(1, 0) },
 	{ "get_source",             w_getSource,          MRB_ARGS_NONE() },
-	{ "mount",                  w_mount,              MRB_ARGS_KEY(3, 0) },
-	{ "unmount",                w_unmount,            MRB_ARGS_KEY(1, 0) },
+	{ "mount",                  w_mount,              MRB_ARGS_KEY(5, 0) },
+	{ "unmount",                w_unmount,            MRB_ARGS_KEY(2, 0) },
+	{ "mount_full_path",        w_mountFullPath,      MRB_ARGS_KEY(4, 0) },
+	{ "mount_common_path",      w_mountCommonPath,    MRB_ARGS_KEY(4, 0) },
+	{ "unmount_full_path",      w_unmountFullPath,    MRB_ARGS_KEY(1, 0) },
+	{ "unmount_common_path",    w_unmountCommonPath,  MRB_ARGS_KEY(1, 0) },
+	{ "get_full_common_path",   w_getFullCommonPath,  MRB_ARGS_KEY(1, 0) },
+	{ "set_symlinks_enabled",   w_setSymlinksEnabled, MRB_ARGS_KEY(1, 0) },
+	{ "symlinks_enabled?",      w_areSymlinksEnabled, MRB_ARGS_NONE() },
 	{ "open_file",              w_openFile,           MRB_ARGS_KEY(2, 0) },
 	{ "new_file_data",          w_newFileData,        MRB_ARGS_KEY(2, 0) },
 	{ "get_working_directory",  w_getWorkingDirectory, MRB_ARGS_NONE() },

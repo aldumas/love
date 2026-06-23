@@ -34,12 +34,24 @@ timer · math · filesystem · event · window · graphics (real backend) · key
 ## A. Per-module deferrals (a ported module is missing specific features)
 
 ### filesystem
-- [ ] (#fs-deferred) deferred filesystem features:
-  - Lua-loader functions (`load`, `require` search paths)
-  - CommonPath mounting
-  - symlink support
-  - fused / Android settings
-  - Data-based mounting (mount a FileData/ByteData)
+Archive mounting and symlink toggling are ported. `mount` now takes either
+`archive:` (a path String) or `data:` (a Data/FileData whose bytes are mounted
+as an archive — a non-FileData Data also needs an archive `name:`); `unmount`
+likewise accepts `archive:` or `data:`. The full-path / common-path family is
+exposed: `mount_full_path` / `mount_common_path` (with `permissions:` "read"
+(default) or "readwrite"), `unmount_full_path` / `unmount_common_path`, and
+`get_full_common_path` (`common_path:` is a CommonPath name e.g. "appsavedir",
+"userhome", "userappdata"). Symlinks: `set_symlinks_enabled` (`enable:`) /
+`symlinks_enabled?`. Covered by `filesystem_mount_test.rb`. Note: re-mounting an
+already-mounted real path returns false by design (physfs), so e.g. the
+auto-mounted save dir can't be mounted again via `mount_common_path`. Still
+deferred (split out of the former #fs-deferred bundle):
+- [ ] (#fs-loader) Lua-loader functions (`load`) and `require` search paths —
+      Lua's package/`require` machinery has no direct mruby analog; needs
+      reinterpreting against mruby's own load path. The engine boot pipeline is
+      already ported, so this is about user-facing `require`, not bootstrap.
+- [ ] (#fs-platform) fused-mode + Android save-storage settings (`is_fused`,
+      `set_android_save_external`, etc.) — platform settings, not yet exposed.
 
 ### window
 - [x] (#win-omitted) `update_mode` and `get_pointer` — done; `update_mode`
