@@ -186,6 +186,14 @@ static mrb_value id_mapPixel(mrb_state *mrb, mrb_value self)
 
 	int components = love::getPixelFormatColorComponents(t->getFormat());
 
+	// The block's return value (a color Array) is a fresh heap object each
+	// iteration that we read and discard. Without restoring the GC arena, every
+	// one of them would stay pinned for the whole loop — O(pixels) garbage held
+	// alive on a large image. Snapshot the arena before the loop and roll it back
+	// after each pixel so those transients are collectible immediately. Nothing
+	// Ruby has to survive between pixels (t/blk are rooted by the call frame).
+	int arena = mrb_gc_arena_save(mrb);
+
 	for (int y = sy; y < sy + h; y++)
 	{
 		for (int x = sx; x < sx + w; x++)
@@ -202,6 +210,8 @@ static mrb_value id_mapPixel(mrb_state *mrb, mrb_value self)
 
 			c = readcolor(mrb, res, components);
 			t->setPixel(x, y, c);
+
+			mrb_gc_arena_restore(mrb, arena);
 		}
 	}
 

@@ -559,6 +559,21 @@ them changes when we swap.
       `src/libraries/lua53` and the LuaJIT path.
 - [ ] FFI fast paths: re-implement the few wrappers that use LuaJIT FFI.
 - [ ] Port the remaining ~66 `wrap_*.cpp` modules.
+- [ ] Memory audit (do once the port is otherwise complete): sweep the mruby
+      bindings for allocation/deallocation correctness. Two classes to look for:
+      (1) **GC-arena hygiene** — high-iteration loops that create and discard heap
+      `mrb_value`s (Arrays/Hashes/Strings/wrappers) without `mrb_gc_arena_save`/
+      `restore` pin O(n) garbage for the whole call. `Image#map_pixel` was fixed
+      this way; re-scan every per-pixel/per-sample/per-vertex loop and any
+      `mrb_yield*` inside a loop. (Note: under this build's word boxing, ints and
+      floats are immediates, so number-only loops are exempt — only heap objects
+      count.) (2) **Retained-reference balance** — every `mrb_gc_register` /
+      retain / `mrbx_set_userdata` / `mrbx_set_callback` has a matching
+      unregister/release on teardown *and* in `mrbx_forgetstate` (a closing VM),
+      with no leak on the replace path. Output-proportional builders (e.g.
+      `World#get_bodies`, collision-callback argv) are fine — their arena use is
+      bounded by the result they hand back. Consider a leak run under
+      valgrind/ASan once CMake replaces the harness Makefile.
 
 ---
 
