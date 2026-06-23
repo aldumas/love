@@ -174,6 +174,53 @@ struct RClass *mrbx_gettypeclass(mrb_state *mrb, const love::Type &type)
 	return cls;
 }
 
+// --- Per-object user data -------------------------------------------------
+
+// (mrb_state*, love::Object*) -> the GC-protected user-data value. The state is
+// part of the key so distinct VMs don't collide and a closing state's entries
+// can be dropped; the value is registered with that state's GC while present.
+static std::map<std::pair<mrb_state *, love::Object *>, mrb_value> userData;
+
+void mrbx_set_userdata(mrb_state *mrb, love::Object *object, mrb_value value)
+{
+	auto key = std::make_pair(mrb, object);
+	auto it = userData.find(key);
+	if (it != userData.end())
+	{
+		mrb_gc_unregister(mrb, it->second);
+		userData.erase(it);
+	}
+
+	// Storing nil just clears the slot (matching getUserData's nil default).
+	if (mrb_nil_p(value))
+		return;
+
+	mrb_gc_register(mrb, value);
+	userData[key] = value;
+}
+
+mrb_value mrbx_get_userdata(mrb_state *mrb, love::Object *object)
+{
+	auto it = userData.find(std::make_pair(mrb, object));
+	return it == userData.end() ? mrb_nil_value() : it->second;
+}
+
+void mrbx_clear_userdata(love::Object *object)
+{
+	// Called from engine teardown without an mrb_state in hand, so drop the
+	// object's entry across every state, unregistering with each one's GC.
+	for (auto it = userData.begin(); it != userData.end(); )
+	{
+		if (it->first.second == object)
+		{
+			mrb_gc_unregister(it->first.first, it->second);
+			it = userData.erase(it);
+		}
+		else
+			++it;
+	}
+}
+
 // Drop all cached type->class entries for a closing mrb_state, so a later state
 // reusing the same address can't be handed a stale RClass. Call before mrb_close.
 void mrbx_forgetstate(mrb_state *mrb)
@@ -185,6 +232,16 @@ void mrbx_forgetstate(mrb_state *mrb)
 		else
 			++it;
 	}
+
+	// Likewise drop any user-data entries bound to this state (their values die
+	// with the VM). No need to unregister — the GC roots go with the state.
+	for (auto it = userData.begin(); it != userData.end(); )
+	{
+		if (it->first.first == mrb)
+			it = userData.erase(it);
+		else
+			++it;
+	}
 }
 
 mrb_value mrbx_pushtype(mrb_state *mrb, love::Type &type, love::Object *object)
@@ -192,6 +249,10 @@ mrb_value mrbx_pushtype(mrb_state *mrb, love::Type &type, love::Object *object)
 	if (object == nullptr)
 		return mrb_nil_value();
 
+	// TODO(mruby) #phys-identity: this mints a fresh Ruby wrapper every call, so
+	// two wrappers for the same love::Object compare unequal. A general identity
+	// cache needs weak-reference semantics core mruby lacks (caching here
+	// unconditionally would pin every engine object for the VM's lifetime).
 	struct RClass *cls = mrbx_gettypeclass(mrb, type);
 
 	object->retain();

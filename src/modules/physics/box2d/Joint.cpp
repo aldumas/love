@@ -28,6 +28,11 @@
 #include "World.h"
 #include "Physics.h"
 
+#ifdef LOVE_MRUBY
+// mrbx_clear_userdata for the destroy path.
+#include "common/mrb_runtime.h"
+#endif
+
 
 namespace love
 {
@@ -53,11 +58,9 @@ Joint::Joint(Body *body1, Body *body2)
 Joint::~Joint()
 {
 #ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-userdata: ref is only populated by the Lua-only
-	// setUserData, so it stays null in the mruby build (Reference needs lua.h).
 	if (ref)
 		delete ref;
-#endif // LOVE_MRUBY (#phys-userdata)
+#endif // LOVE_MRUBY
 }
 
 Joint::Type Joint::getType() const
@@ -172,12 +175,13 @@ void Joint::destroyJoint(bool implicit)
 		world->world->DestroyJoint(joint);
 	joint = nullptr;
 
-#ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-userdata: remove userdata reference to avoid it sticking
-	// around after GC. ref is null in the mruby build (see the destructor).
+#ifdef LOVE_MRUBY
+	// Drop the GC-protected user data so its Ruby value can be collected.
+	mrbx_clear_userdata(this);
+#else
 	if (ref)
 		ref->unref();
-#endif // LOVE_MRUBY (#phys-userdata)
+#endif // LOVE_MRUBY
 
 	// Release the reference of the Box2D joint.
 	this->release();
@@ -194,7 +198,8 @@ bool Joint::getCollideConnected() const
 }
 
 #ifndef LOVE_MRUBY
-// TODO(mruby) #phys-userdata: arbitrary user data via a Lua Reference.
+// Lua user data via a Reference. The mruby build stores the value through
+// mrbx_set_userdata / mrbx_get_userdata in wrap_Physics_mrb.cpp instead.
 int Joint::setUserData(lua_State *L)
 {
 	love::luax_assert_argc(L, 1, 1);
@@ -216,7 +221,7 @@ int Joint::getUserData(lua_State *L)
 
 	return 1;
 }
-#endif // LOVE_MRUBY (#phys-userdata)
+#endif // LOVE_MRUBY
 
 } // box2d
 } // physics

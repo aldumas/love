@@ -59,11 +59,14 @@ setters/getters and multi-return getters as Hashes (`get_anchors`, `get_limits`,
 `World`/`Body` `get_joints`. The `Contact` type is in too — `World`/`Body`
 `get_contacts`, `get_positions` / `get_normal` / `get_shapes` / `get_children`,
 and the friction/restitution/enabled/tangent-speed accessors; contact wrappers
-keep their identity across calls via the World object memoizer. Collision
-callbacks, arbitrary user data (and the body/shape/joint wrapper-identity
-registry it brings), and the **user-callback** query/ray-cast variants (which
-need an mruby callback-reference mechanism) are deferred to later slices — see
-PORTING.md §A for the full breakdown.
+keep their identity across calls via the World object memoizer. Arbitrary
+**user data** is ported too — `Body`/`Shape`/`Joint` `set_user_data` /
+`get_user_data` store one arbitrary Ruby value per engine object (GC-protected,
+keyed by the C++ object so it round-trips through a re-fetched wrapper or a
+callback). Collision callbacks, the body/shape/joint wrapper-identity registry
+(so two wrappers for the same object compare `==`), and the **user-callback**
+query/ray-cast variants (which need an mruby callback-reference mechanism) are
+deferred to later slices — see PORTING.md §A for the full breakdown.
 The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the

@@ -519,6 +519,19 @@ static mrb_value shape_destroy(mrb_state *mrb, mrb_value self)
 	return mrb_nil_value();
 }
 
+static mrb_value shape_setUserData(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"value"}, 1, v);
+	mrbx_set_userdata(mrb, mrbx_checktype<Shape>(mrb, self), v[0]);
+	return self;
+}
+
+static mrb_value shape_getUserData(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_get_userdata(mrb, mrbx_checktype<Shape>(mrb, self));
+}
+
 static const MrbReg shape_functions[] =
 {
 	{ "get_type",        shape_getType,       MRB_ARGS_NONE() },
@@ -545,6 +558,8 @@ static const MrbReg shape_functions[] =
 	{ "compute_mass",    shape_computeMass,   MRB_ARGS_KEY(1, 0) },
 	{ "get_bounding_box", shape_getBoundingBox, MRB_ARGS_KEY(1, 0) },
 	{ "get_mass_data",   shape_getMassData,   MRB_ARGS_NONE() },
+	{ "set_user_data",   shape_setUserData,   MRB_ARGS_KEY(1, 0) },
+	{ "get_user_data",   shape_getUserData,   MRB_ARGS_NONE() },
 	{ "valid?",          shape_isValid,       MRB_ARGS_NONE() },
 	{ "destroy",         shape_destroy,       MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
@@ -1106,6 +1121,17 @@ static mrb_value body_isDestroyed(mrb_state *mrb, mrb_value self)
 {
 	return mrbx_boolean(mrb, BODY->body == nullptr);
 }
+static mrb_value body_setUserData(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"value"}, 1, v);
+	mrbx_set_userdata(mrb, BODY, v[0]);
+	return self;
+}
+static mrb_value body_getUserData(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_get_userdata(mrb, BODY);
+}
 static mrb_value body_destroy(mrb_state *mrb, mrb_value self)
 {
 	Body *b = BODY; mrbx_catchexcept(mrb, [&]() { b->destroy(); });
@@ -1173,6 +1199,8 @@ static const MrbReg body_functions[] =
 	{ "get_shapes",             body_getShapes,             MRB_ARGS_NONE() },
 	{ "get_joints",             body_getJoints,             MRB_ARGS_NONE() },
 	{ "get_contacts",           body_getContacts,           MRB_ARGS_NONE() },
+	{ "set_user_data",          body_setUserData,           MRB_ARGS_KEY(1, 0) },
+	{ "get_user_data",          body_getUserData,           MRB_ARGS_NONE() },
 	{ "destroyed?",             body_isDestroyed,           MRB_ARGS_NONE() },
 	{ "destroy",                body_destroy,               MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
@@ -1492,6 +1520,19 @@ static mrb_value joint_isDestroyed(mrb_state *mrb, mrb_value self)
 	return mrbx_boolean(mrb, !JOINT->isValid());
 }
 
+static mrb_value joint_setUserData(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"value"}, 1, v);
+	mrbx_set_userdata(mrb, JOINT, v[0]);
+	return self;
+}
+
+static mrb_value joint_getUserData(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_get_userdata(mrb, JOINT);
+}
+
 static mrb_value joint_destroy(mrb_state *mrb, mrb_value self)
 {
 	Joint *j = JOINT;
@@ -1512,6 +1553,8 @@ static const MrbReg joint_functions[] =
 	{ "get_reaction_torque", joint_getReactionTorque,  MRB_ARGS_KEY(1, 0) },
 	{ "enabled?",            joint_isEnabled,          MRB_ARGS_NONE() },
 	{ "collide_connected?",  joint_getCollideConnected, MRB_ARGS_NONE() },
+	{ "set_user_data",       joint_setUserData,        MRB_ARGS_KEY(1, 0) },
+	{ "get_user_data",       joint_getUserData,        MRB_ARGS_NONE() },
 	{ "destroyed?",          joint_isDestroyed,        MRB_ARGS_NONE() },
 	{ "destroy",             joint_destroy,            MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }

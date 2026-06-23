@@ -26,7 +26,10 @@
 #include "World.h"
 #include "Physics.h"
 
-#ifndef LOVE_MRUBY
+#ifdef LOVE_MRUBY
+// mrbx_set_userdata / mrbx_get_userdata / mrbx_clear_userdata.
+#include "common/mrb_runtime.h"
+#else
 // Needed for luax_pushjoint / luax_pushshape in the Lua table-returning helpers.
 #include "wrap_Joint.h"
 #include "wrap_Shape.h"
@@ -55,7 +58,6 @@ Body::Body(World *world, b2Vec2 p, Body::Type type)
 Body::~Body()
 {
 #ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-userdata: arbitrary user data uses a Lua Reference.
 	if (ref)
 		delete ref;
 #endif
@@ -584,8 +586,10 @@ void Body::destroy()
 	world->world->DestroyBody(body);
 	body = nullptr;
 
-#ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-userdata: remove userdata Reference to avoid GC leak.
+#ifdef LOVE_MRUBY
+	// Drop the GC-protected user data so its Ruby value can be collected.
+	mrbx_clear_userdata(this);
+#else
 	if (ref)
 		ref->unref();
 #endif
@@ -595,8 +599,8 @@ void Body::destroy()
 }
 
 #ifndef LOVE_MRUBY
-// TODO(mruby) #phys-userdata: set/get arbitrary user data via a Lua Reference;
-// needs an mruby-side reference mechanism before it can be ported.
+// Lua user data via a Reference. The mruby build stores the value through
+// mrbx_set_userdata / mrbx_get_userdata in wrap_Physics_mrb.cpp instead.
 int Body::setUserData(lua_State *L)
 {
 	love::luax_assert_argc(L, 1, 1);
@@ -618,7 +622,7 @@ int Body::getUserData(lua_State *L)
 
 	return 1;
 }
-#endif // LOVE_MRUBY (#phys-userdata)
+#endif // LOVE_MRUBY
 
 } // box2d
 } // physics

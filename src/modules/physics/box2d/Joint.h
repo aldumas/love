@@ -115,7 +115,8 @@ public:
 	bool getCollideConnected() const;
 
 #ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-userdata: arbitrary user data via a Lua Reference.
+	// Lua user data. The mruby build binds set_user_data / get_user_data in
+	// wrap_Physics_mrb.cpp via mrbx_set_userdata / mrbx_get_userdata instead.
 	/**
 	 * This function stores an in-C reference to arbitrary Lua data in the Box2D
 	 * Joint object.
@@ -126,7 +127,7 @@ public:
 	 * Gets the data set with setUserData. If no data is set, nil is returned.
 	 **/
 	int getUserData(lua_State *L);
-#endif // LOVE_MRUBY (#phys-userdata)
+#endif // LOVE_MRUBY
 
 	/**
 	 * Joints require pointers to a Box2D joint objects at

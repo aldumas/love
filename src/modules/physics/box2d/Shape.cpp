@@ -25,6 +25,11 @@
 #include "World.h"
 #include "Physics.h"
 
+#ifdef LOVE_MRUBY
+// mrbx_clear_userdata for the destroy path.
+#include "common/mrb_runtime.h"
+#endif
+
 // STD
 #include <bitset>
 
@@ -131,7 +136,6 @@ Shape::~Shape()
 	}
 
 #ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-userdata: user data uses a Lua Reference.
 	if (ref)
 		delete ref;
 #endif
@@ -157,8 +161,10 @@ void Shape::destroy(bool implicit)
 	shape = nullptr;
 	body = nullptr;
 
-#ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-userdata: remove userdata Reference to avoid GC leak.
+#ifdef LOVE_MRUBY
+	// Drop the GC-protected user data so its Ruby value can be collected.
+	mrbx_clear_userdata(this);
+#else
 	if (ref)
 		ref->unref();
 #endif
@@ -369,8 +375,8 @@ int Shape::pushBits(lua_State *L, uint16 bits)
 #endif // LOVE_MRUBY (#phys-shape-filter)
 
 #ifndef LOVE_MRUBY
-// TODO(mruby) #phys-userdata: arbitrary user data via a Lua Reference; needs an
-// mruby-side reference mechanism before it can be ported.
+// Lua user data via a Reference. The mruby build stores the value through
+// mrbx_set_userdata / mrbx_get_userdata in wrap_Physics_mrb.cpp instead.
 int Shape::setUserData(lua_State *L)
 {
 	love::luax_assert_argc(L, 1, 1);
@@ -392,7 +398,7 @@ int Shape::getUserData(lua_State *L)
 
 	return 1;
 }
-#endif // LOVE_MRUBY (#phys-userdata)
+#endif // LOVE_MRUBY
 
 bool Shape::testPoint(float x, float y) const
 {

@@ -357,7 +357,7 @@ Deferred to later physics slices (functionality not in the mruby build yet):
       the Lua `getPositions`/`getNormal` and the Lua `World`/`Body` `getContacts`
       readbacks, reimplemented in the wrapper. Contact wrapper **identity** across
       calls is preserved via the World object memoizer (`findObject`), unlike
-      bodies/shapes/joints which still mint fresh wrappers (waits on #phys-userdata).
+      bodies/shapes/joints which still mint fresh wrappers (waits on #phys-identity).
       Covered by `physics_test.rb`.
 - [~] (#phys-joints) all 11 joint types + the `Physics` joint factories +
       `World`/`Body` `getJoints` are ported (keyword-argument factories, snake_case
@@ -369,10 +369,29 @@ Deferred to later physics slices (functionality not in the mruby build yet):
       readbacks — all reimplemented in the wrapper over `getBox2DJoint()`; the Lua
       bodies survive behind the guard for the Lua build. Joint object **identity**
       is not preserved across wrappers yet (a fresh wrapper per `mrbx_pushtype`) —
-      that waits on the registry from #phys-userdata.
-- [ ] (#phys-userdata) `Body`/`Shape`/`Joint` `setUserData`/`getUserData` (Lua
-      Reference); also the wrapper-identity registry so the same engine object
-      round-trips to one Ruby object (`==`).
+      that waits on the registry from #phys-identity.
+- [x] (#phys-userdata) `Body`/`Shape`/`Joint` `set_user_data`/`get_user_data`
+      are ported. The mruby build stores one arbitrary Ruby value per engine
+      object via `mrbx_set_userdata`/`mrbx_get_userdata`/`mrbx_clear_userdata`
+      (common/mrb_runtime.cpp): a `(mrb_state*, love::Object*)`-keyed map that
+      GC-protects the value (`mrb_gc_register`) while set, mirroring the Lua
+      Reference. Keyed by the C++ object, so the value round-trips no matter
+      which Ruby wrapper fetches it (e.g. read back via `shape.get_body` or in a
+      future collision callback); `set_user_data(value: nil)` clears it. The
+      object's `destroy` clears the entry (so a reused address can't return
+      stale data) and `mrbx_forgetstate` drops a closing VM's entries. The Lua
+      `setUserData`/`getUserData` survive behind `#ifndef LOVE_MRUBY` for the Lua
+      build (they need a `lua_State`); that is a permanent dual-build split, not
+      a deferral, so it carries no marker. Covered by `physics_test.rb`.
+- [ ] (#phys-identity) wrapper-identity registry so the same engine object
+      round-trips to one Ruby object (`==`). Today `mrbx_pushtype` mints a fresh
+      Ruby wrapper each call, so two wrappers for the same Body/Shape/Joint
+      compare unequal (Contact is the exception — it reuses the World object
+      memoizer via `findObject`). A general registry needs weak-reference or
+      object-destruction-hook semantics that core mruby lacks, so caching every
+      `mrbx_pushtype` wrapper unconditionally would leak across the whole engine;
+      it is its own design problem, split out of #phys-userdata. User data does
+      **not** depend on this (it is keyed by the C++ object, not the wrapper).
 
 ---
 

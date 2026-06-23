@@ -194,6 +194,24 @@ struct RClass *mrbx_gettypeclass(mrb_state *mrb, const love::Type &type);
 void mrbx_forgetstate(mrb_state *mrb);
 
 /**
+ * --- Per-object user data ------------------------------------------------
+ *
+ * Associates one arbitrary Ruby value with a love::Object, keyed by the C++
+ * object so the value round-trips no matter which Ruby wrapper instance fetches
+ * it (e.g. set on a Body, read back via fixture.get_body in a callback). The
+ * value is GC-protected (mrb_gc_register) while stored, mirroring the Lua-era
+ * Reference. This is the mruby backend for the physics Body/Shape/Joint
+ * set_user_data/get_user_data methods.
+ *
+ * mrbx_set_userdata replaces (and unprotects) any previous value; storing nil
+ * clears it. mrbx_clear_userdata must be called when the object is destroyed so
+ * the value can be collected and a reused address can't return stale data.
+ **/
+void mrbx_set_userdata(mrb_state *mrb, love::Object *object, mrb_value value);
+mrb_value mrbx_get_userdata(mrb_state *mrb, love::Object *object);
+void mrbx_clear_userdata(love::Object *object);
+
+/**
  * Registers a LÖVE module as Love::<Name> with its keyword-argument methods.
  * The module instance is retained and stored so wrapper functions can reach it.
  **/

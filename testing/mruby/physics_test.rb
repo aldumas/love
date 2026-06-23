@@ -322,6 +322,45 @@ fail_count += 1 unless assert("body get_contacts non-empty", ca.get_contacts.len
 cworld.destroy
 
 puts
+puts "=== user data ==="
+uworld = P.new_world(gx: 0, gy: 0)
+ubody = P.new_body(world: uworld, x: 0, y: 0, type: "dynamic")
+ushape = P.new_circle_shape(body: ubody, radius: 5)
+uja = P.new_body(world: uworld, x: 0, y: 0, type: "dynamic")
+ujb = P.new_body(world: uworld, x: 50, y: 0, type: "dynamic")
+ujoint = P.new_distance_joint(body1: uja, body2: ujb, x1: 0, y1: 0, x2: 50, y2: 0)
+
+# Defaults to nil before anything is set.
+fail_count += 1 unless assert("body user data defaults nil", ubody.get_user_data.nil?)
+fail_count += 1 unless assert("shape user data defaults nil", ushape.get_user_data.nil?)
+fail_count += 1 unless assert("joint user data defaults nil", ujoint.get_user_data.nil?)
+
+# Arbitrary Ruby values round-trip with full fidelity (not Variant-flattened).
+payload = { hp: 100, name: "player", tags: [:a, :b] }
+ubody.set_user_data(value: payload)
+got = ubody.get_user_data
+fail_count += 1 unless assert("body user data round-trips the same object", got.equal?(payload))
+fail_count += 1 unless assert("body user data hash preserved", got[:hp] == 100 && got[:name] == "player")
+
+ushape.set_user_data(value: "shape-tag")
+fail_count += 1 unless assert("shape user data round-trips", ushape.get_user_data == "shape-tag")
+ujoint.set_user_data(value: 42)
+fail_count += 1 unless assert("joint user data round-trips", ujoint.get_user_data == 42)
+
+# The value is keyed by the engine object, so a freshly-fetched wrapper for the
+# same body still sees it (mirrors reading it back in a collision callback).
+fail_count += 1 unless assert("user data survives a re-fetched wrapper",
+  ushape.get_body.get_user_data.equal?(payload))
+
+# Replacing the value drops the old one; nil clears it.
+ubody.set_user_data(value: "replaced")
+fail_count += 1 unless assert("body user data replaced", ubody.get_user_data == "replaced")
+ubody.set_user_data(value: nil)
+fail_count += 1 unless assert("body user data cleared with nil", ubody.get_user_data.nil?)
+
+uworld.destroy
+
+puts
 puts "=== destroy ==="
 body.destroy
 fail_count += 1 unless assert("body destroyed?", body.destroyed?)
