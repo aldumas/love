@@ -46,12 +46,29 @@ exposed: `mount_full_path` / `mount_common_path` (with `permissions:` "read"
 `fused?` and `set_android_save_external` (`external:`, default false) /
 `android_save_external?`. Covered by `filesystem_mount_test.rb`. Note: re-mounting
 an already-mounted real path returns false by design (physfs), so e.g. the
-auto-mounted save dir can't be mounted again via `mount_common_path`. Still
-deferred (split out of the former #fs-deferred bundle):
-- [ ] (#fs-loader) Lua-loader functions (`load`) and `require` search paths —
-      Lua's package/`require` machinery has no direct mruby analog; needs
-      reinterpreting against mruby's own load path. The engine boot pipeline is
-      already ported, so this is about user-facing `require`, not bootstrap.
+auto-mounted save dir can't be mounted again via `mount_common_path`. The
+following were split out of the former #fs-deferred bundle and are now all done:
+- [x] (#fs-loader) loader / `require` — done, re-interpreted for mruby (which has
+      no `require` of its own). Three pieces, all over the **virtual** filesystem
+      (so they work inside `.love` archives and the save dir, like Lua's loader):
+      • `get_require_path` / `set_require_path(paths:)` — the search patterns
+        (each with a `?` placeholder). Default is `["?.rb", "?/init.rb"]` (the
+        mruby module overrides the engine's Lua default at init). No
+        `c_require_path`: mruby has no runtime native-module loading (gems are
+        compiled in), so the Lua C-loader has no analog.
+      • `load(name:)` — reads + compiles a script to a callable chunk **without**
+        running it, returning a `Proc` (call it to run the body and get its last
+        value). Raises `SyntaxError` on a parse error. The compiled top-proc has
+        its class restored (codegen nulls it) so it is a real `.call`-able Proc.
+      • a global `require(name)` (Kernel method, **positional** arg like Ruby's)
+        — resolves via the require path, runs the file **once** at top level for
+        its side effects (defining classes/constants), returns true the first
+        time / false if already loaded, tracks `$LOADED_FEATURES`, and on a
+        raising/failing file un-records it (so a retry is possible) and
+        propagates. Semantics are Ruby's, not Lua's (Lua's `require` returned the
+        module value; Ruby's runs for side effects + returns a bool). The run is
+        wrapped in `mrb_protect_error` because `mrb_load` can both longjmp and
+        set `mrb->exc` depending on nesting. Covered by `loader_test.rb`.
 - [x] (#fs-platform) fused-mode + Android save-storage settings — done.
       `set_fused`/`fused?` wrap the physfs latch (`setFused` is one-shot, set by
       boot exactly once, so a later `set_fused` is ignored — the test asserts

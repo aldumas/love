@@ -34,11 +34,9 @@
 // Functions returning multiple values in Lua (read -> contents, size) return a
 // single Ruby value here (the string; its bytesize is the count). Iterators
 // (lines) return arrays. Archive mounting (incl. Data/FileData-backed archives,
-// plus the full-path and common-path mount family), symlink toggling, and the
-// fused/Android platform settings are ported; the Lua-loader/require search
-// paths remain deferred.
-// TODO(mruby) #fs-loader: Lua-loader functions (load) + require search paths
-// have no direct mruby analog yet — needs reinterpreting for mruby. PORTING.md §A.
+// plus the full-path and common-path mount family), symlink toggling, the
+// fused/Android platform settings, and the loader (require path / load / a
+// global Ruby-style require over the virtual filesystem) are all ported.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -48,6 +46,9 @@
 #include "File.h"
 #include "FileData.h"
 #include "physfs/Filesystem.h"
+
+#include <mruby/compile.h>
+#include <mruby/proc.h>
 
 #include <algorithm>
 #include <string>
@@ -754,6 +755,201 @@ static mrb_value w_getInfo(mrb_state *mrb, mrb_value self)
 	return h;
 }
 
+// =========================================================================
+// Loader: require path, load(), and the global require (#fs-loader)
+// =========================================================================
+//
+// The Lua port hooked package.searchers so `require` resolved modules over the
+// LÖVE virtual filesystem (working inside .love archives and the save dir, not
+// the OS path). mruby has no `require` of its own, so we provide one with Ruby
+// semantics — runs the file once for its side effects (it defines classes/
+// constants), returns true/false, tracks loaded files in $LOADED_FEATURES —
+// while keeping LÖVE's behavior of resolving through the require path over the
+// virtual filesystem. The require path defaults to Ruby extensions (set in
+// init below); `require` takes a positional name, like Ruby's Kernel#require,
+// rather than the kwarg convention the rest of the module uses.
+
+static void replaceAll(std::string &str, const std::string &from, const std::string &to)
+{
+	if (from.empty())
+		return;
+	size_t pos = 0;
+	while ((pos = str.find(from, pos)) != std::string::npos)
+	{
+		str.replace(pos, from.length(), to);
+		pos += to.length();
+	}
+}
+
+// Resolve a module name against the require path over the virtual filesystem.
+// Returns the first existing (non-directory) path, or "" if none match.
+static std::string resolveRequire(const std::string &modulename)
+{
+	auto *inst = instance();
+	for (std::string element : inst->getRequirePath())
+	{
+		replaceAll(element, "?", modulename);
+		Filesystem::Info info = {};
+		if (inst->getInfo(element.c_str(), info) && info.type != Filesystem::FILETYPE_DIRECTORY)
+			return element;
+	}
+	return std::string();
+}
+
+// get_require_path -> Array of the search-path patterns (each with a `?`
+// placeholder, e.g. "?.rb"). set_require_path(paths:) replaces them with an
+// Array of Strings. (There is no c_require_path: mruby has no runtime native
+// module loading — gems are compiled in — so the Lua C-loader has no analog.)
+static mrb_value w_getRequirePath(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value out = mrb_ary_new(mrb);
+	for (const std::string &element : instance()->getRequirePath())
+		mrb_ary_push(mrb, out, mrbx_string(mrb, element));
+	return out;
+}
+
+static mrb_value w_setRequirePath(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"paths"}, 1, v);
+	if (!mrb_array_p(v[0]))
+		mrb_raise(mrb, E_TYPE_ERROR, "paths: must be an Array of Strings");
+
+	auto &requirePath = instance()->getRequirePath();
+	requirePath.clear();
+	for (mrb_int i = 0; i < RARRAY_LEN(v[0]); i++)
+		requirePath.push_back(mrbx_checkstring(mrb, mrb_ary_ref(mrb, v[0], i)));
+	return mrb_nil_value();
+}
+
+// load(name:) — read a script from the virtual filesystem and compile it to a
+// callable chunk WITHOUT running it (the Ruby analog of Lua's
+// love.filesystem.load). Returns a Proc; call it to run the file body and get
+// its last value. Raises on a read error or a syntax/codegen error.
+static mrb_value w_load(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"name"}, 1, v);
+	std::string filename = mrbx_checkstring(mrb, v[0]);
+
+	FileData *data = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { data = instance()->read(filename.c_str()); });
+	if (err)
+		return mrb_nil_value();
+	if (data == nullptr)
+		mrb_raisef(mrb, E_RUNTIME_ERROR, "Could not read file: %s", filename.c_str());
+
+	mrbc_context *c = mrbc_context_new(mrb);
+	mrbc_filename(mrb, c, ("@" + filename).c_str());
+	c->capture_errors = TRUE;
+
+	struct mrb_parser_state *p = mrb_parse_nstring(mrb, (const char *) data->getData(), data->getSize(), c);
+	data->release();
+
+	if (p == nullptr || p->nerr > 0)
+	{
+		mrb_value msg = (p != nullptr && p->error_buffer[0].message)
+			? mrb_format(mrb, "Syntax error in %s line %d: %s", filename.c_str(),
+			             p->error_buffer[0].lineno, p->error_buffer[0].message)
+			: mrb_format(mrb, "Could not parse %s", filename.c_str());
+		if (p)
+			mrb_parser_free(p);
+		mrbc_context_free(mrb, c);
+		mrb_exc_raise(mrb, mrb_exc_new_str(mrb, E_SYNTAX_ERROR, msg));
+	}
+
+	struct RProc *proc = mrb_generate_code(mrb, p);
+	mrb_parser_free(p);
+	mrbc_context_free(mrb, c);
+
+	if (proc == nullptr)
+		mrb_raisef(mrb, E_SCRIPT_ERROR, "Could not compile %s", filename.c_str());
+
+	// A top-level proc straight from codegen has its class nulled out (it is
+	// meant to be run via mrb_top_run, not dispatched on). Restore the Proc
+	// class so the returned value is a first-class, `.call`-able Proc object.
+	proc->c = mrb->proc_class;
+	return mrb_obj_value(proc);
+}
+
+// require(name) — Kernel method (positional arg, Ruby style). Resolves the name
+// over the require path, then runs the file once at top level. Returns true the
+// first time and false if it was already loaded. The file runs for its side
+// effects (defining classes/constants), as Ruby require does.
+struct RequireCtx { const char *bytes; size_t len; mrbc_context *ctx; };
+
+static mrb_value k_require(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	const char *namez;
+	mrb_get_args(mrb, "z", &namez);
+	std::string modulename(namez);
+
+	std::string resolved = resolveRequire(modulename);
+	if (resolved.empty())
+		mrb_raisef(mrb, E_RUNTIME_ERROR, "cannot load such file -- %s", modulename.c_str());
+
+	// Load-once tracking via $LOADED_FEATURES (Ruby's canonical registry).
+	mrb_sym lf = mrb_intern_lit(mrb, "$LOADED_FEATURES");
+	mrb_value features = mrb_gv_get(mrb, lf);
+	if (!mrb_array_p(features))
+	{
+		features = mrb_ary_new(mrb);
+		mrb_gv_set(mrb, lf, features);
+	}
+	mrb_value resolvedv = mrb_str_new(mrb, resolved.c_str(), resolved.size());
+	for (mrb_int i = 0; i < RARRAY_LEN(features); i++)
+	{
+		if (mrb_str_equal(mrb, mrb_ary_ref(mrb, features, i), resolvedv))
+			return mrb_false_value();
+	}
+
+	FileData *data = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { data = instance()->read(resolved.c_str()); });
+	if (err || data == nullptr)
+		mrb_raisef(mrb, E_RUNTIME_ERROR, "cannot read file -- %s", resolved.c_str());
+
+	// Record before running so a circular require sees it as already loaded.
+	mrb_ary_push(mrb, features, resolvedv);
+
+	mrbc_context *c = mrbc_context_new(mrb);
+	mrbc_filename(mrb, c, resolved.c_str());
+
+	// Run the file under mrb_protect_error: mrb_load can both longjmp and merely
+	// set mrb->exc depending on the nesting, so we normalize the exc-set path
+	// into a throw inside the body and catch both here. (Same approach the data
+	// module uses to keep cleanup reliable across mruby's longjmp exceptions.)
+	RequireCtx rc = { (const char *) data->getData(), (size_t) data->getSize(), c };
+	mrb_bool error = FALSE;
+	mrb_value result = mrb_protect_error(mrb, [](mrb_state *m, void *ud) -> mrb_value {
+		RequireCtx *r = (RequireCtx *) ud;
+		mrb_load_nstring_cxt(m, r->bytes, r->len, r->ctx);
+		if (m->exc)
+		{
+			struct RObject *e = m->exc;
+			m->exc = nullptr;
+			mrb_exc_raise(m, mrb_obj_value(e));
+		}
+		return mrb_nil_value();
+	}, &rc, &error);
+
+	mrbc_context_free(mrb, c);
+	data->release();
+
+	if (error)
+	{
+		// The file raised (or failed to compile). Undo the load-once record so a
+		// later require can retry, then propagate the exception.
+		mrb_ary_pop(mrb, features);
+		mrb_exc_raise(mrb, result);
+	}
+
+	return mrb_true_value();
+}
+
 static const MrbReg functions[] =
 {
 	{ "init",                   w_init,               MRB_ARGS_KEY(1, 0) },
@@ -790,6 +986,9 @@ static const MrbReg functions[] =
 	{ "lines",                  w_lines,              MRB_ARGS_KEY(1, 0) },
 	{ "exists",                 w_exists,             MRB_ARGS_KEY(1, 0) },
 	{ "get_info",               w_getInfo,            MRB_ARGS_KEY(2, 0) },
+	{ "get_require_path",       w_getRequirePath,     MRB_ARGS_NONE() },
+	{ "set_require_path",       w_setRequirePath,     MRB_ARGS_KEY(1, 0) },
+	{ "load",                   w_load,               MRB_ARGS_KEY(1, 0) },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -812,6 +1011,13 @@ extern "C" void mrb_love_filesystem_init(mrb_state *mrb)
 	mrbx_register_module(mrb, w);
 	mrbx_register_type(mrb, File::type, f_functions);
 	mrbx_register_type(mrb, FileData::type, fd_functions);
+
+	// The engine's default require path uses Lua extensions; a Ruby-scripted
+	// game wants Ruby ones. Override here (the user can still set_require_path).
+	inst->getRequirePath() = {"?.rb", "?/init.rb"};
+
+	// Provide a global Ruby-style require backed by the virtual filesystem.
+	mrb_define_method(mrb, mrb->kernel_module, "require", k_require, MRB_ARGS_REQ(1));
 }
 
 } // filesystem
