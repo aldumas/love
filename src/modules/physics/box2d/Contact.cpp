@@ -57,6 +57,9 @@ bool Contact::isValid()
 	return contact != nullptr;
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-contact: getPositions / getNormal push multiple Lua return
+// values (reimplemented in the wrapper over getBox2DContact()).
 int Contact::getPositions(lua_State *L)
 {
 	love::luax_assert_argc(L, 1, 1);
@@ -81,6 +84,7 @@ int Contact::getNormal(lua_State *L)
 	lua_pushnumber(L, manifold.normal.y);
 	return 2;
 }
+#endif // LOVE_MRUBY (#phys-contact)
 
 float Contact::getFriction() const
 {

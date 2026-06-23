@@ -293,7 +293,8 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/physics/box2d/WeldJoint.cpp \
 	$(LOVE_SRC)/modules/physics/box2d/WheelJoint.cpp \
 	$(LOVE_SRC)/modules/physics/box2d/RopeJoint.cpp \
-	$(LOVE_SRC)/modules/physics/box2d/MotorJoint.cpp
+	$(LOVE_SRC)/modules/physics/box2d/MotorJoint.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/Contact.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 

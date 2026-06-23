@@ -51,6 +51,7 @@
 #include "WheelJoint.h"
 #include "RopeJoint.h"
 #include "MotorJoint.h"
+#include "Contact.h"
 
 #include <bitset>
 #include <vector>
@@ -148,6 +149,26 @@ static mrb_value pushJoint(mrb_state *mrb, Joint *joint)
 	case PJ::JOINT_MOTOR:     return mrbx_pushtype(mrb, MotorJoint::type,     joint);
 	default:                  return mrbx_pushtype(mrb, PJ::type,             joint);
 	}
+}
+
+// #phys-contact: pushes the Contact wrapping a b2Contact, reusing the World's
+// object memoizer so a live b2Contact maps back to its existing wrapper (the Lua
+// World::getContacts / Body::getContacts did the same dance). Ownership matches
+// the engine: new/retain to balance the reference the binding takes, then release.
+static mrb_value pushContact(mrb_state *mrb, World *world, b2Contact *c)
+{
+	if (c == nullptr)
+		return mrb_nil_value();
+
+	Contact *contact = (Contact *) world->findObject(c);
+	if (contact != nullptr)
+		contact->retain();
+	else
+		contact = new Contact(world, c);
+
+	mrb_value out = mrbx_pushtype(mrb, Contact::type, contact);
+	contact->release();
+	return out;
 }
 
 // A 16-bit category bitfield <-> a Ruby array of 1..16 indices.
@@ -1070,6 +1091,17 @@ static mrb_value body_getJoints(mrb_state *mrb, mrb_value self)
 	}
 	return arr;
 }
+// #phys-contact: getContacts over body->GetContactList() (Body::getContacts
+// built a Lua table). Returns an Array of the contacts touching this body.
+static mrb_value body_getContacts(mrb_state *mrb, mrb_value self)
+{
+	Body *b = BODY;
+	World *world = b->getWorld();
+	mrb_value arr = mrb_ary_new(mrb);
+	for (const b2ContactEdge *ce = b->body->GetContactList(); ce != nullptr; ce = ce->next)
+		mrb_ary_push(mrb, arr, pushContact(mrb, world, ce->contact));
+	return arr;
+}
 static mrb_value body_isDestroyed(mrb_state *mrb, mrb_value self)
 {
 	return mrbx_boolean(mrb, BODY->body == nullptr);
@@ -1140,6 +1172,7 @@ static const MrbReg body_functions[] =
 	{ "get_shape",              body_getShape,              MRB_ARGS_NONE() },
 	{ "get_shapes",             body_getShapes,             MRB_ARGS_NONE() },
 	{ "get_joints",             body_getJoints,             MRB_ARGS_NONE() },
+	{ "get_contacts",           body_getContacts,           MRB_ARGS_NONE() },
 	{ "destroyed?",             body_isDestroyed,           MRB_ARGS_NONE() },
 	{ "destroy",                body_destroy,               MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
@@ -1280,6 +1313,17 @@ static mrb_value world_getJoints(mrb_state *mrb, mrb_value self)
 	return arr;
 }
 
+// #phys-contact: getContacts over the raw b2World contact list (World::getContacts
+// built a Lua table). Returns an Array of all current contacts in the world.
+static mrb_value world_getContacts(mrb_state *mrb, mrb_value self)
+{
+	World *w = WORLD;
+	mrb_value arr = mrb_ary_new(mrb);
+	for (b2Contact *c = w->getBox2DWorld()->GetContactList(); c != nullptr; c = c->GetNext())
+		mrb_ary_push(mrb, arr, pushContact(mrb, w, c));
+	return arr;
+}
+
 // #phys-query: getShapesInArea reimplemented over getBox2DWorld()->QueryAABB +
 // the ShapeCollector above. `categories:` is an optional array of 1..16 (default
 // all categories). queryShapesInArea (Lua user callback) stays deferred.
@@ -1361,6 +1405,7 @@ static const MrbReg world_functions[] =
 	{ "get_contact_count",   world_getContactCount,    MRB_ARGS_NONE() },
 	{ "get_bodies",          world_getBodies,          MRB_ARGS_NONE() },
 	{ "get_joints",          world_getJoints,          MRB_ARGS_NONE() },
+	{ "get_contacts",        world_getContacts,        MRB_ARGS_NONE() },
 	{ "get_shapes_in_area",  world_getShapesInArea,    MRB_ARGS_KEY(5, 0) },
 	{ "ray_cast_any",        world_rayCastAny,         MRB_ARGS_KEY(5, 0) },
 	{ "ray_cast_closest",    world_rayCastClosest,     MRB_ARGS_KEY(5, 0) },
@@ -2025,6 +2070,130 @@ static const MrbReg motor_functions[] =
 };
 
 // =========================================================================
+// Love::Contact
+//
+// #phys-contact: a collision point between two shapes. get_positions / get_normal
+// are reimplemented over getBox2DContact() (the Lua methods pushed multiple
+// values); the rest forward to the engine. A Contact can outlive its b2Contact,
+// so the readbacks guard on valid?.
+// =========================================================================
+
+#define CONTACT (mrbx_checktype<Contact>(mrb, self))
+
+static mrb_value contact_isValid(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, CONTACT->isValid());
+}
+
+static mrb_value contact_isDestroyed(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, !CONTACT->isValid());
+}
+
+static mrb_value contact_getPositions(mrb_state *mrb, mrb_value self)
+{
+	Contact *c = CONTACT;
+	if (!c->isValid())
+		return mrb_ary_new(mrb);
+	b2Contact *bc = c->getBox2DContact();
+	b2WorldManifold manifold;
+	bc->GetWorldManifold(&manifold);
+	int points = bc->GetManifold()->pointCount;
+	mrb_value arr = mrb_ary_new_capa(mrb, points * 2);
+	for (int i = 0; i < points; i++)
+	{
+		b2Vec2 p = Physics::scaleUp(manifold.points[i]);
+		mrb_ary_push(mrb, arr, mrbx_number(mrb, p.x));
+		mrb_ary_push(mrb, arr, mrbx_number(mrb, p.y));
+	}
+	return arr;
+}
+
+static mrb_value contact_getNormal(mrb_state *mrb, mrb_value self)
+{
+	Contact *c = CONTACT;
+	if (!c->isValid())
+		return mrb_nil_value();
+	b2WorldManifold manifold;
+	c->getBox2DContact()->GetWorldManifold(&manifold);
+	return pushXY(mrb, manifold.normal.x, manifold.normal.y);
+}
+
+static mrb_value contact_getFriction(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, CONTACT->getFriction()); }
+static mrb_value contact_getRestitution(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, CONTACT->getRestitution()); }
+static mrb_value contact_getTangentSpeed(mrb_state *mrb, mrb_value self) { return mrbx_number(mrb, CONTACT->getTangentSpeed()); }
+static mrb_value contact_isEnabled(mrb_state *mrb, mrb_value self) { return mrbx_boolean(mrb, CONTACT->isEnabled()); }
+static mrb_value contact_isTouching(mrb_state *mrb, mrb_value self) { return mrbx_boolean(mrb, CONTACT->isTouching()); }
+
+static mrb_value contact_setFriction(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"friction"}, 1, v);
+	CONTACT->setFriction(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value contact_setRestitution(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"restitution"}, 1, v);
+	CONTACT->setRestitution(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value contact_setEnabled(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"enabled"}, 1, v);
+	CONTACT->setEnabled(mrbx_checkboolean(mrb, v[0])); return self;
+}
+static mrb_value contact_setTangentSpeed(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1]; mrbx_get_kwargs(mrb, {"speed"}, 1, v);
+	CONTACT->setTangentSpeed(mrbx_checkfloat(mrb, v[0])); return self;
+}
+static mrb_value contact_resetFriction(mrb_state *mrb, mrb_value self) { CONTACT->resetFriction(); return self; }
+static mrb_value contact_resetRestitution(mrb_state *mrb, mrb_value self) { CONTACT->resetRestitution(); return self; }
+
+static mrb_value contact_getChildren(mrb_state *mrb, mrb_value self)
+{
+	int a = 0, b = 0;
+	CONTACT->getChildren(a, b);
+	mrb_value h = mrb_hash_new(mrb);
+	// 1-based child indices, as elsewhere in the LÖVE API.
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "a")), mrbx_integer(mrb, a + 1));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "b")), mrbx_integer(mrb, b + 1));
+	return h;
+}
+
+static mrb_value contact_getShapes(mrb_state *mrb, mrb_value self)
+{
+	Contact *c = CONTACT;
+	Shape *a = nullptr, *b = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { c->getShapes(a, b); });
+	if (err) return mrb_nil_value();
+	mrb_value pair[2] = { pushShape(mrb, a), pushShape(mrb, b) };
+	return mrb_ary_new_from_values(mrb, 2, pair);
+}
+
+#undef CONTACT
+
+static const MrbReg contact_functions[] =
+{
+	{ "valid?",            contact_isValid,         MRB_ARGS_NONE() },
+	{ "destroyed?",        contact_isDestroyed,     MRB_ARGS_NONE() },
+	{ "get_positions",     contact_getPositions,    MRB_ARGS_NONE() },
+	{ "get_normal",        contact_getNormal,       MRB_ARGS_NONE() },
+	{ "get_friction",      contact_getFriction,     MRB_ARGS_NONE() },
+	{ "get_restitution",   contact_getRestitution,  MRB_ARGS_NONE() },
+	{ "get_tangent_speed", contact_getTangentSpeed, MRB_ARGS_NONE() },
+	{ "enabled?",          contact_isEnabled,       MRB_ARGS_NONE() },
+	{ "touching?",         contact_isTouching,      MRB_ARGS_NONE() },
+	{ "set_friction",      contact_setFriction,     MRB_ARGS_KEY(1, 0) },
+	{ "set_restitution",   contact_setRestitution,  MRB_ARGS_KEY(1, 0) },
+	{ "set_enabled",       contact_setEnabled,      MRB_ARGS_KEY(1, 0) },
+	{ "set_tangent_speed", contact_setTangentSpeed, MRB_ARGS_KEY(1, 0) },
+	{ "reset_friction",    contact_resetFriction,   MRB_ARGS_NONE() },
+	{ "reset_restitution", contact_resetRestitution, MRB_ARGS_NONE() },
+	{ "get_children",      contact_getChildren,     MRB_ARGS_NONE() },
+	{ "get_shapes",        contact_getShapes,       MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// =========================================================================
 // Love::Physics module functions
 // =========================================================================
 
@@ -2601,6 +2770,8 @@ extern "C" void mrb_love_physics_init(mrb_state *mrb)
 	mrbx_register_type(mrb, WheelJoint::type, wheel_functions);
 	mrbx_register_type(mrb, RopeJoint::type, rope_functions);
 	mrbx_register_type(mrb, MotorJoint::type, motor_functions);
+
+	mrbx_register_type(mrb, Contact::type, contact_functions);
 }
 
 } // box2d

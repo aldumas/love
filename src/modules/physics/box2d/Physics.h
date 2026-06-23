@@ -32,11 +32,7 @@
 #include "PolygonShape.h"
 #include "EdgeShape.h"
 #include "ChainShape.h"
-#ifndef LOVE_MRUBY
-// TODO(mruby) #phys-contact: the Contact type pulls in common/runtime.h
-// (<lua.h>) and isn't ported yet, so it's excluded from the mruby build.
 #include "Contact.h"
-#endif // LOVE_MRUBY (#phys-contact)
 // The joint headers are mruby-safe (their Lua-only methods are guarded), so the
 // joint types and factories are part of the mruby build (#phys-joints).
 #include "Joint.h"

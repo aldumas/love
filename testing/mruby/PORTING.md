@@ -343,9 +343,22 @@ Deferred to later physics slices (functionality not in the mruby build yet):
 - [ ] (#phys-callbacks) World collision callbacks: `set_callbacks`/`get_callbacks`,
       contact filter, the `ContactCallback`/`ContactFilter` machinery, **and** the
       user-callback query/raycast variants (`queryShapesInArea`, `rayCast`). Needs
-      an mruby callback-reference mechanism + the Contact type. `ShouldCollide`
-      still applies the standard category/mask/group filtering (no user filter).
-- [ ] (#phys-contact) the `Contact` object type + `World`/`Body` `getContacts`.
+      an mruby callback-reference mechanism (the Contact type it delivers is now
+      ported — see #phys-contact). `ShouldCollide` still applies the standard
+      category/mask/group filtering (no user filter).
+- [~] (#phys-contact) the `Contact` object type + `World`/`Body` `get_contacts` are
+      ported: `valid?`/`destroyed?`, `get_positions` (flat `[x0,y0,…]` array),
+      `get_normal`/`get_children`/`get_shapes` as Hashes/Arrays, the friction/
+      restitution/enabled/tangent-speed get/set + resets. `Contact.h` is mruby-safe
+      now (its `common/runtime.h` include + the Lua `getPositions`/`getNormal` are
+      guarded; the wrapper reimplements them over `getBox2DContact()`), so its
+      include is un-guarded in `Physics.h`/`World.cpp` and the `EndContact`
+      invalidation of a wrapping `Contact` is live. The remaining markers only guard
+      the Lua `getPositions`/`getNormal` and the Lua `World`/`Body` `getContacts`
+      readbacks, reimplemented in the wrapper. Contact wrapper **identity** across
+      calls is preserved via the World object memoizer (`findObject`), unlike
+      bodies/shapes/joints which still mint fresh wrappers (waits on #phys-userdata).
+      Covered by `physics_test.rb`.
 - [~] (#phys-joints) all 11 joint types + the `Physics` joint factories +
       `World`/`Body` `getJoints` are ported (keyword-argument factories, snake_case
       methods, multi-return getters as Hashes). Joint lifecycle (implicit/deferred

@@ -21,10 +21,7 @@
 #include "World.h"
 
 #include "Shape.h"
-#ifndef LOVE_MRUBY
-// TODO(mruby) #phys-contact: Contact type (pulls <lua.h>) not ported yet.
 #include "Contact.h"
-#endif
 #include "Physics.h"
 #include "common/Reference.h"
 
@@ -373,14 +370,11 @@ void World::EndContact(b2Contact *contact)
 {
 	end.process(contact);
 
-#ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-contact: invalidate the wrapping Contact object before
-	// Box2D destroys the b2Contact. No Contact type yet, so nothing to do.
-	// Letting the Contact know that the b2Contact will be destroyed any second.
+	// Let the wrapping Contact know the b2Contact will be destroyed any second,
+	// so a Ruby-held Contact reports valid? == false afterwards.
 	Contact *c = (Contact *)findObject(contact);
 	if (c != nullptr)
 		c->invalidate();
-#endif
 }
 
 void World::PreSolve(b2Contact *contact, const b2Manifold *oldManifold)

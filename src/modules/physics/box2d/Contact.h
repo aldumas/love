@@ -23,7 +23,12 @@
 
 // LOVE
 #include "common/Object.h"
+#ifndef LOVE_MRUBY
+// common/runtime.h pulls in <lua.h>, absent from the mruby build. The Lua-only
+// getPositions / getNormal methods below are guarded; the wrapper reimplements
+// them over getBox2DContact().
 #include "common/runtime.h"
+#endif
 #include "World.h"
 
 // Box2D
@@ -73,6 +78,13 @@ public:
 	 **/
 	bool isValid();
 
+	// mruby: exposes the raw b2Contact so the wrapper (not a friend) can
+	// reimplement the multi-returning getPositions / getNormal helpers.
+	b2Contact *getBox2DContact() const { return contact; }
+
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-contact: getPositions / getNormal push multiple Lua
+	// return values (reimplemented in the wrapper over getBox2DContact()).
 	/**
 	 * Gets the position of each point of contact.
 	 * @return The position along the x-axis.
@@ -86,6 +98,7 @@ public:
 	 * @return The y-component of the normal.
 	 **/
 	int getNormal(lua_State *L);
+#endif // LOVE_MRUBY (#phys-contact)
 
 	/**
 	 * The mixed friction between the two fixtures at

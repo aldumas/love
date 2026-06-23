@@ -282,6 +282,46 @@ fail_count += 1 unless assert("joint destroyed?", dj.destroyed?)
 jworld.destroy
 
 puts
+puts "=== contacts ==="
+# Two overlapping dynamic circles in a gravity-free world generate a contact
+# once the world steps.
+cworld = P.new_world(gx: 0, gy: 0)
+ca = P.new_body(world: cworld, x: 0, y: 0, type: "dynamic")
+cb = P.new_body(world: cworld, x: 5, y: 0, type: "dynamic")
+sa = P.new_circle_shape(body: ca, radius: 10)
+sb = P.new_circle_shape(body: cb, radius: 10)
+cworld.update(dt: 1.0 / 60)
+
+contacts = cworld.get_contacts
+fail_count += 1 unless assert("world get_contacts non-empty", contacts.length >= 1)
+fail_count += 1 unless assert("world get_contact_count agrees", cworld.get_contact_count == contacts.length)
+ct = contacts[0]
+fail_count += 1 unless assert("contact valid?", ct.valid?)
+fail_count += 1 unless assert("contact not destroyed?", !ct.destroyed?)
+fail_count += 1 unless assert("contact touching?", ct.touching?)
+fail_count += 1 unless assert("contact friction numeric", ct.get_friction.is_a?(Numeric))
+norm = ct.get_normal
+fail_count += 1 unless assert("contact normal is a hash", !norm.nil? && norm.key?(:x) && norm.key?(:y))
+pos = ct.get_positions
+fail_count += 1 unless assert("contact positions flat array (even length)", pos.is_a?(Array) && pos.length.even?)
+shapes = ct.get_shapes
+fail_count += 1 unless assert("contact get_shapes returns 2", shapes.length == 2)
+fail_count += 1 unless assert("contact shapes are circles", shapes[0].get_type == "circle" && shapes[1].get_type == "circle")
+children = ct.get_children
+fail_count += 1 unless assert("contact children 1-based", children[:a] == 1 && children[:b] == 1)
+
+# Setters round-trip (only meaningful mid-PreSolve, but the engine accepts them).
+ct.set_friction(friction: 0.25)
+fail_count += 1 unless assert("contact set/get friction", (ct.get_friction - 0.25).abs < 1e-3)
+ct.set_enabled(enabled: false)
+ct.set_tangent_speed(speed: 3.0)
+fail_count += 1 unless assert("contact set/get tangent speed", (ct.get_tangent_speed - 3.0).abs < 1e-3)
+
+# get_contacts from a body sees the same contact.
+fail_count += 1 unless assert("body get_contacts non-empty", ca.get_contacts.length >= 1)
+cworld.destroy
+
+puts
 puts "=== destroy ==="
 body.destroy
 fail_count += 1 unless assert("body destroyed?", body.destroyed?)

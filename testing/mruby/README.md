@@ -56,10 +56,14 @@ and `ray_cast_any` / `ray_cast_closest`. All 11 joint types are ported as well:
 the `Physics.new_*_joint` factories (keyword arguments), the per-joint
 setters/getters and multi-return getters as Hashes (`get_anchors`, `get_limits`,
 `get_axis`, `get_target`, `get_ground_anchors`, `get_linear_offset`), and
-`World`/`Body` `get_joints`. Contacts, collision callbacks, arbitrary user data
-(and the wrapper-identity registry it brings), and the **user-callback**
-query/ray-cast variants (which need an mruby callback-reference mechanism) are
-deferred to later slices — see PORTING.md §A for the full breakdown.
+`World`/`Body` `get_joints`. The `Contact` type is in too — `World`/`Body`
+`get_contacts`, `get_positions` / `get_normal` / `get_shapes` / `get_children`,
+and the friction/restitution/enabled/tangent-speed accessors; contact wrappers
+keep their identity across calls via the World object memoizer. Collision
+callbacks, arbitrary user data (and the body/shape/joint wrapper-identity
+registry it brings), and the **user-callback** query/ray-cast variants (which
+need an mruby callback-reference mechanism) are deferred to later slices — see
+PORTING.md §A for the full breakdown.
 The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the
