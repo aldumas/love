@@ -261,7 +261,12 @@ narrative overview.
    config + lifecycle API), the `Love::Mesh` object type (`new_mesh` +
    vertices/texture/draw-mode/vertex-map, standard vertex format), the
    `Love::Video` object type (`new_video` + play/pause/seek/tell and the
-   `Love::VideoStream` type, real theora decode backend),
+   `Love::VideoStream` type, real theora decode backend), the low-level GPU
+   `Love::GraphicsBuffer` type (`new_buffer` + set_array_data/clear/get_format/
+   buffer_type?/get_size) and the `Love::GraphicsReadback` type with the
+   `readback_buffer` / `readback_texture` module functions and their `_async`
+   variants (sync returns ByteData/ImageData; async returns a pollable
+   GraphicsReadback),
    plus
    `new_image` / `new_quad` / `draw`, `new_font` / `set_font` / `get_font` /
    `print` / `printf`, and the `Love::Texture`, `Love::Quad`, and `Love::Font`

@@ -62,8 +62,13 @@
 #include "TextBatch.h"
 #include "ParticleSystem.h"
 #include "Mesh.h"
+#include "Buffer.h"
+#include "GraphicsReadback.h"
 #include "Video.h"
 #include "vertex.h"
+#include "data/ByteData.h"
+
+#include <limits>
 #include "video/VideoStream.h"
 #include "video/Video.h"
 #include "audio/Audio.h"
@@ -2985,6 +2990,688 @@ static mrb_value w_get_canvas(mrb_state *mrb, mrb_value self)
 	return arr;
 }
 
+// =========================================================================
+// Love::Buffer  (a block of GPU-owned memory). Faithful to wrap_Buffer.cpp +
+// the newBuffer half of wrap_Graphics.cpp, under the keyword-argument
+// convention. A buffer is created from a vertex-style format declaration plus
+// either initial element data (a Data or an Array) or an element count.
+// =========================================================================
+
+static const double bufDefaultComponents[] = {0.0, 0.0, 0.0, 1.0};
+
+// One component value out of the gathered per-element array, or a default when
+// it is missing/nil (mirrors luaL_optnumber in wrap_Buffer.cpp).
+static double buf_comp(mrb_state *mrb, const mrb_value *vals, int navail, int i, double def)
+{
+	if (i >= navail)
+		return def;
+	mrb_value c = vals[i];
+	if (mrb_undef_p(c) || mrb_nil_p(c))
+		return def;
+	return (double) mrbx_checkfloat(mrb, c);
+}
+
+// A matrix component is required (no default), like luaL_checknumber.
+static double buf_reqcomp(mrb_state *mrb, const mrb_value *vals, int navail, int i)
+{
+	if (i >= navail || mrb_undef_p(vals[i]) || mrb_nil_p(vals[i]))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Not enough components supplied for a matrix buffer format.");
+	return (double) mrbx_checkfloat(mrb, vals[i]);
+}
+
+template <typename T>
+static void buf_writeData(mrb_state *mrb, const mrb_value *vals, int navail, int components, char *data)
+{
+	auto cd = (T *) data;
+	for (int i = 0; i < components; i++)
+		cd[i] = (T) buf_comp(mrb, vals, navail, i, bufDefaultComponents[i]);
+}
+
+template <typename T>
+static void buf_writeRequired(mrb_state *mrb, const mrb_value *vals, int navail, int components, char *data)
+{
+	auto cd = (T *) data;
+	for (int i = 0; i < components; i++)
+		cd[i] = (T) buf_reqcomp(mrb, vals, navail, i);
+}
+
+template <typename T>
+static void buf_writeSNorm(mrb_state *mrb, const mrb_value *vals, int navail, int components, char *data)
+{
+	auto cd = (T *) data;
+	constexpr auto maxval = std::numeric_limits<T>::max();
+	for (int i = 0; i < components; i++)
+	{
+		double d = buf_comp(mrb, vals, navail, i, bufDefaultComponents[i]);
+		d = d < -1.0 ? -1.0 : (d > 1.0 ? 1.0 : d);
+		cd[i] = (T) (d * maxval);
+	}
+}
+
+template <typename T>
+static void buf_writeUNorm(mrb_state *mrb, const mrb_value *vals, int navail, int components, char *data)
+{
+	auto cd = (T *) data;
+	constexpr auto maxval = std::numeric_limits<T>::max();
+	for (int i = 0; i < components; i++)
+	{
+		double d = buf_comp(mrb, vals, navail, i, 1.0);
+		d = d < 0.0 ? 0.0 : (d > 1.0 ? 1.0 : d);
+		cd[i] = (T) (d * maxval);
+	}
+}
+
+// mruby analog of luax_writebufferdata: write one member's components (read from
+// the gathered value array `vals`, of which `navail` are usable) into `data`.
+static void buf_writebufferdata(mrb_state *mrb, const mrb_value *vals, int navail, DataFormat format, char *data)
+{
+	switch (format)
+	{
+		case DATAFORMAT_FLOAT:      buf_writeData<float>(mrb, vals, navail, 1, data); break;
+		case DATAFORMAT_FLOAT_VEC2: buf_writeData<float>(mrb, vals, navail, 2, data); break;
+		case DATAFORMAT_FLOAT_VEC3: buf_writeData<float>(mrb, vals, navail, 3, data); break;
+		case DATAFORMAT_FLOAT_VEC4: buf_writeData<float>(mrb, vals, navail, 4, data); break;
+
+		case DATAFORMAT_FLOAT_MAT2X2: buf_writeRequired<float>(mrb, vals, navail, 4, data); break;
+		case DATAFORMAT_FLOAT_MAT2X3: buf_writeRequired<float>(mrb, vals, navail, 6, data); break;
+		case DATAFORMAT_FLOAT_MAT2X4: buf_writeRequired<float>(mrb, vals, navail, 8, data); break;
+
+		case DATAFORMAT_FLOAT_MAT3X2: buf_writeRequired<float>(mrb, vals, navail, 6, data); break;
+		case DATAFORMAT_FLOAT_MAT3X3: buf_writeRequired<float>(mrb, vals, navail, 9, data); break;
+		case DATAFORMAT_FLOAT_MAT3X4: buf_writeRequired<float>(mrb, vals, navail, 12, data); break;
+
+		case DATAFORMAT_FLOAT_MAT4X2: buf_writeRequired<float>(mrb, vals, navail, 8, data); break;
+		case DATAFORMAT_FLOAT_MAT4X3: buf_writeRequired<float>(mrb, vals, navail, 12, data); break;
+		case DATAFORMAT_FLOAT_MAT4X4: buf_writeRequired<float>(mrb, vals, navail, 16, data); break;
+
+		case DATAFORMAT_INT32:      buf_writeData<int32>(mrb, vals, navail, 1, data); break;
+		case DATAFORMAT_INT32_VEC2: buf_writeData<int32>(mrb, vals, navail, 2, data); break;
+		case DATAFORMAT_INT32_VEC3: buf_writeData<int32>(mrb, vals, navail, 3, data); break;
+		case DATAFORMAT_INT32_VEC4: buf_writeData<int32>(mrb, vals, navail, 4, data); break;
+
+		case DATAFORMAT_UINT32:      buf_writeData<uint32>(mrb, vals, navail, 1, data); break;
+		case DATAFORMAT_UINT32_VEC2: buf_writeData<uint32>(mrb, vals, navail, 2, data); break;
+		case DATAFORMAT_UINT32_VEC3: buf_writeData<uint32>(mrb, vals, navail, 3, data); break;
+		case DATAFORMAT_UINT32_VEC4: buf_writeData<uint32>(mrb, vals, navail, 4, data); break;
+
+		case DATAFORMAT_SNORM8_VEC4: buf_writeSNorm<int8>(mrb, vals, navail, 4, data); break;
+		case DATAFORMAT_UNORM8_VEC4: buf_writeUNorm<uint8>(mrb, vals, navail, 4, data); break;
+		case DATAFORMAT_INT8_VEC4:   buf_writeData<int8>(mrb, vals, navail, 4, data); break;
+		case DATAFORMAT_UINT8_VEC4:  buf_writeData<uint8>(mrb, vals, navail, 4, data); break;
+
+		case DATAFORMAT_SNORM16_VEC2: buf_writeSNorm<int16>(mrb, vals, navail, 2, data); break;
+		case DATAFORMAT_SNORM16_VEC4: buf_writeSNorm<int16>(mrb, vals, navail, 4, data); break;
+
+		case DATAFORMAT_UNORM16_VEC2: buf_writeUNorm<uint16>(mrb, vals, navail, 2, data); break;
+		case DATAFORMAT_UNORM16_VEC4: buf_writeUNorm<uint16>(mrb, vals, navail, 4, data); break;
+
+		case DATAFORMAT_INT16_VEC2: buf_writeData<int16>(mrb, vals, navail, 2, data); break;
+		case DATAFORMAT_INT16_VEC4: buf_writeData<int16>(mrb, vals, navail, 4, data); break;
+
+		case DATAFORMAT_UINT16:      buf_writeData<uint16>(mrb, vals, navail, 1, data); break;
+		case DATAFORMAT_UINT16_VEC2: buf_writeData<uint16>(mrb, vals, navail, 2, data); break;
+		case DATAFORMAT_UINT16_VEC4: buf_writeData<uint16>(mrb, vals, navail, 4, data); break;
+
+		default: break;
+	}
+}
+
+Buffer *mrbx_checkbuffer(mrb_state *mrb, mrb_value v)
+{
+	return mrbx_checktype<Buffer>(mrb, v);
+}
+
+// Total number of scalar components across all members of the buffer format.
+static int buf_ncomponents(const std::vector<Buffer::DataMember> &members)
+{
+	int n = 0;
+	for (const Buffer::DataMember &m : members)
+		n += m.info.components;
+	return n;
+}
+
+// Write one element's `ncomponents` gathered values into `dst` per the members.
+static void buf_write_element(mrb_state *mrb, const std::vector<Buffer::DataMember> &members,
+	const mrb_value *comps, int ncomponents, char *dst)
+{
+	int idx = 0;
+	for (const Buffer::DataMember &member : members)
+	{
+		int nc = member.info.components;
+		int avail = ncomponents - idx;
+		if (avail < 0) avail = 0;
+		buf_writebufferdata(mrb, comps + idx, avail, member.decl.format, dst + member.offset);
+		idx += nc;
+	}
+}
+
+// Stage `count` elements (read from Ruby `arr`, an array-of-component-arrays
+// when `tableoftables`, else a flat array) and upload them at element
+// `destindex`. Values are gathered into a host buffer first so a malformed
+// element raises before any GPU state is touched.
+static void buf_fill_from_array(mrb_state *mrb, Buffer *b, mrb_value arr, bool tableoftables,
+	int sourceindex, int destindex, int count, int ncomponents)
+{
+	const std::vector<Buffer::DataMember> &members = b->getDataMembers();
+	size_t stride = b->getArrayStride();
+	std::vector<char> staging((size_t) count * stride, 0);
+	std::vector<mrb_value> comps(ncomponents);
+	char *data = staging.data();
+
+	for (int i = 0; i < count; i++)
+	{
+		if (tableoftables)
+		{
+			mrb_value el = mrb_ary_ref(mrb, arr, sourceindex + i);
+			if (!mrb_array_p(el))
+				mrb_raise(mrb, E_ARGUMENT_ERROR, "Buffer array elements must each be an array of component values.");
+			for (int j = 0; j < ncomponents; j++)
+				comps[j] = mrb_ary_ref(mrb, el, j);
+		}
+		else
+		{
+			for (int j = 0; j < ncomponents; j++)
+				comps[j] = mrb_ary_ref(mrb, arr, (sourceindex + i) * ncomponents + j);
+		}
+		buf_write_element(mrb, members, comps.data(), ncomponents, data);
+		data += stride;
+	}
+
+	mrbx_catchexcept(mrb, [&]() { b->fill((size_t) destindex * stride, (size_t) count * stride, staging.data()); });
+}
+
+// set_array_data(data:, source_index:, dest_index:, count:) -- overwrite buffer
+// elements from a Data or an Array (array-of-component-arrays or flat). Indices
+// are 1-based (as in Lua). Faithful to w_Buffer_setArrayData.
+static mrb_value w_buffer_set_array_data(mrb_state *mrb, mrb_value self)
+{
+	Buffer *t = mrbx_checkbuffer(mrb, self);
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"data", "source_index", "dest_index", "count"}, 1, v);
+
+	int sourceindex = mrbx_optint(mrb, v[1], 1) - 1;
+	int destindex = mrbx_optint(mrb, v[2], 1) - 1;
+	if (sourceindex < 0)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Source start index must be at least 1.");
+
+	int count = -1;
+	if (!mrb_undef_p(v[3]) && !mrb_nil_p(v[3]))
+	{
+		count = mrbx_checkint(mrb, v[3]);
+		if (count <= 0)
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "Element count must be greater than 0.");
+	}
+
+	size_t stride = t->getArrayStride();
+	int arraylength = (int) t->getArrayLength();
+	if (destindex < 0 || destindex >= arraylength)
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid buffer start index (must be between 1 and %d).", arraylength);
+
+	if (mrbx_istype<Data>(mrb, v[0]))
+	{
+		Data *d = mrbx_checktype<Data>(mrb, v[0]);
+		int dataarraylength = (int) (d->getSize() / stride);
+		if (sourceindex >= dataarraylength)
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid data start index (must be between 1 and %d).", dataarraylength);
+
+		int maxcount = (dataarraylength - sourceindex < arraylength - destindex)
+			? dataarraylength - sourceindex : arraylength - destindex;
+		if (count < 0)
+			count = maxcount;
+		if (count > maxcount)
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Too many array elements (expected at most %d, got %d).", maxcount, count);
+
+		size_t dataoffset = (size_t) sourceindex * stride;
+		size_t datasize = d->getSize() - dataoffset;
+		if (datasize > (size_t) count * stride)
+			datasize = (size_t) count * stride;
+		const void *sourcedata = (const uint8 *) d->getData() + dataoffset;
+		mrbx_catchexcept(mrb, [&]() { t->fill((size_t) destindex * stride, datasize, sourcedata); });
+		return mrb_nil_value();
+	}
+
+	if (!mrb_array_p(v[0]))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "data: must be a Data or an Array.");
+
+	int ncomponents = buf_ncomponents(t->getDataMembers());
+	int tablelen = (int) RARRAY_LEN(v[0]);
+	bool tableoftables = tablelen > 0 && mrb_array_p(mrb_ary_ref(mrb, v[0], 0));
+
+	if (!tableoftables)
+	{
+		if (ncomponents == 0 || tablelen % ncomponents != 0)
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Array length in flat-array set_array_data must be a multiple of the total number of components (%d).", ncomponents);
+		tablelen /= ncomponents;
+	}
+
+	if (sourceindex >= tablelen)
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid data start index (must be between 1 and %d).", tablelen);
+
+	count = count >= 0 ? (count < tablelen - sourceindex ? count : tablelen - sourceindex)
+		: tablelen - sourceindex;
+	if (destindex + count > arraylength)
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Too many array elements (expected at most %d, got %d).", arraylength - destindex, count);
+
+	buf_fill_from_array(mrb, t, v[0], tableoftables, sourceindex, destindex, count, ncomponents);
+	return mrb_nil_value();
+}
+
+// clear(offset:, size:) -- reset a byte range to zero (whole buffer if omitted).
+static mrb_value w_buffer_clear(mrb_state *mrb, mrb_value self)
+{
+	Buffer *t = mrbx_checkbuffer(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"offset", "size"}, 0, v);
+
+	size_t offset = 0;
+	size_t size = t->getSize();
+	if (!mrb_undef_p(v[0]) && !mrb_nil_p(v[0]))
+	{
+		double offsetp = mrbx_optnumber(mrb, v[0], 0);
+		double sizep = mrbx_optnumber(mrb, v[1], (double) t->getSize());
+		if (offsetp < 0 || sizep < 0)
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "Offset and size parameters cannot be negative.");
+		offset = (size_t) offsetp;
+		size = (size_t) sizep;
+	}
+	mrbx_catchexcept(mrb, [&]() { t->clear(offset, size); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_buffer_get_element_count(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, (int) mrbx_checkbuffer(mrb, self)->getArrayLength());
+}
+
+static mrb_value w_buffer_get_element_stride(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, (int) mrbx_checkbuffer(mrb, self)->getArrayStride());
+}
+
+static mrb_value w_buffer_get_size(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, (int) mrbx_checkbuffer(mrb, self)->getSize());
+}
+
+// get_format -> Array of member Hashes {name:, format:, array_length:,
+// location:, offset:, size:}.
+static mrb_value w_buffer_get_format(mrb_state *mrb, mrb_value self)
+{
+	Buffer *t = mrbx_checkbuffer(mrb, self);
+	const auto &members = t->getDataMembers();
+	mrb_value arr = mrb_ary_new_capa(mrb, (mrb_int) members.size());
+	for (const Buffer::DataMember &member : members)
+	{
+		mrb_value h = mrb_hash_new(mrb);
+		hset(mrb, h, "name", mrb_str_new_cstr(mrb, member.decl.name.c_str()));
+		const char *formatstr = "unknown";
+		getConstant(member.decl.format, formatstr);
+		hset(mrb, h, "format", mrb_str_new_cstr(mrb, formatstr));
+		hset(mrb, h, "array_length", mrbx_integer(mrb, member.decl.arrayLength));
+		hset(mrb, h, "location", mrbx_integer(mrb, member.decl.bindingLocation));
+		hset(mrb, h, "offset", mrbx_integer(mrb, (int) member.offset));
+		hset(mrb, h, "size", mrbx_integer(mrb, (int) member.size));
+		mrb_ary_push(mrb, arr, h);
+	}
+	return arr;
+}
+
+// buffer_type?(type:) -- is the buffer usable as the given usage
+// ("vertex"/"index"/"texel"/"shaderstorage"/"indirectarguments")?
+static mrb_value w_buffer_is_buffer_type(mrb_state *mrb, mrb_value self)
+{
+	Buffer *t = mrbx_checkbuffer(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"type"}, 1, v);
+	std::string str = mrbx_checkstring(mrb, v[0]);
+	BufferUsage usage;
+	if (!getConstant(str.c_str(), usage))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid buffer type: %s", str.c_str());
+	return mrbx_boolean(mrb, (t->getUsageFlags() & (1 << usage)) != 0);
+}
+
+static mrb_value w_buffer_get_debug_name(mrb_state *mrb, mrb_value self)
+{
+	const std::string &name = mrbx_checkbuffer(mrb, self)->getDebugName();
+	return name.empty() ? mrb_nil_value() : mrb_str_new_cstr(mrb, name.c_str());
+}
+
+static const MrbReg bufferFunctions[] =
+{
+	{ "set_array_data",     w_buffer_set_array_data,    MRB_ARGS_KEY(4, 0) },
+	{ "clear",              w_buffer_clear,             MRB_ARGS_KEY(2, 0) },
+	{ "get_element_count",  w_buffer_get_element_count, MRB_ARGS_NONE() },
+	{ "get_element_stride", w_buffer_get_element_stride, MRB_ARGS_NONE() },
+	{ "get_size",           w_buffer_get_size,          MRB_ARGS_NONE() },
+	{ "get_format",         w_buffer_get_format,        MRB_ARGS_NONE() },
+	{ "buffer_type?",       w_buffer_is_buffer_type,    MRB_ARGS_KEY(1, 0) },
+	{ "get_debug_name",     w_buffer_get_debug_name,    MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// Read one buffer data-format declaration from a Ruby Hash {name:, format:,
+// array_length:, location:}. format: is required.
+static Buffer::DataDeclaration buf_check_declaration(mrb_state *mrb, mrb_value h)
+{
+	Buffer::DataDeclaration decl("", DATAFORMAT_MAX_ENUM);
+	if (!mrb_hash_p(h))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Each buffer format declaration must be a Hash.");
+
+	mrb_value name = mrb_hash_get(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "name")));
+	if (!mrb_nil_p(name))
+		decl.name = mrbx_checkstring(mrb, name);
+
+	mrb_value format = mrb_hash_get(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "format")));
+	if (mrb_nil_p(format))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Each buffer format declaration needs a format: field.");
+	std::string formatstr = mrbx_checkstring(mrb, format);
+	if (!getConstant(formatstr.c_str(), decl.format))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid data format: %s", formatstr.c_str());
+
+	mrb_value arrlen = mrb_hash_get(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "array_length")));
+	if (!mrb_nil_p(arrlen))
+		decl.arrayLength = mrbx_checkint(mrb, arrlen);
+
+	mrb_value loc = mrb_hash_get(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, "location")));
+	if (!mrb_nil_p(loc))
+		decl.bindingLocation = mrbx_checkint(mrb, loc);
+
+	return decl;
+}
+
+// new_buffer(format:, data:, count:, usage_flags:, usage:, debug_name:).
+// format: is a single format String or an Array of declaration Hashes. Supply
+// data: (a Data, or an Array of component arrays / a flat Array) or count: (an
+// empty, zero-initialized buffer of N elements). usage_flags: is an Array of
+// "vertex"/"index"/"texel"/"shaderstorage"/"indirectarguments"; usage: is the
+// data-usage hint ("dynamic" default / "static" / "stream" / "readback").
+static mrb_value w_new_buffer(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[6];
+	mrbx_get_kwargs(mrb, {"format", "data", "count", "usage_flags", "usage", "debug_name"}, 1, v);
+
+	Buffer::Settings settings(0, BUFFERDATAUSAGE_DYNAMIC);
+
+	if (!mrb_undef_p(v[3]) && mrb_array_p(v[3]))
+	{
+		mrb_int n = RARRAY_LEN(v[3]);
+		for (mrb_int i = 0; i < n; i++)
+		{
+			std::string str = mrbx_checkstring(mrb, mrb_ary_ref(mrb, v[3], i));
+			BufferUsage usage;
+			if (!getConstant(str.c_str(), usage))
+				mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid buffer usage flag: %s", str.c_str());
+			settings.usageFlags = (BufferUsageFlags) (settings.usageFlags | (1u << usage));
+		}
+	}
+
+	if (!mrb_undef_p(v[4]))
+	{
+		std::string str = mrbx_checkstring(mrb, v[4]);
+		if (!getConstant(str.c_str(), settings.dataUsage))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid usage hint: %s", str.c_str());
+	}
+
+	if (!mrb_undef_p(v[5]))
+		settings.debugName = mrbx_checkstring(mrb, v[5]);
+
+	// Format: a single format string, or an array of declaration hashes.
+	std::vector<Buffer::DataDeclaration> format;
+	if (mrb_string_p(v[0]))
+	{
+		Buffer::DataDeclaration decl("", DATAFORMAT_MAX_ENUM);
+		std::string str = mrbx_checkstring(mrb, v[0]);
+		if (!getConstant(str.c_str(), decl.format))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid data format: %s", str.c_str());
+		format.push_back(decl);
+	}
+	else if (mrb_array_p(v[0]))
+	{
+		mrb_int n = RARRAY_LEN(v[0]);
+		for (mrb_int i = 0; i < n; i++)
+			format.push_back(buf_check_declaration(mrb, mrb_ary_ref(mrb, v[0], i)));
+	}
+	else
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "format: must be a format String or an Array of declaration Hashes.");
+
+	if (format.empty())
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Buffer format must have at least one member.");
+
+	int ncomponents = 0;
+	for (const Buffer::DataDeclaration &decl : format)
+		ncomponents += getDataFormatInfo(decl.format).components;
+
+	// Resolve the initial data source.
+	Data *data = nullptr;
+	const void *initialdata = nullptr;
+	size_t bytesize = 0;
+	size_t arraylength = 0;
+	bool tableoftables = false;
+	bool fromarray = false;
+
+	if (!mrb_undef_p(v[1]) && mrbx_istype<Data>(mrb, v[1]))
+	{
+		data = mrbx_checktype<Data>(mrb, v[1]);
+		initialdata = data->getData();
+		bytesize = data->getSize();
+	}
+	else if (!mrb_undef_p(v[1]) && mrb_array_p(v[1]))
+	{
+		fromarray = true;
+		mrb_int len = RARRAY_LEN(v[1]);
+		tableoftables = len > 0 && mrb_array_p(mrb_ary_ref(mrb, v[1], 0));
+		if (tableoftables)
+			arraylength = (size_t) len;
+		else
+		{
+			if (ncomponents == 0 || len % ncomponents != 0)
+				mrb_raisef(mrb, E_ARGUMENT_ERROR, "Array length in flat-array new_buffer must be a multiple of the total number of components (%d).", ncomponents);
+			arraylength = (size_t) (len / ncomponents);
+		}
+	}
+	else if (!mrb_undef_p(v[2]))
+	{
+		int len = mrbx_checkint(mrb, v[2]);
+		if (len <= 0)
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "Number of elements must be greater than 0.");
+		arraylength = (size_t) len;
+		settings.zeroInitialize = true;
+	}
+	else
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "new_buffer needs data: or count:.");
+
+	Buffer *b = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { b = instance()->newBuffer(settings, format, initialdata, bytesize, arraylength); }))
+		return mrb_nil_value();
+
+	if (fromarray)
+		buf_fill_from_array(mrb, b, v[1], tableoftables, 0, 0, (int) arraylength, ncomponents);
+
+	mrb_value res = mrbx_pushtype(mrb, b);
+	b->release();
+	return res;
+}
+
+// =========================================================================
+// Love::GraphicsReadback  (the result of an async readback of a Buffer or
+// Texture). Faithful to wrap_GraphicsReadback.cpp + the readback half of
+// wrap_Graphics.cpp.
+// =========================================================================
+
+static mrb_value w_readback_is_complete(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, mrbx_checktype<GraphicsReadback>(mrb, self)->isComplete());
+}
+
+static mrb_value w_readback_has_error(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_boolean(mrb, mrbx_checktype<GraphicsReadback>(mrb, self)->hasError());
+}
+
+static mrb_value w_readback_wait(mrb_state *mrb, mrb_value self)
+{
+	mrbx_checktype<GraphicsReadback>(mrb, self)->wait();
+	return mrb_nil_value();
+}
+
+static mrb_value w_readback_update(mrb_state *mrb, mrb_value self)
+{
+	GraphicsReadback *t = mrbx_checktype<GraphicsReadback>(mrb, self);
+	mrbx_catchexcept(mrb, [&]() { t->update(); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_readback_get_buffer_data(mrb_state *mrb, mrb_value self)
+{
+	love::data::ByteData *d = mrbx_checktype<GraphicsReadback>(mrb, self)->getBufferData();
+	return d ? mrbx_pushtype(mrb, d) : mrb_nil_value();
+}
+
+static mrb_value w_readback_get_image_data(mrb_state *mrb, mrb_value self)
+{
+	love::image::ImageData *d = mrbx_checktype<GraphicsReadback>(mrb, self)->getImageData();
+	return d ? mrbx_pushtype(mrb, d) : mrb_nil_value();
+}
+
+static const MrbReg graphicsReadbackFunctions[] =
+{
+	{ "complete?",       w_readback_is_complete,    MRB_ARGS_NONE() },
+	{ "error?",          w_readback_has_error,      MRB_ARGS_NONE() },
+	{ "wait",            w_readback_wait,           MRB_ARGS_NONE() },
+	{ "update",          w_readback_update,         MRB_ARGS_NONE() },
+	{ "get_buffer_data", w_readback_get_buffer_data, MRB_ARGS_NONE() },
+	{ "get_image_data",  w_readback_get_image_data, MRB_ARGS_NONE() },
+	{ nullptr, nullptr, 0 }
+};
+
+// Shared parse for the two buffer-readback module functions: buffer + byte
+// range, with an optional ByteData dest + dest_offset.
+static void readback_parse_buffer_args(mrb_state *mrb, mrb_value *v, Buffer *&b, size_t &offset,
+	size_t &size, love::data::ByteData *&dest, size_t &destoffset)
+{
+	b = mrbx_checkbuffer(mrb, v[0]);
+	offset = (size_t) mrbx_optint(mrb, v[1], 0);
+	size = mrb_undef_p(v[2]) || mrb_nil_p(v[2]) ? b->getSize() - offset : (size_t) mrbx_checkint(mrb, v[2]);
+	dest = nullptr;
+	destoffset = 0;
+	if (!mrb_undef_p(v[3]) && !mrb_nil_p(v[3]))
+	{
+		dest = mrbx_checktype<love::data::ByteData>(mrb, v[3]);
+		destoffset = (size_t) mrbx_optint(mrb, v[4], 0);
+	}
+}
+
+// readback_buffer(buffer:, offset:, size:, dest:, dest_offset:) -> ByteData
+// (synchronous; stalls the GPU). dest is an optional ByteData to write into.
+static mrb_value w_readback_buffer(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[5];
+	mrbx_get_kwargs(mrb, {"buffer", "offset", "size", "dest", "dest_offset"}, 1, v);
+
+	Buffer *b; size_t offset, size, destoffset; love::data::ByteData *dest;
+	readback_parse_buffer_args(mrb, v, b, offset, size, dest, destoffset);
+
+	love::data::ByteData *out = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { out = instance()->readbackBuffer(b, offset, size, dest, destoffset); }))
+		return mrb_nil_value();
+	mrb_value res = mrbx_pushtype(mrb, out);
+	out->release();
+	return res;
+}
+
+// readback_buffer_async(...) -> GraphicsReadback (poll complete?/get_buffer_data).
+static mrb_value w_readback_buffer_async(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[5];
+	mrbx_get_kwargs(mrb, {"buffer", "offset", "size", "dest", "dest_offset"}, 1, v);
+
+	Buffer *b; size_t offset, size, destoffset; love::data::ByteData *dest;
+	readback_parse_buffer_args(mrb, v, b, offset, size, dest, destoffset);
+
+	GraphicsReadback *r = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { r = instance()->readbackBufferAsync(b, offset, size, dest, destoffset); }))
+		return mrb_nil_value();
+	mrb_value res = mrbx_pushtype(mrb, r);
+	r->release();
+	return res;
+}
+
+// Shared parse for the two texture-readback module functions.
+static void readback_parse_texture_args(mrb_state *mrb, mrb_value *v, Texture *&t, int &slice,
+	int &mipmap, Rect &rect, love::image::ImageData *&dest, int &destx, int &desty)
+{
+	t = mrbx_checktype<Texture>(mrb, v[0]);
+
+	slice = 0;
+	if (t->getTextureType() != TEXTURE_2D)
+		slice = mrbx_checkint(mrb, v[1]) - 1;
+
+	mipmap = mrbx_optint(mrb, v[2], 1) - 1;
+
+	rect.x = 0;
+	rect.y = 0;
+	rect.w = t->getPixelWidth(mipmap);
+	rect.h = t->getPixelHeight(mipmap);
+	if (!mrb_undef_p(v[3]) && !mrb_nil_p(v[3]))
+	{
+		rect.x = mrbx_checkint(mrb, v[3]);
+		rect.y = mrbx_checkint(mrb, v[4]);
+		rect.w = mrbx_checkint(mrb, v[5]);
+		rect.h = mrbx_checkint(mrb, v[6]);
+	}
+
+	dest = nullptr;
+	destx = 0;
+	desty = 0;
+	if (!mrb_undef_p(v[7]) && !mrb_nil_p(v[7]))
+	{
+		dest = mrbx_checktype<love::image::ImageData>(mrb, v[7]);
+		destx = mrbx_optint(mrb, v[8], 0);
+		desty = mrbx_optint(mrb, v[9], 0);
+	}
+}
+
+// readback_texture(texture:, slice:, mipmap:, x:, y:, width:, height:, dest:,
+// dest_x:, dest_y:) -> ImageData (synchronous). slice: is 1-based and required
+// for non-2D textures; x/y/width/height default to the whole mip level.
+static mrb_value w_readback_texture(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[10];
+	mrbx_get_kwargs(mrb, {"texture", "slice", "mipmap", "x", "y", "width", "height", "dest", "dest_x", "dest_y"}, 1, v);
+
+	Texture *t; int slice, mipmap, destx, desty; Rect rect; love::image::ImageData *dest;
+	readback_parse_texture_args(mrb, v, t, slice, mipmap, rect, dest, destx, desty);
+
+	love::image::ImageData *out = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { out = instance()->readbackTexture(t, slice, mipmap, rect, dest, destx, desty); }))
+		return mrb_nil_value();
+	mrb_value res = mrbx_pushtype(mrb, out);
+	out->release();
+	return res;
+}
+
+// readback_texture_async(...) -> GraphicsReadback (poll complete?/get_image_data).
+static mrb_value w_readback_texture_async(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[10];
+	mrbx_get_kwargs(mrb, {"texture", "slice", "mipmap", "x", "y", "width", "height", "dest", "dest_x", "dest_y"}, 1, v);
+
+	Texture *t; int slice, mipmap, destx, desty; Rect rect; love::image::ImageData *dest;
+	readback_parse_texture_args(mrb, v, t, slice, mipmap, rect, dest, destx, desty);
+
+	GraphicsReadback *r = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { r = instance()->readbackTextureAsync(t, slice, mipmap, rect, dest, destx, desty); }))
+		return mrb_nil_value();
+	mrb_value res = mrbx_pushtype(mrb, r);
+	r->release();
+	return res;
+}
+
 static const MrbReg functions[] =
 {
 	{ "active?",              w_active,               MRB_ARGS_NONE() },
@@ -3048,6 +3735,11 @@ static const MrbReg functions[] =
 	{ "new_text_batch",       w_new_text_batch,       MRB_ARGS_KEY(2, 0) },
 	{ "new_particle_system",  w_new_particle_system,  MRB_ARGS_KEY(2, 0) },
 	{ "new_mesh",             w_new_mesh,             MRB_ARGS_KEY(4, 0) },
+	{ "new_buffer",           w_new_buffer,           MRB_ARGS_KEY(6, 0) },
+	{ "readback_buffer",      w_readback_buffer,      MRB_ARGS_KEY(5, 0) },
+	{ "readback_buffer_async", w_readback_buffer_async, MRB_ARGS_KEY(5, 0) },
+	{ "readback_texture",     w_readback_texture,     MRB_ARGS_KEY(10, 0) },
+	{ "readback_texture_async", w_readback_texture_async, MRB_ARGS_KEY(10, 0) },
 	{ "new_video",            w_new_video,            MRB_ARGS_KEY(2, 0) },
 	{ nullptr, nullptr, 0 }
 };
@@ -3081,6 +3773,8 @@ extern "C" void mrb_love_graphics_init(mrb_state *mrb)
 	mrbx_register_type(mrb, TextBatch::type, textBatchFunctions);
 	mrbx_register_type(mrb, ParticleSystem::type, particleSystemFunctions);
 	mrbx_register_type(mrb, Mesh::type, meshFunctions);
+	mrbx_register_type(mrb, Buffer::type, bufferFunctions);
+	mrbx_register_type(mrb, GraphicsReadback::type, graphicsReadbackFunctions);
 	mrbx_register_type(mrb, Video::type, videoFunctions);
 }
 

@@ -516,11 +516,29 @@ them changes when we swap.
       filename, `dpi_scale:`) + `play`/`pause`/`seek`/`rewind`/`tell`/`playing?`
       / `get_stream` / `get_source` / dimensions / `set_filter`/`get_filter`),
       backed by the now-linked **love.video** theora module (see its own line
-      below). **With this every graphics object type is exposed.**
+      below). The low-level GPU **Buffer** and **GraphicsReadback** types are
+      exposed too: `new_buffer` (`format:` a single format String or an Array of
+      declaration Hashes `{name:, format:, array_length:, location:}`; `data:` a
+      Data / an Array of component arrays / a flat Array, or `count:` for an
+      empty zero-initialized buffer; `usage_flags:` an Array of "vertex"/"index"/
+      "texel"/"shaderstorage"/"indirectarguments"; `usage:` the data-usage hint;
+      `debug_name:`) returns a `Love::GraphicsBuffer` (the type's engine name) with
+      `set_array_data` (`data:`/`source_index:`/`dest_index:`/`count:`, 1-based) /
+      `clear` (`offset:`/`size:`) / `get_element_count` / `get_element_stride` /
+      `get_size` / `get_format` (-> Array of member Hashes) / `buffer_type?`
+      (`type:`) / `get_debug_name`. Readbacks: `readback_buffer`
+      (`buffer:`/`offset:`/`size:`/`dest:`/`dest_offset:`) -> a `Love::ByteData`
+      synchronously, and `readback_texture` (`texture:`/`slice:`/`mipmap:`/`x:`/
+      `y:`/`width:`/`height:`/`dest:`/`dest_x:`/`dest_y:`) -> a `Love::ImageData`;
+      the `_async` variants return a `Love::GraphicsReadback` (`complete?` /
+      `error?` / `wait` / `update` / `get_buffer_data` / `get_image_data`).
+      **With this every graphics object type is exposed.**
       ParticleSystem#clone isn't ported (needs the object identity map). Text is
       a plain String (the colored-string-segments form isn't ported);
-      SpriteBatch's add_layer/set_layer (array textures) and
-      attach_attribute (custom vertex buffers) aren't ported; nor are the
+      SpriteBatch's add_layer/set_layer (array textures) and Mesh
+      attach_attribute (binding a Buffer as a custom vertex attribute) aren't
+      ported — Buffer itself now is, but the Mesh-side custom-vertex-format and
+      explicit-index-buffer paths still aren't; nor are the
       slice/mipmap/explicit-depthstencil-texture set_canvas variants or the
       low-level set_stencil_state / set_depth_state.
 
@@ -567,7 +585,13 @@ them changes when we swap.
 - [ ] CMake: build/link `libmruby.a` instead of `lovedep::Lua`; drop
       `src/libraries/lua53` and the LuaJIT path.
 - [ ] FFI fast paths: re-implement the few wrappers that use LuaJIT FFI.
-- [ ] Port the remaining ~66 `wrap_*.cpp` modules.
+- [~] Port the remaining `wrap_*.cpp` modules. All 21 LÖVE modules and every
+      object type they expose are now ported, including the low-level GPU
+      `Buffer` (`GraphicsBuffer`) and `GraphicsReadback` types. What remains is
+      a handful of per-type *features*, each already noted at its module in §A/§B
+      (e.g. Mesh custom vertex formats / attach_attribute / explicit index
+      buffers, SpriteBatch array-texture layers, colored-string text segments,
+      ParticleSystem#clone). No whole module or object type is unported.
 - [ ] Memory audit (do once the port is otherwise complete): sweep the mruby
       bindings for allocation/deallocation correctness. Two classes to look for:
       (1) **GC-arena hygiene** — high-iteration loops that create and discard heap
