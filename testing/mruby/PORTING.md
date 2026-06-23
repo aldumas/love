@@ -325,27 +325,40 @@ marker is permanent and the item is `[~]` rather than `[x]`):
       `getBox2DWorld()->QueryAABB` + a small in-wrapper `ShapeCollector`
       (b2QueryCallback). `categories:` is an optional array of 1..16 (default all).
       Returns an Array of the overlapping shapes. The **user-callback** variant
-      `queryShapesInArea` (a Ruby block per fixture) stays deferred — it needs the
-      callback-reference mechanism (with #phys-callbacks). Covered by `physics_test.rb`.
+      `query_shapes_in_area` (a Ruby block per fixture) is now ported too, under
+      #phys-callbacks. Covered by `physics_test.rb`.
 - [~] (#phys-raycast) `World.ray_cast_any` / `ray_cast_closest`
       (`x1:, y1:, x2:, y2:, categories:`) — the two **result-returning** ray casts,
       reimplemented over `getBox2DWorld()->RayCast` + the engine's shared
       `RayCastOneCallback` (which is not LOVE_MRUBY-guarded). Each returns a Hash
       `{shape:, x:, y:, normal_x:, normal_y:, fraction:}` or nil on a miss. The
-      full `rayCast` (a Ruby block invoked per fixture hit, returning the next
-      fraction) stays deferred with #phys-callbacks. Covered by `physics_test.rb`.
+      full `ray_cast` (a Ruby block invoked per fixture hit, returning the next
+      fraction) is now ported too, under #phys-callbacks. Covered by `physics_test.rb`.
 
 The Lua-build paths for the `[~]` items above stay behind `#ifndef LOVE_MRUBY`
 in Shape.cpp / PolygonShape.cpp / EdgeShape.cpp / Physics.cpp / World.cpp, so
 their markers are permanent (like #phys-shape-filter) and they are `[~]`, not `[x]`.
 
-Deferred to later physics slices (functionality not in the mruby build yet):
-- [ ] (#phys-callbacks) World collision callbacks: `set_callbacks`/`get_callbacks`,
-      contact filter, the `ContactCallback`/`ContactFilter` machinery, **and** the
-      user-callback query/raycast variants (`queryShapesInArea`, `rayCast`). Needs
-      an mruby callback-reference mechanism (the Contact type it delivers is now
-      ported — see #phys-contact). `ShouldCollide` still applies the standard
-      category/mask/group filtering (no user filter).
+Ported in later physics slices (Lua-only paths stay behind `#ifndef LOVE_MRUBY`):
+- [~] (#phys-callbacks) World collision callbacks + contact filter + the
+      user-callback query/raycast variants are ported. The mruby
+      callback-reference mechanism is `mrbx_set_callback`/`mrbx_get_callback`/
+      `mrbx_clear_callback` (common/mrb_runtime.cpp): a `const void* -> (mrb_state,
+      GC-protected Proc)` store keyed by a stable address. `World::ContactCallback`/
+      `ContactFilter` each key the store by their own `this` (the binding stores
+      under the matching `World::getCallbackKey`/`getContactFilterKey`, new
+      accessors); their `process()` is defined in `wrap_Physics_mrb.cpp` (the
+      Lua-build `process()` stays guarded in World.cpp) and yields to the stored
+      Proc with the two Shapes + Contact (+ impulses for postsolve). `set_callbacks`
+      takes `begin:`/`end:`/`presolve:`/`postsolve:` Procs (omitted = cleared);
+      `get_callbacks` returns a Hash; `set_contact_filter(filter:)` /
+      `get_contact_filter` wrap the filter (nil clears, then `ShouldCollide`
+      applies only the standard category/mask/group test). `query_shapes_in_area`
+      (block per overlapping shape) and `ray_cast` (block per hit, returns the next
+      fraction) run a local `b2QueryCallback`/`b2RayCastCallback` over the block.
+      `World::destroy` clears the store entries; `mrbx_forgetstate` drops a closing
+      VM's. The engine's Lua `QueryCallback`/`RayCastCallback` (#phys-query/
+      #phys-raycast) stay guarded for the Lua build. Covered by `physics_test.rb`.
 - [~] (#phys-contact) the `Contact` object type + `World`/`Body` `get_contacts` are
       ported: `valid?`/`destroyed?`, `get_positions` (flat `[x0,y0,…]` array),
       `get_normal`/`get_children`/`get_shapes` as Hashes/Arrays, the friction/

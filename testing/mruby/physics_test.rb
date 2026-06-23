@@ -392,6 +392,103 @@ end
 iworld.destroy
 
 puts
+puts "=== collision callbacks ==="
+# Two overlapping dynamic circles in a gravity-free world fire a begin-contact
+# callback once the world steps.
+kworld = P.new_world(gx: 0, gy: 0)
+ka = P.new_body(world: kworld, x: 0, y: 0, type: "dynamic")
+kb = P.new_body(world: kworld, x: 5, y: 0, type: "dynamic")
+ksa = P.new_circle_shape(body: ka, radius: 10)
+ksb = P.new_circle_shape(body: kb, radius: 10)
+
+begin_hits = 0
+seen_shapes = nil
+seen_contact = nil
+kworld.set_callbacks(begin: ->(s1, s2, c) {
+  begin_hits += 1
+  seen_shapes = [s1, s2]
+  seen_contact = c
+})
+kworld.update(dt: 1.0 / 60)
+fail_count += 1 unless assert("begin-contact callback fired", begin_hits >= 1)
+fail_count += 1 unless assert("callback received two shapes", !seen_shapes.nil? && seen_shapes.length == 2)
+fail_count += 1 unless assert("callback shapes are circles",
+  seen_shapes.all? { |s| s.get_type == "circle" })
+# Wrapper identity reaches the callback: the pushed shapes are the same objects.
+fail_count += 1 unless assert("callback shapes keep wrapper identity",
+  seen_shapes.include?(ksa) && seen_shapes.include?(ksb))
+fail_count += 1 unless assert("callback received a touching contact",
+  !seen_contact.nil? && seen_contact.touching?)
+
+# get_callbacks reflects what was set.
+cbs = kworld.get_callbacks
+fail_count += 1 unless assert("get_callbacks begin is a Proc", cbs[:begin].is_a?(Proc))
+fail_count += 1 unless assert("get_callbacks end is nil (unset)", cbs[:end].nil?)
+
+# set_callbacks with no args clears every slot, so stepping fires nothing more.
+kworld.set_callbacks
+before = begin_hits
+kworld.update(dt: 1.0 / 60)
+fail_count += 1 unless assert("cleared callbacks no longer fire", begin_hits == before)
+fail_count += 1 unless assert("get_callbacks begin cleared", kworld.get_callbacks[:begin].nil?)
+kworld.destroy
+
+puts
+puts "=== contact filter ==="
+# A filter returning false rejects the pair, so no contact forms.
+fworld = P.new_world(gx: 0, gy: 0)
+fa = P.new_body(world: fworld, x: 0, y: 0, type: "dynamic")
+fb = P.new_body(world: fworld, x: 5, y: 0, type: "dynamic")
+P.new_circle_shape(body: fa, radius: 10)
+P.new_circle_shape(body: fb, radius: 10)
+filter_calls = 0
+fworld.set_contact_filter(filter: ->(s1, s2) { filter_calls += 1; false })
+fworld.update(dt: 1.0 / 60)
+fail_count += 1 unless assert("contact filter was consulted", filter_calls >= 1)
+fail_count += 1 unless assert("rejecting filter prevents the contact", fworld.get_contact_count == 0)
+fail_count += 1 unless assert("get_contact_filter returns the Proc", fworld.get_contact_filter.is_a?(Proc))
+fworld.destroy
+
+# A fresh world whose filter accepts everything still forms the contact.
+gworld = P.new_world(gx: 0, gy: 0)
+ga = P.new_body(world: gworld, x: 0, y: 0, type: "dynamic")
+gb = P.new_body(world: gworld, x: 5, y: 0, type: "dynamic")
+P.new_circle_shape(body: ga, radius: 10)
+P.new_circle_shape(body: gb, radius: 10)
+gworld.set_contact_filter(filter: ->(s1, s2) { true })
+gworld.update(dt: 1.0 / 60)
+fail_count += 1 unless assert("accepting filter allows the contact", gworld.get_contact_count >= 1)
+# Clearing the filter (nil) drops it.
+gworld.set_contact_filter(filter: nil)
+fail_count += 1 unless assert("contact filter cleared with nil", gworld.get_contact_filter.nil?)
+gworld.destroy
+
+puts
+puts "=== query / raycast callbacks ==="
+# The user-callback query/raycast variants (block invoked per shape/hit).
+qcb = P.new_world(gx: 0, gy: 0)
+qb = P.new_body(world: qcb, x: 50, y: 50, type: "static")
+qs = P.new_circle_shape(body: qb, radius: 20)
+
+found = []
+qcb.query_shapes_in_area(x1: 0, y1: 0, x2: 100, y2: 100) { |s| found << s; true }
+fail_count += 1 unless assert("query block found the shape", found.length == 1 && found[0].equal?(qs))
+
+# ray_cast yields each hit; a vertical ray through the centre hits the circle.
+hits = []
+qcb.ray_cast(x1: 50, y1: -50, x2: 50, y2: 200) { |s, x, y, nx, ny, frac| hits << [s, frac]; 1.0 }
+fail_count += 1 unless assert("ray_cast block hit the shape",
+  hits.length >= 1 && hits[0][0].equal?(qs))
+fail_count += 1 unless assert("ray_cast block fraction in (0,1)",
+  hits[0][1] > 0.0 && hits[0][1] < 1.0)
+
+# A ray clear of the circle never invokes the block.
+missed = 0
+qcb.ray_cast(x1: 200, y1: -50, x2: 200, y2: 200) { |s, x, y, nx, ny, frac| missed += 1; 1.0 }
+fail_count += 1 unless assert("ray_cast block not called on a miss", missed == 0)
+qcb.destroy
+
+puts
 puts "=== destroy ==="
 body.destroy
 fail_count += 1 unless assert("body destroyed?", body.destroyed?)

@@ -29,6 +29,10 @@
 // Needed for World::getJoints. It should be moved to wrapper code...
 #include "wrap_Joint.h"
 #include "wrap_Shape.h"
+#else
+// #phys-callbacks: destroy() releases the stored Ruby collision callbacks via
+// the mrbx callback store. (The callbacks' invocation lives in wrap_Physics_mrb.cpp.)
+#include "common/mrb_runtime.h"
 #endif
 
 namespace love
@@ -53,12 +57,13 @@ World::ContactCallback::~ContactCallback()
 		delete ref;
 }
 
+// TODO(mruby) #phys-callbacks: this Lua-build process() invokes a stored
+// lua_State function with the two Shapes + Contact (+ impulses). The mruby build
+// defines World::ContactCallback::process in wrap_Physics_mrb.cpp over the mrbx
+// callback store + the Contact type, so this definition is guarded out there.
+#ifndef LOVE_MRUBY
 void World::ContactCallback::process(b2Contact *contact, const b2ContactImpulse *impulse)
 {
-#ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-callbacks: collision callbacks invoke a stored Lua
-	// function with the two Shapes + Contact (+ impulses). Needs an mruby-side
-	// callback reference and the Contact type (#phys-contact) before porting.
 	// Process contacts.
 	if (ref != nullptr && L != nullptr)
 	{
@@ -103,11 +108,8 @@ void World::ContactCallback::process(b2Contact *contact, const b2ContactImpulse 
 		}
 		lua_call(L, args, 0);
 	}
-#else
-	(void) contact;
-	(void) impulse;
-#endif // LOVE_MRUBY (#phys-callbacks)
 }
+#endif // LOVE_MRUBY (#phys-callbacks)
 
 World::ContactFilter::ContactFilter()
 	: ref(nullptr)
@@ -121,10 +123,13 @@ World::ContactFilter::~ContactFilter()
 		delete ref;
 }
 
+// TODO(mruby) #phys-callbacks: this Lua-build process() applies the optional user
+// collision filter via a stored lua_State function. The mruby build defines
+// World::ContactFilter::process in wrap_Physics_mrb.cpp over the mrbx callback
+// store, so this definition is guarded out there.
+#ifndef LOVE_MRUBY
 bool World::ContactFilter::process(Shape *a, Shape *b)
 {
-#ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-callbacks: optional user collision filter.
 	if (ref != nullptr && L != nullptr)
 	{
 		ref->push(L);
@@ -133,13 +138,10 @@ bool World::ContactFilter::process(Shape *a, Shape *b)
 		lua_call(L, 2, 1);
 		return luax_toboolean(L, -1);
 	}
-#else
-	(void) a;
-	(void) b;
-#endif // LOVE_MRUBY (#phys-callbacks)
 
 	return true;
 }
+#endif // LOVE_MRUBY (#phys-callbacks)
 
 #ifndef LOVE_MRUBY
 // TODO(mruby) #phys-query: QueryCallback/CollectCallback invoke a Lua function /
@@ -416,10 +418,34 @@ bool World::isValid() const
 	return world != nullptr;
 }
 
+#ifdef LOVE_MRUBY
+// #phys-callbacks: stable per-slot keys for the mrbx callback store. Each is the
+// address of the matching callback-holder sub-object, which is also the `this`
+// the engine's process() uses to look itself up — so a callback the binding
+// stores under getCallbackKey(CALLBACK_BEGIN) is the one begin.process() finds.
+const void *World::getCallbackKey(CallbackEvent event) const
+{
+	switch (event)
+	{
+	case CALLBACK_BEGIN:     return &begin;
+	case CALLBACK_END:       return &end;
+	case CALLBACK_PRESOLVE:  return &presolve;
+	case CALLBACK_POSTSOLVE: return &postsolve;
+	}
+	return &begin;
+}
+
+const void *World::getContactFilterKey() const
+{
+	return &filter;
+}
+#endif // LOVE_MRUBY
+
 #ifndef LOVE_MRUBY
-// TODO(mruby) #phys-callbacks: set/getCallbacks, setCallbacksL and the contact
-// filter accessors all marshal Lua functions. Deferred until the mruby callback
-// mechanism + Contact type land.
+// TODO(mruby) #phys-callbacks: these Lua-build set/getCallbacks, setCallbacksL
+// and contact-filter accessors marshal lua_State functions. The mruby path lives
+// in wrap_Physics_mrb.cpp over the mrbx callback store, so they stay behind the
+// guard for the Lua build.
 int World::setCallbacks(lua_State *L)
 {
 	int nargs = lua_gettop(L);
@@ -754,8 +780,9 @@ void World::destroy()
 	}
 
 #ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-callbacks: release the stored Lua callback references.
-	// Remove userdata reference to avoid it sticking around after GC
+	// TODO(mruby) #phys-callbacks: the Lua build releases its stored callback
+	// references here; the mruby build drops them from the mrbx callback store
+	// below. Remove userdata reference to avoid it sticking around after GC
 	if (begin.ref)     begin.ref->unref();
 	if (end.ref)       end.ref->unref();
 	if (presolve.ref)  presolve.ref->unref();
@@ -764,6 +791,15 @@ void World::destroy()
 
 	//disable callbacks
 	begin.ref = end.ref = presolve.ref = postsolve.ref = filter.ref = nullptr;
+#else
+	// #phys-callbacks: drop the stored Ruby collision callbacks + contact filter
+	// so their GC protection is released as the world tears down (a no-op if the
+	// owning VM already closed and mrbx_forgetstate cleared them).
+	mrbx_clear_callback(&begin);
+	mrbx_clear_callback(&end);
+	mrbx_clear_callback(&presolve);
+	mrbx_clear_callback(&postsolve);
+	mrbx_clear_callback(&filter);
 #endif
 
 	// Cleaning up the world.

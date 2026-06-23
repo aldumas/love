@@ -198,7 +198,10 @@ public:
 	bool isValid() const;
 
 #ifndef LOVE_MRUBY
-	// TODO(mruby) #phys-callbacks: collision-callback + contact-filter accessors.
+	// TODO(mruby) #phys-callbacks: the Lua-build collision-callback + contact-filter
+	// accessors marshal lua_State functions. The mruby path lives in
+	// wrap_Physics_mrb.cpp over the mrbx callback store (keyed by the slot
+	// accessors below); these Lua methods stay behind the guard for the Lua build.
 	/**
 	 * Receives up to four Lua functions as arguments. Each function is
 	 * collision callback for the four events (in order): begin, end,
@@ -229,6 +232,24 @@ public:
 	 **/
 	int getContactFilter(lua_State *L);
 #endif // LOVE_MRUBY (#phys-callbacks)
+
+#ifdef LOVE_MRUBY
+	// #phys-callbacks: the mruby binding stores the Ruby collision callbacks and
+	// contact filter in the mrbx callback store, keyed by a stable address. These
+	// accessors hand the binding each slot's key; the engine's process() looks
+	// itself up by the same address (its own `this`). Returned as const void* so
+	// this header pulls in no mruby types, matching the rest of the dual-build
+	// engine headers.
+	enum CallbackEvent
+	{
+		CALLBACK_BEGIN = 0,
+		CALLBACK_END,
+		CALLBACK_PRESOLVE,
+		CALLBACK_POSTSOLVE,
+	};
+	const void *getCallbackKey(CallbackEvent event) const;
+	const void *getContactFilterKey() const;
+#endif // LOVE_MRUBY
 
 	/**
 	 * Sets the current gravity of the World.

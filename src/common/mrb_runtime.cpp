@@ -234,6 +234,54 @@ void mrbx_clear_userdata(love::Object *object)
 	}
 }
 
+// --- Stored callbacks -----------------------------------------------------
+
+// (const void* key) -> (owning mrb_state, GC-protected callable). Used by the
+// box2d World collision callbacks / contact filter (#phys-callbacks): the
+// binding stores a Ruby Proc here and the engine invokes it during World::update.
+// The callable is GC-protected while stored; the key is a stable address the
+// caller owns (the engine callback-holder sub-object, identified by its `this`).
+static std::map<const void *, std::pair<mrb_state *, mrb_value>> callbacks;
+
+void mrbx_set_callback(mrb_state *mrb, const void *key, mrb_value callback)
+{
+	auto it = callbacks.find(key);
+	if (it != callbacks.end())
+	{
+		mrb_gc_unregister(it->second.first, it->second.second);
+		callbacks.erase(it);
+	}
+
+	// A nil/undef callable just clears the slot (matching the Lua setCallbacks,
+	// where an omitted function disables that event).
+	if (mrb_nil_p(callback) || mrb_undef_p(callback))
+		return;
+
+	mrb_gc_register(mrb, callback);
+	callbacks[key] = std::make_pair(mrb, callback);
+}
+
+bool mrbx_get_callback(const void *key, mrb_state **mrb_out, mrb_value *callback_out)
+{
+	auto it = callbacks.find(key);
+	if (it == callbacks.end())
+		return false;
+	if (mrb_out != nullptr)
+		*mrb_out = it->second.first;
+	if (callback_out != nullptr)
+		*callback_out = it->second.second;
+	return true;
+}
+
+void mrbx_clear_callback(const void *key)
+{
+	auto it = callbacks.find(key);
+	if (it == callbacks.end())
+		return;
+	mrb_gc_unregister(it->second.first, it->second.second);
+	callbacks.erase(it);
+}
+
 // Drop all cached type->class entries for a closing mrb_state, so a later state
 // reusing the same address can't be handed a stale RClass. Call before mrb_close.
 void mrbx_forgetstate(mrb_state *mrb)
@@ -262,6 +310,17 @@ void mrbx_forgetstate(mrb_state *mrb)
 	{
 		if (it->first.first == mrb)
 			it = objectWrappers.erase(it);
+		else
+			++it;
+	}
+
+	// Stored callbacks bound to this state die with it too (their GC roots go
+	// with the state, so no unregister needed). Dropping them here means a later
+	// World teardown on a reused address can't touch this closed state.
+	for (auto it = callbacks.begin(); it != callbacks.end(); )
+	{
+		if (it->second.first == mrb)
+			it = callbacks.erase(it);
 		else
 			++it;
 	}

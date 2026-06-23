@@ -23,10 +23,11 @@
 // bodies with shapes, step the simulation and read back transforms. Keyword
 // arguments, snake_case, `?`-suffixed predicates, multi-value returns as Hashes.
 //
-// Deferred to later slices (see PORTING.md): collision callbacks, contacts,
-// joints, world/shape ray-casts and AABB queries, shape mass/AABB queries,
-// polygon/edge vertex readback, and arbitrary user data. The engine .cpp files
-// guard those Lua-only sections behind LOVE_MRUBY.
+// Later slices have since landed here too (see PORTING.md): contacts, joints,
+// world/shape ray-casts and AABB queries (result-returning and user-callback),
+// collision callbacks + contact filter, shape mass/AABB queries, polygon/edge
+// vertex readback, and arbitrary user data. The engine .cpp files keep the
+// matching Lua-only sections behind LOVE_MRUBY.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -169,6 +170,68 @@ static mrb_value pushContact(mrb_state *mrb, World *world, b2Contact *c)
 	mrb_value out = mrbx_pushtype(mrb, Contact::type, contact);
 	contact->release();
 	return out;
+}
+
+// =========================================================================
+// #phys-callbacks: the mruby definitions of the engine's collision-callback and
+// contact-filter dispatch. World.cpp guards out its Lua-build counterparts under
+// LOVE_MRUBY, so these are the ones linked here. Each callback-holder looks
+// itself up in the mrbx callback store by its own address (the same key the
+// binding stores under, via World::getCallbackKey / getContactFilterKey) and
+// yields to the stored Ruby Proc. Freshly-pushed shapes/contact stay rooted in
+// mruby's GC arena across the yield, so no extra protection is needed.
+// =========================================================================
+
+void World::ContactCallback::process(b2Contact *contact, const b2ContactImpulse *impulse)
+{
+	mrb_state *mrb = nullptr;
+	mrb_value cb = mrb_nil_value();
+	if (!mrbx_get_callback(this, &mrb, &cb))
+		return;
+
+	Shape *a = (Shape *) (contact->GetFixtureA()->GetUserData().pointer);
+	Shape *b = (Shape *) (contact->GetFixtureB()->GetUserData().pointer);
+	if (a == nullptr || b == nullptr)
+		throw love::Exception("A Shape has escaped Memoizer!");
+
+	// Reuse the wrapping Contact if the world already memoized one, mirroring the
+	// new/retain-then-release ownership dance the Lua process() used.
+	Contact *cobj = (Contact *) world->findObject(contact);
+	if (cobj != nullptr)
+		cobj->retain();
+	else
+		cobj = new Contact(world, contact);
+
+	std::vector<mrb_value> argv;
+	argv.reserve(3 + (impulse != nullptr ? impulse->count * 2 : 0));
+	argv.push_back(pushShape(mrb, a));
+	argv.push_back(pushShape(mrb, b));
+	argv.push_back(mrbx_pushtype(mrb, Contact::type, cobj));
+	cobj->release();
+
+	// Only postsolve carries impulses; the others pass just the two shapes + contact.
+	if (impulse != nullptr)
+	{
+		for (int c = 0; c < impulse->count; c++)
+		{
+			argv.push_back(mrbx_number(mrb, Physics::scaleUp(impulse->normalImpulses[c])));
+			argv.push_back(mrbx_number(mrb, Physics::scaleUp(impulse->tangentImpulses[c])));
+		}
+	}
+
+	mrb_yield_argv(mrb, cb, (mrb_int) argv.size(), argv.data());
+}
+
+bool World::ContactFilter::process(Shape *a, Shape *b)
+{
+	mrb_state *mrb = nullptr;
+	mrb_value cb = mrb_nil_value();
+	if (!mrbx_get_callback(this, &mrb, &cb))
+		return true;
+
+	mrb_value args[2] = { pushShape(mrb, a), pushShape(mrb, b) };
+	mrb_value r = mrb_yield_argv(mrb, cb, 2, args);
+	return mrb_test(r);
 }
 
 // A 16-bit category bitfield <-> a Ruby array of 1..16 indices.
@@ -1406,6 +1469,170 @@ static mrb_value world_rayCastClosest(mrb_state *mrb, mrb_value self)
 	return worldRayCastOne(mrb, self, false);
 }
 
+// #phys-callbacks: set/get the four collision callbacks. set_callbacks takes the
+// events as optional Proc keywords (begin:/end:/presolve:/postsolve:); like the
+// Lua setCallbacks, an omitted (or nil) event clears that slot. get_callbacks
+// returns a Hash of the stored Procs (or nil) keyed by the same symbols.
+static void checkProcOrNil(mrb_state *mrb, mrb_value v, const char *what)
+{
+	if (!mrb_undef_p(v) && !mrb_nil_p(v) && mrb_type(v) != MRB_TT_PROC)
+		mrb_raisef(mrb, E_TYPE_ERROR, "%s expects a Proc (or nil)", what);
+}
+
+static const World::CallbackEvent kCallbackEvents[4] = {
+	World::CALLBACK_BEGIN, World::CALLBACK_END,
+	World::CALLBACK_PRESOLVE, World::CALLBACK_POSTSOLVE,
+};
+static const char *const kCallbackNames[4] = { "begin", "end", "presolve", "postsolve" };
+
+static mrb_value world_setCallbacks(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"begin", "end", "presolve", "postsolve"}, 0, v);
+	World *w = WORLD;
+	for (int i = 0; i < 4; i++)
+	{
+		checkProcOrNil(mrb, v[i], "World#set_callbacks");
+		mrbx_set_callback(mrb, w->getCallbackKey(kCallbackEvents[i]), v[i]);
+	}
+	return self;
+}
+
+static mrb_value world_getCallbacks(mrb_state *mrb, mrb_value self)
+{
+	World *w = WORLD;
+	mrb_value h = mrb_hash_new(mrb);
+	for (int i = 0; i < 4; i++)
+	{
+		mrb_value cb = mrb_nil_value();
+		mrbx_get_callback(w->getCallbackKey(kCallbackEvents[i]), nullptr, &cb);
+		mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, kCallbackNames[i])), cb);
+	}
+	return h;
+}
+
+// #phys-callbacks: the optional user collision filter. set_contact_filter takes a
+// Proc keyword (filter:) returning true to allow a collision; nil/omitted clears
+// it (then the engine's standard category/mask/group test alone decides).
+static mrb_value world_setContactFilter(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"filter"}, 0, v);
+	World *w = WORLD;
+	checkProcOrNil(mrb, v[0], "World#set_contact_filter");
+	mrbx_set_callback(mrb, w->getContactFilterKey(), v[0]);
+	return self;
+}
+
+static mrb_value world_getContactFilter(mrb_state *mrb, mrb_value self)
+{
+	mrb_value cb = mrb_nil_value();
+	mrbx_get_callback(WORLD->getContactFilterKey(), nullptr, &cb);
+	return cb;
+}
+
+// #phys-callbacks: the user-callback query/raycast variants (the result-returning
+// get_shapes_in_area / ray_cast_* live above). query_shapes_in_area yields each
+// overlapping shape to the block, which returns true to keep searching; ray_cast
+// yields (shape, x, y, normal_x, normal_y, fraction) per hit and the block returns
+// the next fraction to clip against (0 stops, -1 ignores this hit, 1 continues).
+namespace
+{
+class QueryBlock : public b2QueryCallback
+{
+public:
+	QueryBlock(mrb_state *mrb, mrb_value blk) : mrb(mrb), blk(blk) {}
+	bool ReportFixture(b2Fixture *f) override
+	{
+		Shape *s = (Shape *) (f->GetUserData().pointer);
+		if (s == nullptr)
+			throw love::Exception("A Shape has escaped Memoizer!");
+		mrb_value arg = pushShape(mrb, s);
+		return mrb_test(mrb_yield_argv(mrb, blk, 1, &arg));
+	}
+private:
+	mrb_state *mrb;
+	mrb_value blk;
+};
+
+class RayCastBlock : public b2RayCastCallback
+{
+public:
+	RayCastBlock(mrb_state *mrb, mrb_value blk) : mrb(mrb), blk(blk) {}
+	float ReportFixture(b2Fixture *fixture, const b2Vec2 &point, const b2Vec2 &normal, float fraction) override
+	{
+		Shape *s = (Shape *) (fixture->GetUserData().pointer);
+		if (s == nullptr)
+			throw love::Exception("A Shape has escaped Memoizer!");
+		b2Vec2 hp = Physics::scaleUp(point);
+		mrb_value args[6] = {
+			pushShape(mrb, s),
+			mrbx_number(mrb, hp.x), mrbx_number(mrb, hp.y),
+			mrbx_number(mrb, normal.x), mrbx_number(mrb, normal.y),
+			mrbx_number(mrb, fraction),
+		};
+		mrb_value r = mrb_yield_argv(mrb, blk, 6, args);
+		if (!mrb_fixnum_p(r) && !mrb_float_p(r))
+			throw love::Exception("Raycast callback didn't return a number!");
+		return (float) mrb_as_float(mrb, r);
+	}
+private:
+	mrb_state *mrb;
+	mrb_value blk;
+};
+} // anonymous
+
+static mrb_value world_queryShapesInArea(mrb_state *mrb, mrb_value self)
+{
+	mrb_value blk = mrb_nil_value();
+	mrb_value kv[4];
+	mrb_sym names[4] = {
+		mrb_intern_lit(mrb, "x1"), mrb_intern_lit(mrb, "y1"),
+		mrb_intern_lit(mrb, "x2"), mrb_intern_lit(mrb, "y2"),
+	};
+	const mrb_kwargs kw = { 4, 4, names, kv, nullptr };
+	mrb_get_args(mrb, ":&", &kw, &blk);
+	if (mrb_nil_p(blk))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "query_shapes_in_area requires a block");
+
+	World *w = WORLD;
+	float x1 = mrbx_checkfloat(mrb, kv[0]);
+	float y1 = mrbx_checkfloat(mrb, kv[1]);
+	float x2 = mrbx_checkfloat(mrb, kv[2]);
+	float y2 = mrbx_checkfloat(mrb, kv[3]);
+	b2AABB box;
+	box.lowerBound = Physics::scaleDown(b2Vec2(x1, y1));
+	box.upperBound = Physics::scaleDown(b2Vec2(x2, y2));
+	QueryBlock query(mrb, blk);
+	mrbx_catchexcept(mrb, [&]() { w->getBox2DWorld()->QueryAABB(&query, box); });
+	return self;
+}
+
+static mrb_value world_rayCast(mrb_state *mrb, mrb_value self)
+{
+	mrb_value blk = mrb_nil_value();
+	mrb_value kv[4];
+	mrb_sym names[4] = {
+		mrb_intern_lit(mrb, "x1"), mrb_intern_lit(mrb, "y1"),
+		mrb_intern_lit(mrb, "x2"), mrb_intern_lit(mrb, "y2"),
+	};
+	const mrb_kwargs kw = { 4, 4, names, kv, nullptr };
+	mrb_get_args(mrb, ":&", &kw, &blk);
+	if (mrb_nil_p(blk))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "ray_cast requires a block");
+
+	World *w = WORLD;
+	float x1 = mrbx_checkfloat(mrb, kv[0]);
+	float y1 = mrbx_checkfloat(mrb, kv[1]);
+	float x2 = mrbx_checkfloat(mrb, kv[2]);
+	float y2 = mrbx_checkfloat(mrb, kv[3]);
+	b2Vec2 p1 = Physics::scaleDown(b2Vec2(x1, y1));
+	b2Vec2 p2 = Physics::scaleDown(b2Vec2(x2, y2));
+	RayCastBlock raycast(mrb, blk);
+	mrbx_catchexcept(mrb, [&]() { w->getBox2DWorld()->RayCast(&raycast, p1, p2); });
+	return self;
+}
+
 static mrb_value world_isDestroyed(mrb_state *mrb, mrb_value self)
 {
 	return mrbx_boolean(mrb, !WORLD->isValid());
@@ -1437,6 +1664,12 @@ static const MrbReg world_functions[] =
 	{ "get_shapes_in_area",  world_getShapesInArea,    MRB_ARGS_KEY(5, 0) },
 	{ "ray_cast_any",        world_rayCastAny,         MRB_ARGS_KEY(5, 0) },
 	{ "ray_cast_closest",    world_rayCastClosest,     MRB_ARGS_KEY(5, 0) },
+	{ "set_callbacks",       world_setCallbacks,       MRB_ARGS_KEY(4, 0) },
+	{ "get_callbacks",       world_getCallbacks,       MRB_ARGS_NONE() },
+	{ "set_contact_filter",  world_setContactFilter,   MRB_ARGS_KEY(1, 0) },
+	{ "get_contact_filter",  world_getContactFilter,   MRB_ARGS_NONE() },
+	{ "query_shapes_in_area", world_queryShapesInArea, MRB_ARGS_KEY(4, 0) | MRB_ARGS_BLOCK() },
+	{ "ray_cast",            world_rayCast,            MRB_ARGS_KEY(4, 0) | MRB_ARGS_BLOCK() },
 	{ "destroyed?",          world_isDestroyed,        MRB_ARGS_NONE() },
 	{ "destroy",             world_destroy,            MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }

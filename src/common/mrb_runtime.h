@@ -212,6 +212,27 @@ mrb_value mrbx_get_userdata(mrb_state *mrb, love::Object *object);
 void mrbx_clear_userdata(love::Object *object);
 
 /**
+ * --- Stored callbacks ----------------------------------------------------
+ *
+ * GC-protected handles to Ruby callables (Procs) that the engine invokes later
+ * — the mruby equivalent of the Lua-era Reference used for the box2d World
+ * collision callbacks and contact filter (#phys-callbacks). Each is keyed by an
+ * arbitrary stable address the caller owns (the engine callback-holder
+ * sub-object), so one engine object can register several. The owning mrb_state
+ * is stored alongside the callable, so the engine's invocation site need not
+ * thread a VM pointer through; mrbx_get_callback hands both back.
+ *
+ * mrbx_set_callback replaces (and unprotects) any previous callable for that
+ * key; storing a nil/undef callable just clears it. mrbx_get_callback returns
+ * false when no callable is stored. mrbx_clear_callback must run when the owner
+ * is destroyed so the callable can be collected (and a reused address can't
+ * return a stale one).
+ **/
+void mrbx_set_callback(mrb_state *mrb, const void *key, mrb_value callback);
+bool mrbx_get_callback(const void *key, mrb_state **mrb_out, mrb_value *callback_out);
+void mrbx_clear_callback(const void *key);
+
+/**
  * Registers a LÖVE module as Love::<Name> with its keyword-argument methods.
  * The module instance is retained and stored so wrapper functions can reach it.
  **/
