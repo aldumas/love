@@ -301,6 +301,29 @@ marker is permanent and the item is `[~]` rather than `[x]`):
 - [~] (#phys-shape-filter) `Shape` category/mask bit helpers — reimplemented via
       `get/setFilterData(int*)`; `set_category`/`set_mask` take a `categories:`
       array of 1..16, `get_category`/`get_mask` return one.
+- [~] (#phys-shape-query) `Shape` `ray_cast` / `compute_aabb` / `compute_mass` /
+      `get_bounding_box` / `get_mass_data` — reimplemented in the wrapper over the
+      `Shape::getBox2DShape()` / `getFixture()` accessors (new, since the wrapper
+      isn't a friend of Shape). `ray_cast(x1:,y1:,x2:,y2:,max_fraction:,
+      child_index:)` casts against the live fixture; adding `x:,y:,r:` casts
+      against the bare shape at that transform instead — returns a Hash
+      `{normal_x:, normal_y:, fraction:}` or nil on a miss. `compute_aabb`
+      (`x:,y:,r:,child_index:`) and `get_bounding_box(child_index:)` return
+      `{top_left_x:, top_left_y:, bottom_right_x:, bottom_right_y:}`;
+      `compute_mass(density:)` and `get_mass_data` return `{x:, y:, mass:,
+      inertia:}` (faithful quirk: compute_mass double-scales `I`, get_mass_data
+      leaves it unscaled). Covered by `physics_test.rb`.
+- [~] (#phys-shape-points) `PolygonShape`/`EdgeShape` `get_points` — transformed
+      vertex readback as a flat `[x0,y0,x1,y1,...]` array (polygon: all verts;
+      edge: the two endpoints), over `getBox2DShape()`. Covered by `physics_test.rb`.
+- [~] (#phys-distance) `Physics.get_distance(shape_a:, shape_b:)` — reimplemented
+      over `Shape::getFixture()`; both shapes must be active in a World. Returns a
+      Hash `{distance:, x1:, y1:, x2:, y2:}` (distance + the nearest point on each
+      shape). Covered by `physics_test.rb`.
+
+The Lua-build paths for the three `[~]` items above stay behind `#ifndef
+LOVE_MRUBY` in Shape.cpp / PolygonShape.cpp / EdgeShape.cpp / Physics.cpp, so
+their markers are permanent (like #phys-shape-filter) and they are `[~]`, not `[x]`.
 
 Deferred to later physics slices (functionality not in the mruby build yet):
 - [ ] (#phys-callbacks) World collision callbacks: `set_callbacks`/`get_callbacks`,
@@ -313,10 +336,6 @@ Deferred to later physics slices (functionality not in the mruby build yet):
 - [ ] (#phys-joints) all joint types + the `Physics` joint factories + `getJoints`
       (the heaviest remaining chunk — 11 joint wrappers).
 - [ ] (#phys-userdata) `Body`/`Shape` `setUserData`/`getUserData` (Lua Reference).
-- [ ] (#phys-distance) `Physics.getDistance`.
-- [ ] (#phys-shape-query) `Shape` `rayCast` / `computeAABB` / `computeMass` /
-      `getBoundingBox` / `getMassData` (protected b2 access, multi-return).
-- [ ] (#phys-shape-points) `PolygonShape`/`EdgeShape` `getPoints` (vertex readback).
 
 ---
 

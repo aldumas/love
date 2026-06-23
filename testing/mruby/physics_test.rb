@@ -121,6 +121,49 @@ pt = cshape.get_point(index: 2)
 fail_count += 1 unless check("chain point 2 x", pt[:x], 10)
 
 puts
+puts "=== shape geometry queries ==="
+# polygon vertex readback: a 10x20 rectangle -> 4 points (8 numbers)
+ppts = rshape.get_points
+fail_count += 1 unless assert("polygon get_points -> 8 numbers", ppts.length == 8)
+# edge endpoints: (0,0)-(10,0)
+ep = eshape.get_points
+fail_count += 1 unless assert("edge get_points -> 4 numbers", ep.length == 4)
+fail_count += 1 unless check("edge p1 x", ep[0], 0)
+fail_count += 1 unless check("edge p2 x", ep[2], 10)
+
+# compute_mass on the circle (radius 5, density 1) -> positive mass
+cm = shape.compute_mass(density: 1.0)
+fail_count += 1 unless assert("compute_mass mass > 0", cm[:mass] > 0)
+
+# compute_aabb of the circle at the identity transform -> a non-empty box
+ab = shape.compute_aabb(x: 0, y: 0, r: 0)
+fail_count += 1 unless assert("compute_aabb non-empty", ab[:bottom_right_x] > ab[:top_left_x])
+
+# get_mass_data / get_bounding_box read the live fixture
+md = shape.get_mass_data
+fail_count += 1 unless assert("get_mass_data mass > 0", md[:mass] > 0)
+bb = shape.get_bounding_box
+fail_count += 1 unless assert("get_bounding_box non-empty", bb[:bottom_right_x] > bb[:top_left_x])
+
+# ray_cast against the circle shape at a transform (independent of body pos):
+# a ray straight through the centre hits with a fraction in (0,1)...
+hit = shape.ray_cast(x1: -100, y1: 0, x2: 100, y2: 0, max_fraction: 1.0, x: 0, y: 0, r: 0)
+fail_count += 1 unless assert("ray_cast hits", !hit.nil?)
+frac_ok = hit && hit[:fraction] > 0 && hit[:fraction] < 1
+fail_count += 1 unless assert("ray_cast fraction in (0,1)", frac_ok)
+# ...and a ray well clear of it returns nil.
+miss = shape.ray_cast(x1: -100, y1: 1000, x2: 100, y2: 1000, max_fraction: 1.0, x: 0, y: 0, r: 0)
+fail_count += 1 unless assert("ray_cast miss -> nil", miss.nil?)
+
+puts
+puts "=== get_distance ==="
+# both shapes are active in the world -> a Hash with distance + nearest points.
+d = P.get_distance(shape_a: shape, shape_b: rshape)
+fail_count += 1 unless assert("get_distance >= 0", d[:distance] >= 0)
+fail_count += 1 unless assert("get_distance has x1/y1/x2/y2",
+  d.key?(:x1) && d.key?(:y1) && d.key?(:x2) && d.key?(:y2))
+
+puts
 puts "=== destroy ==="
 body.destroy
 fail_count += 1 unless assert("body destroyed?", body.destroyed?)

@@ -42,13 +42,16 @@ so this harness exercises the ported modules (`timer`, `math`, `filesystem`,
 `font`, `thread`, `sound`, `audio`, `touch`, `sensor`, `joystick`, `video`,
 `physics`) end-to-end.
 
-The physics module is the first slice of love.physics (box2d): create a world,
-add bodies with circle/rectangle/polygon/edge/chain shapes, step the simulation
-and read back transforms (run `make run SCRIPT=physics_test.rb`). It is also the
-first engine code with VM calls embedded in the engine class (World's collision
-callbacks, the `lua_State`-taking helpers on World/Body/Shape); those Lua-only
-sections are guarded with `#ifndef LOVE_MRUBY` and tracked in PORTING.md. Joints,
-contacts, collision callbacks, and the ray-cast / AABB-query families are
+The physics module ports the love.physics (box2d) simulation core: create a
+world, add bodies with circle/rectangle/polygon/edge/chain shapes, step the
+simulation and read back transforms (run `make run SCRIPT=physics_test.rb`). The
+per-shape geometry queries are in too — `ray_cast` / `compute_aabb` /
+`compute_mass` / `get_bounding_box` / `get_mass_data`, polygon/edge `get_points`
+vertex readback, and `Physics.get_distance`. It is also the first engine code
+with VM calls embedded in the engine class (World's collision callbacks, the
+`lua_State`-taking helpers on World/Body/Shape); those Lua-only sections are
+guarded with `#ifndef LOVE_MRUBY` and tracked in PORTING.md. Joints, contacts,
+collision callbacks, and the **World-level** ray-cast / AABB-query families are
 deferred to later slices — see PORTING.md §A for the full breakdown.
 The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the

@@ -96,6 +96,13 @@ public:
 	 **/
 	void getFilterData(int *v);
 
+	// mruby: exposes the raw b2Shape / b2Fixture so the wrapper (not a friend)
+	// can reimplement the multi-returning query helpers that were Lua-only
+	// methods (rayCast / computeAABB / computeMass / getBoundingBox /
+	// getMassData, the polygon/edge vertex readback, and getDistance).
+	b2Shape *getBox2DShape() const { return shape; }
+	b2Fixture *getFixture() const { return fixture; }
+
 #ifndef LOVE_MRUBY
 	// TODO(mruby) #phys-userdata: arbitrary user data via a Lua Reference.
 	/**

@@ -321,6 +321,134 @@ static mrb_value shape_getMask(mrb_state *mrb, mrb_value self)
 	return arrayFromBits(mrb, (uint16) ~((uint16) f[1]));
 }
 
+// pushes a {distance:, point...} / AABB-style Hash with the given symbol keys.
+static mrb_value pushAABB(mrb_state *mrb, const b2AABB &box)
+{
+	b2AABB b = Physics::scaleUp(box);
+	mrb_value h = mrb_hash_new(mrb);
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "top_left_x")),     mrbx_number(mrb, b.lowerBound.x));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "top_left_y")),     mrbx_number(mrb, b.lowerBound.y));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "bottom_right_x")), mrbx_number(mrb, b.upperBound.x));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "bottom_right_y")), mrbx_number(mrb, b.upperBound.y));
+	return h;
+}
+
+// #phys-shape-query: rayCast / computeAABB / computeMass / getBoundingBox /
+// getMassData reimplemented over the b2Shape/b2Fixture exposed by Shape, since
+// the wrapper isn't a friend of the engine class. Faithful to Shape.cpp's
+// scaling and 1-based child indexing.
+static mrb_value shape_rayCast(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[9];
+	mrbx_get_kwargs(mrb, {"x1", "y1", "x2", "y2", "max_fraction", "x", "y", "r", "child_index"}, 5, v);
+	Shape *s = mrbx_checktype<Shape>(mrb, self);
+
+	b2RayCastInput input;
+	b2RayCastOutput output;
+	input.p1.Set(Physics::scaleDown(mrbx_checkfloat(mrb, v[0])), Physics::scaleDown(mrbx_checkfloat(mrb, v[1])));
+	input.p2.Set(Physics::scaleDown(mrbx_checkfloat(mrb, v[2])), Physics::scaleDown(mrbx_checkfloat(mrb, v[3])));
+	input.maxFraction = mrbx_checkfloat(mrb, v[4]);
+
+	bool hit = false;
+	bool err = mrbx_catchexcept(mrb, [&]() {
+		// With x/y/r given, ray-cast against the bare shape at a transform;
+		// otherwise against the live fixture (which must be in a world).
+		if (!mrb_undef_p(v[5]) && !mrb_undef_p(v[6]) && !mrb_undef_p(v[7]))
+		{
+			s->throwIfShapeNotValid();
+			float x = Physics::scaleDown(mrbx_checkfloat(mrb, v[5]));
+			float y = Physics::scaleDown(mrbx_checkfloat(mrb, v[6]));
+			float r = mrbx_checkfloat(mrb, v[7]);
+			int childIndex = mrbx_optint(mrb, v[8], 1) - 1;
+			b2Transform transform(b2Vec2(x, y), b2Rot(r));
+			hit = s->getBox2DShape()->RayCast(&output, input, transform, childIndex);
+		}
+		else
+		{
+			s->throwIfFixtureNotValid();
+			int childIndex = mrbx_optint(mrb, v[8], 1) - 1;
+			hit = s->getFixture()->RayCast(&output, input, childIndex);
+		}
+	});
+	if (err || !hit)
+		return mrb_nil_value();
+
+	mrb_value h = mrb_hash_new(mrb);
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "normal_x")), mrbx_number(mrb, output.normal.x));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "normal_y")), mrbx_number(mrb, output.normal.y));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "fraction")), mrbx_number(mrb, output.fraction));
+	return h;
+}
+
+static mrb_value shape_computeAABB(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"x", "y", "r", "child_index"}, 3, v);
+	Shape *s = mrbx_checktype<Shape>(mrb, self);
+	float x = Physics::scaleDown(mrbx_checkfloat(mrb, v[0]));
+	float y = Physics::scaleDown(mrbx_checkfloat(mrb, v[1]));
+	float r = mrbx_checkfloat(mrb, v[2]);
+	int childIndex = mrbx_optint(mrb, v[3], 1) - 1;
+	b2AABB box;
+	bool err = mrbx_catchexcept(mrb, [&]() {
+		s->throwIfShapeNotValid();
+		b2Transform transform(b2Vec2(x, y), b2Rot(r));
+		s->getBox2DShape()->ComputeAABB(&box, transform, childIndex);
+	});
+	return err ? mrb_nil_value() : pushAABB(mrb, box);
+}
+
+static mrb_value shape_computeMass(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"density"}, 1, v);
+	Shape *s = mrbx_checktype<Shape>(mrb, self);
+	float density = mrbx_checkfloat(mrb, v[0]);
+	b2MassData data;
+	bool err = mrbx_catchexcept(mrb, [&]() {
+		s->throwIfShapeNotValid();
+		s->getBox2DShape()->ComputeMass(&data, density);
+	});
+	if (err) return mrb_nil_value();
+	b2Vec2 center = Physics::scaleUp(data.center);
+	mrb_value h = pushXY(mrb, center.x, center.y);
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "mass")), mrbx_number(mrb, data.mass));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "inertia")),
+		mrbx_number(mrb, Physics::scaleUp(Physics::scaleUp(data.I))));
+	return h;
+}
+
+static mrb_value shape_getBoundingBox(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"child_index"}, 0, v);
+	Shape *s = mrbx_checktype<Shape>(mrb, self);
+	int childIndex = mrbx_optint(mrb, v[0], 1) - 1;
+	b2AABB box;
+	bool err = mrbx_catchexcept(mrb, [&]() {
+		s->throwIfFixtureNotValid();
+		box = s->getFixture()->GetAABB(childIndex);
+	});
+	return err ? mrb_nil_value() : pushAABB(mrb, box);
+}
+
+static mrb_value shape_getMassData(mrb_state *mrb, mrb_value self)
+{
+	Shape *s = mrbx_checktype<Shape>(mrb, self);
+	b2MassData data;
+	bool err = mrbx_catchexcept(mrb, [&]() {
+		s->throwIfFixtureNotValid();
+		s->getFixture()->GetMassData(&data);
+	});
+	if (err) return mrb_nil_value();
+	b2Vec2 center = Physics::scaleUp(data.center);
+	mrb_value h = pushXY(mrb, center.x, center.y);
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "mass")), mrbx_number(mrb, data.mass));
+	// getMassData (unlike computeMass) leaves I unscaled, faithful to Shape.cpp.
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "inertia")), mrbx_number(mrb, data.I));
+	return h;
+}
+
 static mrb_value shape_isValid(mrb_state *mrb, mrb_value self)
 {
 	return mrbx_boolean(mrb, mrbx_checktype<Shape>(mrb, self)->isValid());
@@ -354,6 +482,11 @@ static const MrbReg shape_functions[] =
 	{ "get_category",    shape_getCategory,   MRB_ARGS_NONE() },
 	{ "set_mask",        shape_setMask,       MRB_ARGS_KEY(1, 0) },
 	{ "get_mask",        shape_getMask,       MRB_ARGS_NONE() },
+	{ "ray_cast",        shape_rayCast,       MRB_ARGS_KEY(9, 0) },
+	{ "compute_aabb",    shape_computeAABB,   MRB_ARGS_KEY(4, 0) },
+	{ "compute_mass",    shape_computeMass,   MRB_ARGS_KEY(1, 0) },
+	{ "get_bounding_box", shape_getBoundingBox, MRB_ARGS_KEY(1, 0) },
+	{ "get_mass_data",   shape_getMassData,   MRB_ARGS_NONE() },
 	{ "valid?",          shape_isValid,       MRB_ARGS_NONE() },
 	{ "destroy",         shape_destroy,       MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
@@ -403,9 +536,30 @@ static mrb_value polygon_validate(mrb_state *mrb, mrb_value self)
 	return mrbx_boolean(mrb, mrbx_checktype<PolygonShape>(mrb, self)->validate());
 }
 
+// #phys-shape-points: transformed vertex readback as a flat [x0,y0,x1,y1,...]
+// array, reimplemented over the b2PolygonShape exposed by Shape.
+static mrb_value polygon_getPoints(mrb_state *mrb, mrb_value self)
+{
+	PolygonShape *s = mrbx_checktype<PolygonShape>(mrb, self);
+	mrb_value arr = mrb_nil_value();
+	mrbx_catchexcept(mrb, [&]() {
+		s->throwIfShapeNotValid();
+		b2PolygonShape *p = (b2PolygonShape *) s->getBox2DShape();
+		arr = mrb_ary_new_capa(mrb, p->m_count * 2);
+		for (int i = 0; i < p->m_count; i++)
+		{
+			b2Vec2 v = Physics::scaleUp(p->m_vertices[i]);
+			mrb_ary_push(mrb, arr, mrbx_number(mrb, v.x));
+			mrb_ary_push(mrb, arr, mrbx_number(mrb, v.y));
+		}
+	});
+	return arr;
+}
+
 static const MrbReg polygon_functions[] =
 {
-	{ "validate", polygon_validate, MRB_ARGS_NONE() },
+	{ "validate",   polygon_validate,  MRB_ARGS_NONE() },
+	{ "get_points", polygon_getPoints, MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -441,12 +595,32 @@ static mrb_value edge_getPreviousVertex(mrb_state *mrb, mrb_value self)
 	return pushXY(mrb, v.x, v.y);
 }
 
+// #phys-shape-points: the edge's two transformed endpoints as [x1,y1,x2,y2].
+static mrb_value edge_getPoints(mrb_state *mrb, mrb_value self)
+{
+	EdgeShape *s = mrbx_checktype<EdgeShape>(mrb, self);
+	mrb_value arr = mrb_nil_value();
+	mrbx_catchexcept(mrb, [&]() {
+		s->throwIfShapeNotValid();
+		b2EdgeShape *e = (b2EdgeShape *) s->getBox2DShape();
+		b2Vec2 v1 = Physics::scaleUp(e->m_vertex1);
+		b2Vec2 v2 = Physics::scaleUp(e->m_vertex2);
+		arr = mrb_ary_new_capa(mrb, 4);
+		mrb_ary_push(mrb, arr, mrbx_number(mrb, v1.x));
+		mrb_ary_push(mrb, arr, mrbx_number(mrb, v1.y));
+		mrb_ary_push(mrb, arr, mrbx_number(mrb, v2.x));
+		mrb_ary_push(mrb, arr, mrbx_number(mrb, v2.y));
+	});
+	return arr;
+}
+
 static const MrbReg edge_functions[] =
 {
 	{ "set_next_vertex",     edge_setNextVertex,     MRB_ARGS_KEY(2, 0) },
 	{ "get_next_vertex",     edge_getNextVertex,     MRB_ARGS_NONE() },
 	{ "set_previous_vertex", edge_setPreviousVertex, MRB_ARGS_KEY(2, 0) },
 	{ "get_previous_vertex", edge_getPreviousVertex, MRB_ARGS_NONE() },
+	{ "get_points",          edge_getPoints,         MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
 };
 
@@ -1260,10 +1434,50 @@ static mrb_value w_newChainBody(mrb_state *mrb, mrb_value self)
 	return mrb_ary_new_from_values(mrb, 2, pair);
 }
 
+// #phys-distance: the distance between two active shapes, reimplemented over
+// the b2Fixture exposed by Shape (Physics::getDistance pushed Lua values).
+static mrb_value w_getDistance(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"shape_a", "shape_b"}, 2, v);
+	Shape *a = mrbx_checktype<Shape>(mrb, v[0]);
+	Shape *b = mrbx_checktype<Shape>(mrb, v[1]);
+
+	b2DistanceProxy pA, pB;
+	b2DistanceInput i;
+	b2DistanceOutput o;
+	b2SimplexCache c;
+	c.count = 0;
+
+	bool err = mrbx_catchexcept(mrb, [&]() {
+		if (!a->isValid() || !b->isValid())
+			throw love::Exception("The given Shape is not active in the physics World.");
+		pA.Set(a->getFixture()->GetShape(), 0);
+		pB.Set(b->getFixture()->GetShape(), 0);
+		i.proxyA = pA;
+		i.proxyB = pB;
+		i.transformA = a->getFixture()->GetBody()->GetTransform();
+		i.transformB = b->getFixture()->GetBody()->GetTransform();
+		i.useRadii = true;
+		b2Distance(&o, &c, &i);
+	});
+	if (err) return mrb_nil_value();
+
+	mrb_value h = mrb_hash_new(mrb);
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "distance")), mrbx_number(mrb, Physics::scaleUp(o.distance)));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "x1")), mrbx_number(mrb, Physics::scaleUp(o.pointA.x)));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "y1")), mrbx_number(mrb, Physics::scaleUp(o.pointA.y)));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "x2")), mrbx_number(mrb, Physics::scaleUp(o.pointB.x)));
+	mrb_hash_set(mrb, h, mrb_symbol_value(mrb_intern_lit(mrb, "y2")), mrbx_number(mrb, Physics::scaleUp(o.pointB.y)));
+	return h;
+}
+
 static const MrbReg functions[] =
 {
 	{ "set_meter",            w_setMeter,           MRB_ARGS_KEY(1, 0) },
 	{ "get_meter",            w_getMeter,           MRB_ARGS_NONE() },
+	{ "get_distance",         w_getDistance,        MRB_ARGS_KEY(2, 0) },
 	{ "new_world",            w_newWorld,           MRB_ARGS_KEY(3, 0) },
 	{ "new_body",             w_newBody,            MRB_ARGS_KEY(4, 0) },
 	{ "new_circle_shape",     w_newCircleShape,     MRB_ARGS_KEY(4, 0) },
