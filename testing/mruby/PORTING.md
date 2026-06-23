@@ -553,8 +553,17 @@ them changes when we swap.
 
 ## C. Cross-cutting (whole-port infrastructure, no code site yet)
 
-- [ ] Object/proxy identity map: an mruby equivalent of Lua's weak-table map so
-      the same C++ object always maps to the same Ruby object.
+- [x] Object/proxy identity map: an mruby equivalent of Lua's weak-table map so
+      the same C++ object always maps to the same Ruby object — done by the
+      physics-slice work (see §A `#phys-identity`), but the mechanism is
+      **general**, not physics-specific. `mrbx_pushtype` (the single push path
+      for every `love::Object` type) keeps a weak `(mrb_state*, love::Object*) ->
+      wrapper` map (`objectWrappers` in `common/mrb_runtime.cpp`) and returns the
+      live wrapper if one exists, so the same C++ object always maps to one Ruby
+      object (`==`). The map is not GC-protected (so it never keeps a wrapper or
+      its C++ object alive); `mrbx_object_free` evicts on collection and
+      `mrbx_forgetstate` drops a closing VM's entries. This is the mruby analog
+      of Lua's weak-valued userdata table.
 - [ ] CMake: build/link `libmruby.a` instead of `lovedep::Lua`; drop
       `src/libraries/lua53` and the LuaJIT path.
 - [ ] FFI fast paths: re-implement the few wrappers that use LuaJIT FFI.
