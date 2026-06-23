@@ -27,6 +27,22 @@ fs.set_symlinks_enabled(enable: true)
 fail += 1 unless check("enabled", fs.symlinks_enabled?, true)
 
 puts
+puts "=== platform settings: fused + android save external ==="
+# setFused is a one-shot latch in the physfs backend (the boot pipeline sets it
+# exactly once), so only the first call takes effect — and the save dir was
+# already mounted by set_identity above, so latching it now is harmless here.
+fail += 1 unless check("fused? false initially", fs.fused?, false)
+fs.set_fused(fused: true)
+fail += 1 unless check("fused? true after set", fs.fused?, true)
+fs.set_fused(fused: false)   # latched: ignored, stays true
+fail += 1 unless check("fused? latched (still true)", fs.fused?, true)
+# Android save-external is a no-op off Android, so the getter stays false here,
+# but the setter must accept the kwarg (and default to false) without raising.
+fs.set_android_save_external(external: false)
+fail += 1 unless check("android_save_external? queryable", fs.android_save_external?, false)
+fs.set_android_save_external   # default external: false
+
+puts
 puts "=== get_full_common_path ==="
 %w[appsavedir userhome userappdata].each do |cp|
   path = fs.get_full_common_path(common_path: cp)

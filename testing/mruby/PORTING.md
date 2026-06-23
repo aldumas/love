@@ -42,16 +42,22 @@ exposed: `mount_full_path` / `mount_common_path` (with `permissions:` "read"
 (default) or "readwrite"), `unmount_full_path` / `unmount_common_path`, and
 `get_full_common_path` (`common_path:` is a CommonPath name e.g. "appsavedir",
 "userhome", "userappdata"). Symlinks: `set_symlinks_enabled` (`enable:`) /
-`symlinks_enabled?`. Covered by `filesystem_mount_test.rb`. Note: re-mounting an
-already-mounted real path returns false by design (physfs), so e.g. the
+`symlinks_enabled?`. Platform settings are exposed too: `set_fused` (`fused:`) /
+`fused?` and `set_android_save_external` (`external:`, default false) /
+`android_save_external?`. Covered by `filesystem_mount_test.rb`. Note: re-mounting
+an already-mounted real path returns false by design (physfs), so e.g. the
 auto-mounted save dir can't be mounted again via `mount_common_path`. Still
 deferred (split out of the former #fs-deferred bundle):
 - [ ] (#fs-loader) Lua-loader functions (`load`) and `require` search paths —
       Lua's package/`require` machinery has no direct mruby analog; needs
       reinterpreting against mruby's own load path. The engine boot pipeline is
       already ported, so this is about user-facing `require`, not bootstrap.
-- [ ] (#fs-platform) fused-mode + Android save-storage settings (`is_fused`,
-      `set_android_save_external`, etc.) — platform settings, not yet exposed.
+- [x] (#fs-platform) fused-mode + Android save-storage settings — done.
+      `set_fused`/`fused?` wrap the physfs latch (`setFused` is one-shot, set by
+      boot exactly once, so a later `set_fused` is ignored — the test asserts
+      this). `set_android_save_external`/`android_save_external?` wrap the
+      Android-only save-routing flag (a no-op off Android; the underscore-prefixed
+      private `_setAndroidSaveExternal` in the Lua wrapper, here a plain setter).
 
 ### window
 - [x] (#win-omitted) `update_mode` and `get_pointer` — done; `update_mode`

@@ -34,13 +34,11 @@
 // Functions returning multiple values in Lua (read -> contents, size) return a
 // single Ruby value here (the string; its bytesize is the count). Iterators
 // (lines) return arrays. Archive mounting (incl. Data/FileData-backed archives,
-// plus the full-path and common-path mount family) and symlink toggling are
-// ported; the Lua-loader/require search paths and the fused/Android platform
-// settings remain deferred.
+// plus the full-path and common-path mount family), symlink toggling, and the
+// fused/Android platform settings are ported; the Lua-loader/require search
+// paths remain deferred.
 // TODO(mruby) #fs-loader: Lua-loader functions (load) + require search paths
 // have no direct mruby analog yet — needs reinterpreting for mruby. PORTING.md §A.
-// TODO(mruby) #fs-platform: fused-mode + Android save-storage settings
-// (is_fused / set_android_save_external etc.) not exposed. PORTING.md §A.
 
 #include "common/config.h"
 #include "common/mrb_runtime.h"
@@ -502,6 +500,42 @@ static mrb_value w_areSymlinksEnabled(mrb_state *mrb, mrb_value self)
 	return mrbx_boolean(mrb, instance()->areSymlinksEnabled());
 }
 
+// Fused mode: when fused the game source is the executable itself, so the
+// save dir is rooted directly under the identity (no "LOVE/" parent). Normally
+// set by the boot pipeline from the conf flag; exposed for completeness.
+static mrb_value w_setFused(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"fused"}, 1, v);
+	instance()->setFused(mrbx_optboolean(mrb, v[0], true));
+	return mrb_nil_value();
+}
+
+static mrb_value w_isFused(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	return mrbx_boolean(mrb, instance()->isFused());
+}
+
+// Android-only: route the save directory to external (sdcard) storage instead
+// of the app's internal storage. A no-op on other platforms. In Lua this was
+// the private `_setAndroidSaveExternal`, called from boot before setIdentity.
+static mrb_value w_setAndroidSaveExternal(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"external"}, 0, v);
+	instance()->setAndroidSaveExternal(mrbx_optboolean(mrb, v[0], false));
+	return mrb_nil_value();
+}
+
+static mrb_value w_isAndroidSaveExternal(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	return mrbx_boolean(mrb, instance()->isAndroidSaveExternal());
+}
+
 static mrb_value w_openFile(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
@@ -736,6 +770,10 @@ static const MrbReg functions[] =
 	{ "get_full_common_path",   w_getFullCommonPath,  MRB_ARGS_KEY(1, 0) },
 	{ "set_symlinks_enabled",   w_setSymlinksEnabled, MRB_ARGS_KEY(1, 0) },
 	{ "symlinks_enabled?",      w_areSymlinksEnabled, MRB_ARGS_NONE() },
+	{ "set_fused",              w_setFused,           MRB_ARGS_KEY(1, 0) },
+	{ "fused?",                 w_isFused,            MRB_ARGS_NONE() },
+	{ "set_android_save_external", w_setAndroidSaveExternal, MRB_ARGS_KEY(1, 0) },
+	{ "android_save_external?", w_isAndroidSaveExternal, MRB_ARGS_NONE() },
 	{ "open_file",              w_openFile,           MRB_ARGS_KEY(2, 0) },
 	{ "new_file_data",          w_newFileData,        MRB_ARGS_KEY(2, 0) },
 	{ "get_working_directory",  w_getWorkingDirectory, MRB_ARGS_NONE() },
