@@ -180,8 +180,10 @@ narrative overview.
    methods (`mrbx_register_type` / `mrbx_pushtype`); filesystem covers an
    abstract module with a real backend (physfs), returning Hashes/arrays and
    wrapping File/FileData objects.
-   Deferred within filesystem: the Lua-loader functions (load, require paths),
-   CommonPath mounting, symlinks, fused/android settings, Data-based mounting.
+   The filesystem module is now fully ported: CommonPath/full-path/Data-based
+   mounting, symlinks, fused/android settings, and the loader (require path,
+   `load`, and a global Ruby-style `require` over the virtual filesystem). No
+   filesystem deferrals remain — see PORTING.md §A.
 2. DONE: the Lua boot scripts (`boot.lua`, `callbacks.lua`, `arg.lua`) are
    ported to Ruby (`boot.rb`, `callbacks.rb`, `arg.rb`) with the coroutine boot
    loop mapped onto mruby `Fiber`, and the run loop now pumps/polls the ported
