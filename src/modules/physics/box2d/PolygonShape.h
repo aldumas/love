@@ -58,7 +58,10 @@ public:
 	 *
 	 * The result can be directly passed into love.graphics.polygon().
 	 **/
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-shape-points: vertex readback (deferred).
 	int getPoints(lua_State *L);
+#endif
 
 	/**
 	 * Validate convexity.

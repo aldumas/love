@@ -75,6 +75,8 @@ b2Vec2 EdgeShape::getPreviousVertex() const
 	return Physics::scaleUp(e->m_vertex0);
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-shape-points: vertex readback (deferred); see PolygonShape.
 int EdgeShape::getPoints(lua_State *L)
 {
 	throwIfShapeNotValid();
@@ -88,6 +90,7 @@ int EdgeShape::getPoints(lua_State *L)
 	return 4;
 
 }
+#endif // LOVE_MRUBY (#phys-shape-points)
 
 } // box2d
 } // physics

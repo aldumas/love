@@ -21,13 +21,18 @@
 #include "World.h"
 
 #include "Shape.h"
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-contact: Contact type (pulls <lua.h>) not ported yet.
 #include "Contact.h"
+#endif
 #include "Physics.h"
 #include "common/Reference.h"
 
+#ifndef LOVE_MRUBY
 // Needed for World::getJoints. It should be moved to wrapper code...
 #include "wrap_Joint.h"
 #include "wrap_Shape.h"
+#endif
 
 namespace love
 {
@@ -53,6 +58,10 @@ World::ContactCallback::~ContactCallback()
 
 void World::ContactCallback::process(b2Contact *contact, const b2ContactImpulse *impulse)
 {
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-callbacks: collision callbacks invoke a stored Lua
+	// function with the two Shapes + Contact (+ impulses). Needs an mruby-side
+	// callback reference and the Contact type (#phys-contact) before porting.
 	// Process contacts.
 	if (ref != nullptr && L != nullptr)
 	{
@@ -97,7 +106,10 @@ void World::ContactCallback::process(b2Contact *contact, const b2ContactImpulse 
 		}
 		lua_call(L, args, 0);
 	}
-
+#else
+	(void) contact;
+	(void) impulse;
+#endif // LOVE_MRUBY (#phys-callbacks)
 }
 
 World::ContactFilter::ContactFilter()
@@ -114,6 +126,8 @@ World::ContactFilter::~ContactFilter()
 
 bool World::ContactFilter::process(Shape *a, Shape *b)
 {
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-callbacks: optional user collision filter.
 	if (ref != nullptr && L != nullptr)
 	{
 		ref->push(L);
@@ -122,10 +136,17 @@ bool World::ContactFilter::process(Shape *a, Shape *b)
 		lua_call(L, 2, 1);
 		return luax_toboolean(L, -1);
 	}
+#else
+	(void) a;
+	(void) b;
+#endif // LOVE_MRUBY (#phys-callbacks)
 
 	return true;
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-query: QueryCallback/CollectCallback invoke a Lua function /
+// build a Lua table for World:queryShapesInArea / getShapesInArea. Deferred.
 World::QueryCallback::QueryCallback(lua_State *L, int idx)
 	: L(L)
 	, funcidx(idx)
@@ -182,7 +203,11 @@ bool World::CollectCallback::ReportFixture(b2Fixture *f)
 	i++;
 	return true;
 }
+#endif // LOVE_MRUBY (#phys-query)
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-raycast: RayCastCallback invokes a Lua function per fixture
+// hit for World:rayCast. Deferred (the RayCastOneCallback path below is shared).
 World::RayCastCallback::RayCastCallback(lua_State *L, int idx)
 	: L(L)
 	, funcidx(idx)
@@ -222,6 +247,7 @@ float World::RayCastCallback::ReportFixture(b2Fixture *fixture, const b2Vec2 &po
 
 	return 0;
 }
+#endif // LOVE_MRUBY (#phys-raycast)
 
 World::RayCastOneCallback::RayCastOneCallback(uint16 categoryMask, bool any)
 	: hitFixture(nullptr)
@@ -256,9 +282,15 @@ void World::SayGoodbye(b2Fixture *fixture)
 
 void World::SayGoodbye(b2Joint *joint)
 {
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-joints: notify the wrapping Joint of implicit destruction.
+	// No joint types ported yet, so there is never a love Joint to notify.
 	Joint *j = (Joint *)(joint->GetUserData().pointer);
 	// Hint implicit destruction with true.
 	if (j) j->destroyJoint(true);
+#else
+	(void) joint;
+#endif
 }
 
 World::World()
@@ -324,12 +356,16 @@ void World::update(float dt, int velocityIterations, int positionIterations)
 		// Release for reference in vector.
 		s->release();
 	}
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-joints: deferred-destruction of joints created during a
+	// time step. No joint types ported yet, so destructJoints is always empty.
 	for (Joint *j : destructJoints)
 	{
 		if (j->isValid()) j->destroyJoint();
 		// Release for reference in vector.
 		j->release();
 	}
+#endif
 	destructBodies.clear();
 	destructShapes.clear();
 	destructJoints.clear();
@@ -347,10 +383,14 @@ void World::EndContact(b2Contact *contact)
 {
 	end.process(contact);
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-contact: invalidate the wrapping Contact object before
+	// Box2D destroys the b2Contact. No Contact type yet, so nothing to do.
 	// Letting the Contact know that the b2Contact will be destroyed any second.
 	Contact *c = (Contact *)findObject(contact);
 	if (c != nullptr)
 		c->invalidate();
+#endif
 }
 
 void World::PreSolve(b2Contact *contact, const b2Manifold *oldManifold)
@@ -392,6 +432,10 @@ bool World::isValid() const
 	return world != nullptr;
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-callbacks: set/getCallbacks, setCallbacksL and the contact
+// filter accessors all marshal Lua functions. Deferred until the mruby callback
+// mechanism + Contact type land.
 int World::setCallbacks(lua_State *L)
 {
 	int nargs = lua_gettop(L);
@@ -476,12 +520,16 @@ int World::getContactFilter(lua_State *L)
 	filter.ref ? filter.ref->push(L) : lua_pushnil(L);
 	return 1;
 }
+#endif // LOVE_MRUBY (#phys-callbacks)
 
 void World::setGravity(float x, float y)
 {
 	world->SetGravity(Physics::scaleDown(b2Vec2(x, y)));
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-world-helpers: getGravity / getBodies return Lua values /
+// tables. Reimplemented in wrap_Physics_mrb.cpp over getBox2DWorld().
 int World::getGravity(lua_State *L)
 {
 	b2Vec2 v = Physics::scaleUp(world->GetGravity());
@@ -489,6 +537,7 @@ int World::getGravity(lua_State *L)
 	lua_pushnumber(L, v.y);
 	return 2;
 }
+#endif // LOVE_MRUBY (#phys-world-helpers)
 
 void World::translateOrigin(float x, float y)
 {
@@ -525,6 +574,10 @@ int World::getContactCount() const
 	return world->GetContactCount();
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-world-helpers: getBodies builds a Lua table; reimplemented
+// in the wrapper. getJoints (#phys-joints) / getContacts (#phys-contact) await
+// those slices.
 int World::getBodies(lua_State *L) const
 {
 	lua_newtable(L);
@@ -547,6 +600,7 @@ int World::getBodies(lua_State *L) const
 	return 1;
 }
 
+// TODO(mruby) #phys-joints: getJoints awaits the joint-type slice.
 int World::getJoints(lua_State *L) const
 {
 	lua_newtable(L);
@@ -565,6 +619,7 @@ int World::getJoints(lua_State *L) const
 	return 1;
 }
 
+// TODO(mruby) #phys-contact: getContacts awaits the Contact-type slice.
 int World::getContacts(lua_State *L)
 {
 	lua_newtable(L);
@@ -586,12 +641,16 @@ int World::getContacts(lua_State *L)
 	while ((c = c->GetNext()));
 	return 1;
 }
+#endif // LOVE_MRUBY (#phys-world-helpers / #phys-joints / #phys-contact)
 
 b2Body *World::getGroundBody() const
 {
 	return groundBody;
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-query: queryShapesInArea / getShapesInArea run an AABB query
+// driving a Lua callback / building a Lua table. Deferred.
 int World::queryShapesInArea(lua_State *L)
 {
 	b2AABB box;
@@ -621,7 +680,11 @@ int World::getShapesInArea(lua_State *L)
 	world->QueryAABB(&query, box);
 	return 1;
 }
+#endif // LOVE_MRUBY (#phys-query)
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-raycast: rayCast / rayCastAny / rayCastClosest. The latter
+// two use the shared RayCastOneCallback, but all three push Lua results.
 int World::rayCast(lua_State *L)
 {
 	float x1 = (float)luaL_checknumber(L, 1);
@@ -693,6 +756,7 @@ int World::rayCastClosest(lua_State *L)
 	}
 	return 0;
 }
+#endif // LOVE_MRUBY (#phys-raycast)
 
 void World::destroy()
 {
@@ -705,6 +769,8 @@ void World::destroy()
 		return;
 	}
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-callbacks: release the stored Lua callback references.
 	// Remove userdata reference to avoid it sticking around after GC
 	if (begin.ref)     begin.ref->unref();
 	if (end.ref)       end.ref->unref();
@@ -714,6 +780,7 @@ void World::destroy()
 
 	//disable callbacks
 	begin.ref = end.ref = presolve.ref = postsolve.ref = filter.ref = nullptr;
+#endif
 
 	// Cleaning up the world.
 	b2Body *b = world->GetBodyList();

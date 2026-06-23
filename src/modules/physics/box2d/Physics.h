@@ -26,13 +26,18 @@
 #include "common/Vector.h"
 
 #include "World.h"
-#include "Contact.h"
 #include "Body.h"
 #include "Shape.h"
 #include "CircleShape.h"
 #include "PolygonShape.h"
 #include "EdgeShape.h"
 #include "ChainShape.h"
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-contact / #phys-joints: the Contact and joint types pull in
+// common/runtime.h (<lua.h>) and aren't ported yet, so they're excluded from
+// the mruby build. The Physics joint factories that need them are likewise
+// guarded out (see Physics.cpp / Physics.h).
+#include "Contact.h"
 #include "Joint.h"
 #include "MouseJoint.h"
 #include "DistanceJoint.h"
@@ -45,6 +50,7 @@
 #include "WheelJoint.h"
 #include "RopeJoint.h"
 #include "MotorJoint.h"
+#endif // LOVE_MRUBY (#phys-contact / #phys-joints)
 
 namespace love
 {
@@ -144,6 +150,8 @@ public:
 	 **/
 	ChainShape *newChainShape(Body *body, bool loop, const Vector2 *coords, int count);
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-joints: joint factory declarations (joint types unported).
 	/**
 	 * Creates a new DistanceJoint connecting body1 with body2.
 	 * @param x1 Anchor1 along the x-axis. (World coordinates)
@@ -261,7 +269,10 @@ public:
 	 **/
 	MotorJoint *newMotorJoint(Body *body1, Body *body2);
 	MotorJoint *newMotorJoint(Body *body1, Body *body2, float correctionFactor, bool collideConnected);
+#endif // LOVE_MRUBY (#phys-joints)
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-distance: getDistance pushes Lua return values directly.
 	/**
 	 * Calculates the distance between two Fixtures.
 	 * @param fixtureA The first Fixture.
@@ -270,6 +281,7 @@ public:
 	 *         to each other.
 	 **/
 	int getDistance(lua_State *L);
+#endif // LOVE_MRUBY (#phys-distance)
 
 	/**
 	 * Sets the number of pixels in one meter.

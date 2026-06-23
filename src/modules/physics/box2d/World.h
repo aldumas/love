@@ -23,7 +23,12 @@
 
 // LOVE
 #include "common/Object.h"
+#ifndef LOVE_MRUBY
+// common/runtime.h pulls in <lua.h>, absent from the mruby build. Lua-only
+// members/methods here are guarded by #ifndef LOVE_MRUBY; the surviving pointer
+// members just need the forward decls from common/Reference.h (included below).
 #include "common/runtime.h"
+#endif
 #include "common/Reference.h"
 
 // STD
@@ -90,6 +95,8 @@ public:
 		bool process(Shape *a, Shape *b);
 	};
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-query: AABB-query callbacks (Lua function / table).
 	class QueryCallback : public b2QueryCallback
 	{
 	public:
@@ -113,7 +120,10 @@ public:
 		lua_State *L;
 		int i = 1;
 	};
+#endif // LOVE_MRUBY (#phys-query)
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-raycast: ray-cast callback (Lua function per hit).
 	class RayCastCallback : public b2RayCastCallback
 	{
 	public:
@@ -125,6 +135,7 @@ public:
 		int funcidx;
 		int userargs;
 	};
+#endif // LOVE_MRUBY (#phys-raycast)
 
 	class RayCastOneCallback : public b2RayCastCallback
 	{
@@ -186,6 +197,8 @@ public:
 	 **/
 	bool isValid() const;
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-callbacks: collision-callback + contact-filter accessors.
 	/**
 	 * Receives up to four Lua functions as arguments. Each function is
 	 * collision callback for the four events (in order): begin, end,
@@ -215,6 +228,7 @@ public:
 	 * Gets the ContactFilter callback.
 	 **/
 	int getContactFilter(lua_State *L);
+#endif // LOVE_MRUBY (#phys-callbacks)
 
 	/**
 	 * Sets the current gravity of the World.
@@ -223,12 +237,15 @@ public:
 	 **/
 	void setGravity(float x, float y);
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-world-helpers: getGravity (reimplemented in wrapper).
 	/**
 	 * Gets the current gravity.
 	 * @returns Gravity in the x-direction.
 	 * @returns Gravity in the y-direction.
 	 **/
 	int getGravity(lua_State *L);
+#endif
 
 	/**
 	 * Translate the world origin.
@@ -274,6 +291,9 @@ public:
 	 **/
 	int getContactCount() const;
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-world-helpers getBodies; #phys-joints getJoints;
+	// #phys-contact getContacts.
 	/**
 	 * Get an array of all the Bodies in the World.
 	 * @return An array of Bodies.
@@ -291,6 +311,7 @@ public:
 	 * @return An array of Contacts.
 	 **/
 	int getContacts(lua_State *L);
+#endif
 
 	/**
 	 * Gets the ground body.
@@ -298,6 +319,12 @@ public:
 	 **/
 	b2Body *getGroundBody() const;
 
+	// mruby: exposes the raw b2World so the wrapper can reimplement the
+	// table-/multi-returning query helpers (getBodies, getGravity, ...).
+	b2World *getBox2DWorld() const { return world; }
+
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-query: AABB-query helpers.
 	/**
 	 * Calls a callback on all Shapes that overlap a given bounding box.
 	 **/
@@ -307,7 +334,10 @@ public:
 	 * Gets all Shapes that overlap a given bounding box.
 	 **/
 	int getShapesInArea(lua_State *L);
+#endif
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-raycast: ray-cast helpers.
 	/**
 	 * Raycasts the World for all Fixtures in the path of the ray.
 	 **/
@@ -315,6 +345,7 @@ public:
 
 	int rayCastAny(lua_State *L);
 	int rayCastClosest(lua_State *L);
+#endif
 
 	/**
 	 * Destroy this world.

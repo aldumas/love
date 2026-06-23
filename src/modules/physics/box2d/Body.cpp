@@ -26,9 +26,11 @@
 #include "World.h"
 #include "Physics.h"
 
-// Needed for luax_pushjoint.
+#ifndef LOVE_MRUBY
+// Needed for luax_pushjoint / luax_pushshape in the Lua table-returning helpers.
 #include "wrap_Joint.h"
 #include "wrap_Shape.h"
+#endif
 
 namespace love
 {
@@ -52,8 +54,11 @@ Body::Body(World *world, b2Vec2 p, Body::Type type)
 
 Body::~Body()
 {
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-userdata: arbitrary user data uses a Lua Reference.
 	if (ref)
 		delete ref;
+#endif
 }
 
 float Body::getX()
@@ -122,6 +127,10 @@ float Body::getInertia() const
 	return Physics::scaleUp(Physics::scaleUp(body->GetInertia()));
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-body-helpers: getMassData/getWorldPoints/getLocalPoints/
+// getShapes push Lua values or build Lua tables. Reimplemented in
+// wrap_Physics_mrb.cpp over the public Body/b2Body API.
 int Body::getMassData(lua_State *L)
 {
 	b2MassData data;
@@ -133,6 +142,7 @@ int Body::getMassData(lua_State *L)
 	lua_pushnumber(L, Physics::scaleUp(Physics::scaleUp(data.I)));
 	return 4;
 }
+#endif // LOVE_MRUBY (#phys-body-helpers)
 
 float Body::getAngularDamping() const
 {
@@ -319,6 +329,8 @@ void Body::getWorldVector(float x, float y, float &x_o, float &y_o)
 	y_o = v.y;
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-body-helpers: variadic point transform; see wrapper.
 int Body::getWorldPoints(lua_State *L)
 {
 	int argc = lua_gettop(L);
@@ -342,6 +354,7 @@ int Body::getWorldPoints(lua_State *L)
 
 	return argc;
 }
+#endif // LOVE_MRUBY (#phys-body-helpers)
 
 void Body::getLocalPoint(float x, float y, float &x_o, float &y_o)
 {
@@ -357,6 +370,8 @@ void Body::getLocalVector(float x, float y, float &x_o, float &y_o)
 	y_o = v.y;
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-body-helpers: variadic point transform; see wrapper.
 int Body::getLocalPoints(lua_State *L)
 {
 	int argc = lua_gettop(L);
@@ -380,6 +395,7 @@ int Body::getLocalPoints(lua_State *L)
 
 	return argc;
 }
+#endif // LOVE_MRUBY (#phys-body-helpers)
 
 void Body::getLinearVelocityFromWorldPoint(float x, float y, float &x_o, float &y_o)
 {
@@ -479,6 +495,10 @@ Shape *Body::getShape() const
 	return shape;
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-body-helpers: getShapes builds a Lua table; reimplemented
+// in the wrapper over body->GetFixtureList(). getJoints (#phys-joints) and
+// getContacts (#phys-contact) await those slices.
 int Body::getShapes(lua_State *L) const
 {
 	lua_newtable(L);
@@ -499,6 +519,7 @@ int Body::getShapes(lua_State *L) const
 	return 1;
 }
 
+// TODO(mruby) #phys-joints: getJoints awaits the joint-type slice.
 int Body::getJoints(lua_State *L) const
 {
 	lua_newtable(L);
@@ -523,6 +544,7 @@ int Body::getJoints(lua_State *L) const
 	return 1;
 }
 
+// TODO(mruby) #phys-contact: getContacts awaits the Contact-type slice.
 int Body::getContacts(lua_State *L) const
 {
 	lua_newtable(L);
@@ -547,6 +569,7 @@ int Body::getContacts(lua_State *L) const
 	while ((ce = ce->next));
 	return 1;
 }
+#endif // LOVE_MRUBY (#phys-body-helpers / #phys-joints / #phys-contact)
 
 void Body::destroy()
 {
@@ -561,14 +584,19 @@ void Body::destroy()
 	world->world->DestroyBody(body);
 	body = nullptr;
 
-	// Remove userdata reference to avoid it sticking around after GC
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-userdata: remove userdata Reference to avoid GC leak.
 	if (ref)
 		ref->unref();
+#endif
 
 	// Box2D body destroyed. Release its reference to the love Body.
 	this->release();
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-userdata: set/get arbitrary user data via a Lua Reference;
+// needs an mruby-side reference mechanism before it can be ported.
 int Body::setUserData(lua_State *L)
 {
 	love::luax_assert_argc(L, 1, 1);
@@ -590,6 +618,7 @@ int Body::getUserData(lua_State *L)
 
 	return 1;
 }
+#endif // LOVE_MRUBY (#phys-userdata)
 
 } // box2d
 } // physics

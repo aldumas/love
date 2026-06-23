@@ -30,6 +30,7 @@ arguments**.
 | Ported module: sensor (real SDL backend) | `src/modules/sensor/wrap_Sensor_mrb.cpp` |
 | Ported module: joystick (Joystick type + module class methods; real SDL gamepad backend) | `src/modules/joystick/wrap_JoystickModule_mrb.cpp` |
 | Ported module: video (VideoStream type; real theora decode backend, surfaced via love.graphics.new_video) | `src/modules/video/wrap_Video_mrb.cpp` |
+| Ported module: physics (first slice — World/Body/Circle/Polygon/Edge/Chain shapes; real Box2D backend) | `src/modules/physics/box2d/wrap_Physics_mrb.cpp` |
 | Ported boot scripts (arg/callbacks/boot) | `src/modules/love/{arg,callbacks,boot}.rb` |
 | Standalone demo harness | `testing/mruby/harness.cpp` |
 | nanosleep/deprecation stubs (avoid linking SDL for the demo) | `testing/mruby/delay_stub.cpp` |
@@ -38,8 +39,17 @@ arguments**.
 The full `love` executable can't link until all 74 module wrappers are ported,
 so this harness exercises the ported modules (`timer`, `math`, `filesystem`,
 `event`, `window`, `graphics`, `keyboard`, `mouse`, `system`, `data`, `image`,
-`font`, `thread`, `sound`, `audio`, `touch`, `sensor`, `joystick`, `video`)
-end-to-end.
+`font`, `thread`, `sound`, `audio`, `touch`, `sensor`, `joystick`, `video`,
+`physics`) end-to-end.
+
+The physics module is the first slice of love.physics (box2d): create a world,
+add bodies with circle/rectangle/polygon/edge/chain shapes, step the simulation
+and read back transforms (run `make run SCRIPT=physics_test.rb`). It is also the
+first engine code with VM calls embedded in the engine class (World's collision
+callbacks, the `lua_State`-taking helpers on World/Body/Shape); those Lua-only
+sections are guarded with `#ifndef LOVE_MRUBY` and tracked in PORTING.md. Joints,
+contacts, collision callbacks, and the ray-cast / AABB-query families are
+deferred to later slices — see PORTING.md §A for the full breakdown.
 The filesystem module links the
 bundled physfs library (compiled as C) and SDL3 (`/usr/local/lib`), so the
 harness depends on `libSDL3` (also used by the event and window backends); the

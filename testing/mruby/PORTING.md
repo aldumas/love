@@ -27,7 +27,7 @@ Legend: `[ ]` not started · `[~]` partial / stubbed · `[x]` done
 
 timer · math · filesystem · event · window · graphics (real backend) · keyboard · mouse
 · system · data · image · font · thread · sound · audio · touch · sensor · joystick
-· video (theora) · boot pipeline (arg/callbacks/boot)
+· video (theora) · physics (box2d — first slice; see §A) · boot pipeline (arg/callbacks/boot)
 
 ---
 
@@ -271,6 +271,52 @@ so video advances on its worker thread once played.
       advances with the audio clock, so frame progress needs `love.audio` to be
       pumped (the boot loop does this); a Source has no separate per-frame
       `tell`-advance in a bare script that never updates audio.
+
+### physics (box2d) — FIRST SLICE
+The first physics slice exposes the simulation core: `Love::Physics` (meter,
+`new_world`, `new_body`, the circle/rectangle/polygon/edge/chain **shape**
+creators and the body+shape combo creators), the `Love::World` type (update,
+gravity, sleeping, locked?, body/joint/contact counts, get_bodies, lifecycle),
+the `Love::Body` type (transforms, velocity, forces/impulses/torque, mass data,
+type, local<->world transforms, flags, get_shape(s)), and the shape hierarchy
+`Love::Shape` (friction/restitution/density/sensor, filter category/mask/group,
+test_point) with the concrete `Love::CircleShape` / `PolygonShape` (validate) /
+`EdgeShape` / `ChainShape`. Covered by `physics_test.rb` (drop a dynamic body
+under gravity, step, read back the transform). Box2D builds as `libbox2d.a`.
+
+Physics is the first engine code with VM calls embedded **in the engine class**
+(World inherits the b2 listener interfaces; World/Body/Shape carry
+`lua_State`-taking helper methods). Those Lua-only sections are guarded out with
+`#ifndef LOVE_MRUBY` (the `LOVE_MRUBY` macro is defined by the harness Makefile)
+and reconciled here by tag.
+
+Reimplemented in `wrap_Physics_mrb.cpp` (mruby path is complete; the in-engine
+Lua helper stays behind the `LOVE_MRUBY` guard as the Lua-build path, so the
+marker is permanent and the item is `[~]` rather than `[x]`):
+- [~] (#phys-world-helpers) `World::getGravity` / `getBodies` — reimplemented in
+      the wrapper over `World::getBox2DWorld()` (a new accessor) + `getGroundBody`.
+- [~] (#phys-body-helpers) `Body::getMassData` / `getWorldPoints` /
+      `getLocalPoints` / `getShapes` — reimplemented over the public Body /
+      `b2Body` API (`get_world_points`/`get_local_points` take a flat array).
+- [~] (#phys-shape-filter) `Shape` category/mask bit helpers — reimplemented via
+      `get/setFilterData(int*)`; `set_category`/`set_mask` take a `categories:`
+      array of 1..16, `get_category`/`get_mask` return one.
+
+Deferred to later physics slices (functionality not in the mruby build yet):
+- [ ] (#phys-callbacks) World collision callbacks: `set_callbacks`/`get_callbacks`,
+      contact filter, and the `ContactCallback`/`ContactFilter` machinery. Needs
+      an mruby callback-reference mechanism + the Contact type. `ShouldCollide`
+      still applies the standard category/mask/group filtering (no user filter).
+- [ ] (#phys-contact) the `Contact` object type + `World`/`Body` `getContacts`.
+- [ ] (#phys-query) `World` `queryShapesInArea` / `getShapesInArea` (AABB query).
+- [ ] (#phys-raycast) `World` `rayCast` / `rayCastAny` / `rayCastClosest`.
+- [ ] (#phys-joints) all joint types + the `Physics` joint factories + `getJoints`
+      (the heaviest remaining chunk — 11 joint wrappers).
+- [ ] (#phys-userdata) `Body`/`Shape` `setUserData`/`getUserData` (Lua Reference).
+- [ ] (#phys-distance) `Physics.getDistance`.
+- [ ] (#phys-shape-query) `Shape` `rayCast` / `computeAABB` / `computeMass` /
+      `getBoundingBox` / `getMassData` (protected b2 access, multi-return).
+- [ ] (#phys-shape-points) `PolygonShape`/`EdgeShape` `getPoints` (vertex readback).
 
 ---
 

@@ -22,7 +22,9 @@
 
 // LOVE
 #include "common/math.h"
+#ifndef LOVE_MRUBY
 #include "wrap_Body.h"
+#endif
 
 namespace love
 {
@@ -232,6 +234,10 @@ ChainShape *Physics::newChainShape(Body *body, bool loop, const Vector2 *coords,
 	return new ChainShape(body, s);
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-joints: the joint factories build love::physics joint
+// objects whose wrappers aren't ported yet. Guarded out so Physics.cpp links
+// without the joint .cpp files; restore when the joint types are ported.
 DistanceJoint *Physics::newDistanceJoint(Body *body1, Body *body2, float x1, float y1, float x2, float y2, bool collideConnected)
 {
 	return new DistanceJoint(body1, body2, x1, y1, x2, y2, collideConnected);
@@ -306,7 +312,12 @@ MotorJoint *Physics::newMotorJoint(Body *body1, Body *body2, float correctionFac
 {
 	return new MotorJoint(body1, body2, correctionFactor, collideConnected);
 }
+#endif // LOVE_MRUBY (#phys-joints)
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-distance: getDistance pushes 5 Lua return values and reads
+// Shape fixtures (Physics is a friend of Shape). Reimplement in the wrapper
+// when the shape-query slice lands.
 int Physics::getDistance(lua_State *L)
 {
 	Shape *shapeA = luax_checktype<Shape>(L, 1);
@@ -338,6 +349,7 @@ int Physics::getDistance(lua_State *L)
 	lua_pushnumber(L, Physics::scaleUp(o.pointB.y));
 	return 5;
 }
+#endif // LOVE_MRUBY (#phys-distance)
 
 void Physics::setMeter(float scale)
 {

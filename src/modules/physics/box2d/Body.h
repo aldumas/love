@@ -23,7 +23,15 @@
 
 // LOVE
 #include "common/math.h"
+#ifdef LOVE_MRUBY
+// common/runtime.h pulls in <lua.h>, absent from the mruby build. The only Lua
+// symbols this header references live in #ifndef LOVE_MRUBY blocks; the
+// surviving Reference* / lua_State* pointer members just need forward decls,
+// which common/Reference.h provides.
+#include "common/Reference.h"
+#else
 #include "common/runtime.h"
+#endif
 #include "common/Object.h"
 #include "physics/Body.h"
 
@@ -132,10 +140,13 @@ public:
 	 **/
 	float getInertia() const;
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-body-helpers: Lua-returning helper (see wrapper).
 	/**
 	 * Gets mass properties.
 	 **/
 	int getMassData(lua_State *L);
+#endif
 
 	bool hasCustomMassData() const { return hasCustomMass; }
 
@@ -291,11 +302,14 @@ public:
 	 **/
 	void getWorldVector(float x, float y, float &x_o, float &y_o);
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-body-helpers: variadic point transform (see wrapper).
 	/**
 	 * Transforms a series of points (x, y) from local coordinates
 	 * to world coordinates.
 	 **/
 	int getWorldPoints(lua_State *L);
+#endif
 
 	/**
 	 * Transforms a point (x, y) from world coordinates
@@ -317,11 +331,14 @@ public:
 	 **/
 	void getLocalVector(float x, float y, float &x_o, float &y_o);
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-body-helpers: variadic point transform (see wrapper).
 	/**
 	 * Transforms a series of points (x, y) from world coordinates
 	 * to local coordinates.
 	 **/
 	int getLocalPoints(lua_State *L);
+#endif
 
 	/**
 	 * Gets the velocity on the Body for the given world point.
@@ -395,6 +412,9 @@ public:
 	 **/
 	Shape *getShape() const;
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-body-helpers: getShapes (wrapper); #phys-joints getJoints;
+	// #phys-contact getContacts.
 	/**
 	 * Get an array of all the Shapes attached to this Body.
 	 **/
@@ -411,12 +431,15 @@ public:
 	 * if you don't use the collision callbacks.
 	 **/
 	int getContacts(lua_State *L) const;
+#endif
 
 	/**
 	 * Destroy this body.
 	 **/
 	void destroy();
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-userdata: arbitrary user data via a Lua Reference.
 	/**
 	 * This function stores an in-C reference to
 	 * arbitrary Lua data in the Box2D Body object.
@@ -428,6 +451,7 @@ public:
 	 * data is set, nil is returned.
 	 **/
 	int getUserData(lua_State *L);
+#endif
 
 private:
 

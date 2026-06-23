@@ -44,6 +44,11 @@ CXXFLAGS += -DLOVE_SRC_DIR='"$(LOVE_SRC)"'
 # its dynamic_casts in the SDL window backend) out of the link. Must be defined
 # consistently for every TU that includes common/config.h.
 CXXFLAGS += -DLOVE_MRUBY_NO_VULKAN
+# General "this is the mruby build" signal. The physics engine classes (World,
+# Body, Shape) embed VM calls directly (collision callbacks, table-returning
+# helpers); LOVE_MRUBY guards those Lua-only sections out so the shared .cpp
+# files compile here, with the behaviour reimplemented in the _mrb wrapper.
+CXXFLAGS += -DLOVE_MRUBY
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
 # The sound module's lullaby backend links system libvorbis + libmodplug (the
 # Wave/FLAC/MP3 decoders are bundled — Wuff and dr_flac/dr_mp3, built below).
@@ -84,6 +89,14 @@ WUFF_A    := $(OBJ_DIR)/libwuff.a
 XXHASH_DIR  := $(LOVE_SRC)/libraries/xxHash
 XXHASH_OBJS := $(OBJ_DIR)/xxhash.o
 XXHASH_A    := $(OBJ_DIR)/libxxhash.a
+
+# --- box2d (compiled as C++ for the physics module) ----------------------
+# The bundled Box2D 2.x. Built as an archive (selective linking) so the harness
+# only recompiles the physics bindings on each rebuild.
+BOX2D_DIR  := $(LOVE_SRC)/libraries/box2d
+BOX2D_SRCS := $(shell find $(BOX2D_DIR) -name '*.cpp')
+BOX2D_OBJS := $(patsubst $(BOX2D_DIR)/%.cpp,$(OBJ_DIR)/box2d/%.o,$(BOX2D_SRCS))
+BOX2D_A    := $(OBJ_DIR)/libbox2d.a
 
 # --- glslang (compiled as C++ for the graphics module's shader compiler) --
 # The real graphics backend validates/reflects shaders through the bundled
@@ -256,7 +269,18 @@ MODULE_SRCS := \
 	$(LOVE_SRC)/modules/video/wrap_Video_mrb.cpp \
 	$(LOVE_SRC)/modules/video/theora/Video.cpp \
 	$(LOVE_SRC)/modules/video/theora/TheoraVideoStream.cpp \
-	$(LOVE_SRC)/modules/video/theora/OggDemuxer.cpp
+	$(LOVE_SRC)/modules/video/theora/OggDemuxer.cpp \
+	$(LOVE_SRC)/modules/physics/Body.cpp \
+	$(LOVE_SRC)/modules/physics/Shape.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/wrap_Physics_mrb.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/Physics.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/World.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/Body.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/Shape.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/CircleShape.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/PolygonShape.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/EdgeShape.cpp \
+	$(LOVE_SRC)/modules/physics/box2d/ChainShape.cpp
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 
@@ -279,8 +303,17 @@ install-hooks:
 	chmod +x "$$hooks/pre-commit"; \
 	echo "installed pre-commit hook -> $$hooks/pre-commit"
 
-$(BIN): $(SRCS) $(MRUBY_A) $(PHYSFS_A) $(LZ4_A) $(WUFF_A) $(GFX_A) $(GLSLANG_A) $(XXHASH_A)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRCS) $(PHYSFS_A) $(LZ4_A) $(WUFF_A) $(GFX_A) $(GLSLANG_A) $(XXHASH_A) $(LDFLAGS) $(LDLIBS) -o $@
+$(BIN): $(SRCS) $(MRUBY_A) $(PHYSFS_A) $(LZ4_A) $(WUFF_A) $(GFX_A) $(GLSLANG_A) $(XXHASH_A) $(BOX2D_A)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(SRCS) $(PHYSFS_A) $(LZ4_A) $(WUFF_A) $(GFX_A) $(GLSLANG_A) $(XXHASH_A) $(BOX2D_A) $(LDFLAGS) $(LDLIBS) -o $@
+
+# box2d objects keep their source subdir layout under $(OBJ_DIR)/box2d.
+# LÖVE patches Box2D's b2_settings to throw love::Exception, so -I$(LOVE_SRC).
+$(OBJ_DIR)/box2d/%.o: $(BOX2D_DIR)/%.cpp | $(OBJ_DIR)
+	@mkdir -p $(dir $@)
+	$(CXX) -std=$(CXXSTD) -O2 -I$(LOVE_SRC) -I$(LOVE_SRC)/libraries -I$(BOX2D_DIR) -c $< -o $@
+
+$(BOX2D_A): $(BOX2D_OBJS)
+	ar rcs $@ $(BOX2D_OBJS)
 
 $(OBJ_DIR)/xxhash.o: $(XXHASH_DIR)/xxhash.c | $(OBJ_DIR)
 	$(CC) -O2 -I$(XXHASH_DIR) -c $< -o $@

@@ -96,6 +96,8 @@ public:
 	 **/
 	void getFilterData(int *v);
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-userdata: arbitrary user data via a Lua Reference.
 	/**
 	 * This function stores an in-C reference to
 	 * arbitrary Lua data in the Shape object.
@@ -107,6 +109,7 @@ public:
 	 * data is set, nil is returned.
 	 **/
 	int getUserData(lua_State *L);
+#endif
 
 	/**
 	 * Sets the friction of the Shape.
@@ -152,20 +155,30 @@ public:
 
 	float getRadius() const;
 	int getChildCount() const;
-	int rayCast(lua_State *L) const;
-	int computeAABB(lua_State *L) const;
-	int computeMass(lua_State *L) const;
 
 	void setGroupIndex(int index);
 	int getGroupIndex() const;
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-shape-query: rayCast/computeAABB/computeMass/
+	// getBoundingBox/getMassData (protected b2 access, multi-return).
+	int rayCast(lua_State *L) const;
+	int computeAABB(lua_State *L) const;
+	int computeMass(lua_State *L) const;
+#endif
+
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-shape-filter: category/mask bit helpers (see wrapper).
 	int setCategory(lua_State *L);
 	int setMask(lua_State *L);
 	int getCategory(lua_State *L);
 	int getMask(lua_State *L);
 	uint16 getBits(lua_State *L);
 	int pushBits(lua_State *L, uint16 bits);
+#endif
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-shape-query: bounding box / mass data (see above).
 	/**
 	 * Gets the bounding box for this Shape.
 	 **/
@@ -176,6 +189,7 @@ public:
 	 * This operation may be expensive.
 	 **/
 	int getMassData(lua_State *L) const;
+#endif
 
 	void throwIfFixtureNotValid() const;
 	void throwIfShapeNotValid() const;

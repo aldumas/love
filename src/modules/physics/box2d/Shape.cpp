@@ -130,8 +130,11 @@ Shape::~Shape()
 		}
 	}
 
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-userdata: user data uses a Lua Reference.
 	if (ref)
 		delete ref;
+#endif
 }
 
 void Shape::destroy(bool implicit)
@@ -154,9 +157,11 @@ void Shape::destroy(bool implicit)
 	shape = nullptr;
 	body = nullptr;
 
-	// Remove userdata reference to avoid it sticking around after GC
+#ifndef LOVE_MRUBY
+	// TODO(mruby) #phys-userdata: remove userdata Reference to avoid GC leak.
 	if (ref)
 		ref->unref();
+#endif
 
 	// Box2D fixture destroyed. Release its reference to the love Shape.
 	release();
@@ -265,6 +270,10 @@ void Shape::getFilterData(int *v)
 	v[2] = (int) f.groupIndex;
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-shape-filter: the category/mask bit helpers take a Lua
+// vararg/table of 1..16 indices and push them back. Reimplemented in
+// wrap_Physics_mrb.cpp over the public get/setFilterData(int*) API.
 int Shape::setCategory(lua_State *L)
 {
 	throwIfFixtureNotValid();
@@ -282,6 +291,7 @@ int Shape::setMask(lua_State *L)
 	fixture->SetFilterData(f);
 	return 0;
 }
+#endif // LOVE_MRUBY (#phys-shape-filter, part 1)
 
 void Shape::setGroupIndex(int index)
 {
@@ -298,6 +308,8 @@ int Shape::getGroupIndex() const
 	return f.groupIndex;
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-shape-filter: category/mask bit getters (see wrapper).
 int Shape::getCategory(lua_State *L)
 {
 	throwIfFixtureNotValid();
@@ -354,7 +366,11 @@ int Shape::pushBits(lua_State *L, uint16 bits)
 	// Count number of set bits.
 	return (int)b.count();
 }
+#endif // LOVE_MRUBY (#phys-shape-filter)
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-userdata: arbitrary user data via a Lua Reference; needs an
+// mruby-side reference mechanism before it can be ported.
 int Shape::setUserData(lua_State *L)
 {
 	love::luax_assert_argc(L, 1, 1);
@@ -376,6 +392,7 @@ int Shape::getUserData(lua_State *L)
 
 	return 1;
 }
+#endif // LOVE_MRUBY (#phys-userdata)
 
 bool Shape::testPoint(float x, float y) const
 {
@@ -391,6 +408,10 @@ bool Shape::testPoint(float x, float y, float r, float px, float py) const
 	return shape->TestPoint(transform, Physics::scaleDown(point));
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-shape-query: rayCast/computeAABB/computeMass/getBoundingBox/
+// getMassData read the protected b2Shape/b2Fixture and push several Lua values.
+// Deferred to the shape-query slice (the wrapper isn't a friend of Shape).
 int Shape::rayCast(lua_State *L) const
 {
 	float p1x = Physics::scaleDown((float)luaL_checknumber(L, 1));
@@ -490,6 +511,7 @@ int Shape::getMassData(lua_State *L) const
 	lua_pushnumber(L, data.I);
 	return 4;
 }
+#endif // LOVE_MRUBY (#phys-shape-query)
 
 } // box2d
 } // physics

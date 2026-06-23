@@ -43,6 +43,9 @@ PolygonShape::~PolygonShape()
 {
 }
 
+#ifndef LOVE_MRUBY
+// TODO(mruby) #phys-shape-points: getPoints returns the transformed vertices as
+// a Lua multi-return; deferred (the wrapper can't reach the protected b2Shape).
 int PolygonShape::getPoints(lua_State *L)
 {
 	throwIfShapeNotValid();
@@ -57,6 +60,7 @@ int PolygonShape::getPoints(lua_State *L)
 	}
 	return count*2;
 }
+#endif // LOVE_MRUBY (#phys-shape-points)
 
 bool PolygonShape::validate() const
 {
