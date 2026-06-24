@@ -648,7 +648,9 @@ them changes when we swap.
       `mrbx_forgetstate` drops a closing VM's entries. This is the mruby analog
       of Lua's weak-valued userdata table.
 - [ ] CMake: build/link `libmruby.a` instead of `lovedep::Lua`; drop
-      `src/libraries/lua53` and the LuaJIT path.
+      `src/libraries/lua53` and the LuaJIT path. **Scoping plan:**
+      `testing/mruby/CMAKE_MIGRATION.md` (staged 0–5; recommended first step is a
+      CMake-driven harness `testing/mruby/CMakeLists.txt`).
 - [ ] FFI fast paths: re-implement the few wrappers that use LuaJIT FFI.
 - [x] Port the remaining `wrap_*.cpp` modules. All 21 LÖVE modules and every
       object type they expose are ported, including the low-level GPU `Buffer`
