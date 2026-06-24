@@ -614,6 +614,56 @@ static mrb_value w_get_stencil_mode(mrb_state *mrb, mrb_value self)
 	return out;
 }
 
+// set_stencil_state(action:, compare:, value:, read_mask:, write_mask:) -- the
+// low-level stencil API (set_stencil_mode is the convenience wrapper). No args
+// resets to the default (keep/always). action is "keep"/"replace"/"increment"/
+// "decrement"/"incrementwrap"/"decrementwrap"/"invert"; compare is a standard
+// compare mode. value defaults 0; the masks default to all-ones.
+static mrb_value w_set_stencil_state(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[5];
+	mrbx_get_kwargs(mrb, {"action", "compare", "value", "read_mask", "write_mask"}, 0, v);
+
+	if (mrb_undef_p(v[0]) || mrb_nil_p(v[0]))
+	{
+		mrbx_catchexcept(mrb, [&]() { instance()->setStencilState(); });
+		return mrb_nil_value();
+	}
+
+	StencilState s;
+	std::string actionstr = mrbx_checkstring(mrb, v[0]);
+	if (!getConstant(actionstr.c_str(), s.action))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid stencil draw action: %s", actionstr.c_str());
+	std::string comparestr = mrbx_checkstring(mrb, v[1]);
+	if (!getConstant(comparestr.c_str(), s.compare))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid compare mode: %s", comparestr.c_str());
+	s.value = mrbx_optint(mrb, v[2], 0);
+	s.readMask = (uint32) mrbx_optnumber(mrb, v[3], (double) 0xFFFFFFFFu);
+	s.writeMask = (uint32) mrbx_optnumber(mrb, v[4], (double) 0xFFFFFFFFu);
+
+	mrbx_catchexcept(mrb, [&]() { instance()->setStencilState(s); });
+	return mrb_nil_value();
+}
+
+// get_stencil_state -> Hash {action:, compare:, value:, read_mask:, write_mask:}.
+static mrb_value w_get_stencil_state(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	const StencilState &s = instance()->getStencilState();
+	const char *actionstr = nullptr;
+	getConstant(s.action, actionstr);
+	const char *comparestr = nullptr;
+	getConstant(s.compare, comparestr);
+	mrb_value out = mrb_hash_new(mrb);
+	hset(mrb, out, "action", mrbx_string(mrb, actionstr ? actionstr : ""));
+	hset(mrb, out, "compare", mrbx_string(mrb, comparestr ? comparestr : ""));
+	hset(mrb, out, "value", mrbx_integer(mrb, s.value));
+	hset(mrb, out, "read_mask", mrbx_number(mrb, (double) s.readMask));
+	hset(mrb, out, "write_mask", mrbx_number(mrb, (double) s.writeMask));
+	return out;
+}
+
 // set_depth_mode(compare:, write:) -- both omitted resets to always/no-write.
 static mrb_value w_set_depth_mode(mrb_state *mrb, mrb_value self)
 {
@@ -4284,6 +4334,8 @@ static const MrbReg functions[] =
 	{ "wireframe?",           w_is_wireframe,         MRB_ARGS_NONE() },
 	{ "set_stencil_mode",     w_set_stencil_mode,     MRB_ARGS_KEY(2, 0) },
 	{ "get_stencil_mode",     w_get_stencil_mode,     MRB_ARGS_NONE() },
+	{ "set_stencil_state",    w_set_stencil_state,    MRB_ARGS_KEY(5, 0) },
+	{ "get_stencil_state",    w_get_stencil_state,    MRB_ARGS_NONE() },
 	{ "set_depth_mode",       w_set_depth_mode,       MRB_ARGS_KEY(2, 0) },
 	{ "get_depth_mode",       w_get_depth_mode,       MRB_ARGS_NONE() },
 	{ "present",              w_present,              MRB_ARGS_NONE() },

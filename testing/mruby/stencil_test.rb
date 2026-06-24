@@ -1,7 +1,8 @@
 # Exercises the graphics stencil/depth render state on the real backend:
-#   Love::Graphics.set_stencil_mode / get_stencil_mode and
-#   set_depth_mode / get_depth_mode. Uses a canvas with a temporary stencil
-#   buffer (set_canvas(stencil: true)) to mask drawing.
+#   Love::Graphics.set_stencil_mode / get_stencil_mode, the low-level
+#   set_stencil_state / get_stencil_state, and set_depth_mode / get_depth_mode.
+#   Uses a canvas with a temporary stencil buffer (set_canvas(stencil: true)) to
+#   mask drawing.
 #
 #   ./love_mrb_harness stencil_test.rb
 
@@ -27,6 +28,16 @@ g.set_stencil_mode(mode: "test", value: 1)
 puts "  set test  -> #{g.get_stencil_mode.inspect}"
 g.set_stencil_mode
 puts "  reset     -> #{g.get_stencil_mode.inspect}"   # expect {mode:"off", value:0}
+
+puts
+puts "=== low-level stencil state ==="
+puts "  initial -> #{g.get_stencil_state.inspect}"
+g.set_stencil_state(action: "replace", compare: "always", value: 1)
+puts "  set replace/always/1 -> #{g.get_stencil_state.inspect}"
+g.set_stencil_state(action: "keep", compare: "equal", value: 1, read_mask: 0xFF, write_mask: 0x00)
+puts "  set keep/equal masks -> #{g.get_stencil_state.inspect}"
+g.set_stencil_state
+puts "  reset -> #{g.get_stencil_state.inspect}"   # expect keep/always, masks all-ones
 
 puts
 puts "=== depth mode state ==="

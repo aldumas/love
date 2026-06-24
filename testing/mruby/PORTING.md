@@ -485,8 +485,13 @@ them changes when we swap.
       temporary depth/stencil buffer) / `get_canvas`. Stencil/depth render state
       is exposed: `set_stencil_mode` (`mode:` "off"/"draw"/"test"/"custom",
       omitted resets to off; `value:` defaults 1) / `get_stencil_mode` (-> Hash
-      {mode:, value:}) and `set_depth_mode` (`compare:`, `write:`; both omitted
-      reset) / `get_depth_mode` (-> Hash {compare:, write:}). The `Love::SpriteBatch`
+      {mode:, value:}), the low-level `set_stencil_state` (`action:`/`compare:`/
+      `value:`/`read_mask:`/`write_mask:`; no args resets to keep/always) /
+      `get_stencil_state` (-> Hash; masks are Numbers since `0xFFFFFFFF` exceeds
+      this build's 31-bit boxed-int range), and `set_depth_mode` (`compare:`,
+      `write:`; both omitted reset) / `get_depth_mode` (-> Hash {compare:,
+      write:}; depth has no separate low-level state in LÖVE — set_depth_mode is
+      the whole API). The `Love::SpriteBatch`
       object type is exposed: `new_sprite_batch` (`texture:`, `size:` default
       1000, `usage:` "dynamic"/"static"/"stream") and the methods `add` /`set`
       (`quad:` optional + the standard transform; `add` returns the 1-based
@@ -571,13 +576,13 @@ them changes when we swap.
       each color applying to the strings after it. Built by `check_colored_string`
       in wrap_Graphics_mrb.cpp, faithful to `luax_checkcoloredstring`. Covered by
       `textbatch_test.rb`.
-      The remaining graphics gaps are all about texture *creation* / low-level
-      render state, not whole features: cube/volume textures and the
-      mipmap/dpiscale set_canvas slice variants aren't ported, nor the
-      explicit-depthstencil-texture set_canvas form or the low-level
-      set_stencil_state / set_depth_state. (The SpriteBatch array-texture layers +
-      attach_attribute, and the Mesh custom-vertex-format / attach_attribute /
-      explicit-index-buffer paths, are now ported — see those paragraphs.)
+      The remaining graphics gaps are all about texture *creation*, not whole
+      features: cube/volume textures and the mipmap/dpiscale/settings forms of
+      texture creation aren't ported, nor the slice/mipmap/explicit-
+      depthstencil-texture set_canvas variants. (The low-level stencil state,
+      the SpriteBatch array-texture layers + attach_attribute, and the Mesh
+      custom-vertex-format / attach_attribute / explicit-index-buffer paths are
+      now ported — see those paragraphs.)
 
       Name collision (font vs graphics): the love.font module and the graphics `Font`
       *type* both map to `Love::Font`. Resolved as for data/thread/joystick --
@@ -630,9 +635,8 @@ them changes when we swap.
       SpriteBatch layers + attach_attribute). What remains is graphics texture
       *creation* / low-level render-state surface, not whole features: cube/
       volume textures, the mipmap/dpiscale/settings forms of texture creation,
-      the slice/mipmap/explicit-depthstencil set_canvas variants, and the
-      low-level set_stencil_state / set_depth_state. No whole module or object
-      type is unported.
+      the slice/mipmap/explicit-depthstencil set_canvas variants. No whole
+      module or object type is unported.
 - [ ] Memory audit (do once the port is otherwise complete): sweep the mruby
       bindings for allocation/deallocation correctness. Two classes to look for:
       (1) **GC-arena hygiene** — high-iteration loops that create and discard heap
