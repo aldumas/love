@@ -449,15 +449,22 @@ them changes when we swap.
       `libxxhash.a`. The Ruby API (`active?`/`clear`/`set_color`/`rectangle`/
       `origin`/`present`/dimensions) now drives the real path — a rectangle goes
       through the default shader and the streaming vertex buffer. Object types
-      exposed so far: **Texture** — `new_image` (a 2D texture), `new_array_image`
-      (`layers:` an Array of ImageData, one per layer; the kind a SpriteBatch
-      needs for add_layer/set_layer), `new_volume_image` (`layers:` one ImageData
-      per depth slice -> a 3D volume texture), and `new_cube_image` (`faces:` an
-      Array of exactly 6 square ImageData -> a cube texture); all take an optional
-      `linear:`. The slice creators share one ImageData-array builder; the
-      mipmap/dpiscale/per-slice-table and from-single-atlas-image forms aren't
-      ported. Query getters: dimensions / `get_texture_type` ("2d"/"array"/
-      "cube"/"volume") / `get_layer_count` / `get_depth` (`mipmap:` 1-based) /
+      exposed so far: **Texture** — `new_image` (a 2D texture: `file:` a filename
+      String, an ImageData/CompressedImageData, or an Array of those = explicit
+      mip levels), `new_array_image` (`layers:` one entry per layer; the kind a
+      SpriteBatch needs for add_layer/set_layer), `new_volume_image` (`layers:`
+      one entry per depth slice, or `image:` a single ImageData sliced into depth
+      layers) -> a 3D volume texture, and `new_cube_image` (`faces:` 6 entries, or
+      `image:` a single ImageData split into 6 faces) -> a cube texture. Each
+      "entry" is a single image **or** an Array of mip-level images; all four take
+      the common settings `linear:`/`mipmaps:` (`true` builds a full mip chain,
+      generated from level 0 when only the base is given)/`dpi_scale:`, and
+      `new_image` also `format:`/`msaa:`. A shared image-data resolver handles the
+      filename/ImageData/CompressedImageData inputs (a compressed image
+      contributes its base slice). The dpiscale-from-`@2x`-filename autodetection
+      and the texture-view / viewformats / computeWrite settings aren't ported.
+      Query getters: dimensions / `get_texture_type` ("2d"/"array"/"cube"/
+      "volume") / `get_layer_count` / `get_depth` (`mipmap:` 1-based) /
       `get_mipmap_count` / `is_compressed` + `set_filter`/`get_filter`. **Quad**
       (`new_quad` + `get_viewport`/
       `set_viewport`), and **Font** (`new_font` + metrics: get_height/get_width/
@@ -589,15 +596,16 @@ them changes when we swap.
       each color applying to the strings after it. Built by `check_colored_string`
       in wrap_Graphics_mrb.cpp, faithful to `luax_checkcoloredstring`. Covered by
       `textbatch_test.rb`.
-      The only remaining graphics gap is a couple of narrow texture-creation
-      input forms, not whole features: the mipmap/dpiscale/per-slice-table and
-      from-single-atlas-image forms of *texture creation* aren't ported (the
-      simple ImageData-array forms — 2d/array/volume/cube — are, as are layered
-      and mipmapped render-target canvases). (The slice/mipmap/explicit-
-      depthstencil set_canvas variants, the low-level stencil state, the
-      SpriteBatch array-texture layers + attach_attribute, and the Mesh
-      custom-vertex-format / attach_attribute / explicit-index-buffer paths are
-      all now ported — see those paragraphs.)
+      The graphics module is now feature-complete for the practical surface: the
+      texture creators take explicit mip-level arrays, the `mipmaps:`/`dpi_scale:`/
+      `format:`/`msaa:` settings, and the single-image cube/volume splits; layered
+      and mipmapped render-target canvases plus the slice/mipmap/depthstencil
+      set_canvas variants, the low-level stencil state, the SpriteBatch
+      array-texture layers + attach_attribute, and the Mesh custom-vertex-format /
+      attach_attribute / explicit-index-buffer paths are all ported (see those
+      paragraphs). The only deliberately-unported bits are obscure texture knobs:
+      the `@2x`-filename dpiscale autodetection, texture views
+      (`newTextureView`), and the `viewformats`/`computewrite` creation settings.
 
       Name collision (font vs graphics): the love.font module and the graphics `Font`
       *type* both map to `Love::Font`. Resolved as for data/thread/joystick --
@@ -642,17 +650,18 @@ them changes when we swap.
 - [ ] CMake: build/link `libmruby.a` instead of `lovedep::Lua`; drop
       `src/libraries/lua53` and the LuaJIT path.
 - [ ] FFI fast paths: re-implement the few wrappers that use LuaJIT FFI.
-- [~] Port the remaining `wrap_*.cpp` modules. All 21 LÖVE modules and every
-      object type they expose are now ported, including the low-level GPU
-      `Buffer` (`GraphicsBuffer`) and `GraphicsReadback` types. Every per-type
-      *method* feature noted in §A/§B is now ported too (ParticleSystem#clone,
-      colored-string text, Mesh custom formats / attributes / index buffers,
-      SpriteBatch layers + attach_attribute, low-level stencil state, the
-      2d/array/volume/cube texture creators, layered/mipmapped render-target
-      canvases, and the slice/mipmap/depthstencil set_canvas variants). What
-      remains is only a couple of alternate texture-creation input forms
-      (mipmap/dpiscale/per-slice-table tables, from-single-atlas-image). No whole
-      module, object type, or feature is unported.
+- [x] Port the remaining `wrap_*.cpp` modules. All 21 LÖVE modules and every
+      object type they expose are ported, including the low-level GPU `Buffer`
+      (`GraphicsBuffer`) and `GraphicsReadback` types. Every per-type *method*
+      feature noted in §A/§B is ported too (ParticleSystem#clone, colored-string
+      text, Mesh custom formats / attributes / index buffers, SpriteBatch layers +
+      attach_attribute, low-level stencil state, the 2d/array/volume/cube texture
+      creators with mip-array/`mipmaps:`/`dpi_scale:`/`format:` inputs and the
+      single-image cube/volume splits, layered/mipmapped render-target canvases,
+      and the slice/mipmap/depthstencil set_canvas variants). No whole module,
+      object type, or feature is unported; the only deliberate omissions are a few
+      obscure texture knobs (the `@2x`-filename dpiscale autodetection, texture
+      views, the `viewformats`/`computewrite` settings) — see the graphics §B note.
 - [ ] Memory audit (do once the port is otherwise complete): sweep the mruby
       bindings for allocation/deallocation correctness. Two classes to look for:
       (1) **GC-arena hygiene** — high-iteration loops that create and discard heap

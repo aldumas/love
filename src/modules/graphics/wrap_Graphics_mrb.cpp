@@ -878,136 +878,279 @@ static const MrbReg quadFunctions[] =
 // Love::Graphics object-creating + drawing functions
 // =========================================================================
 
-// new_image(file:, linear: false). `file:` is a filename String, or an
-// ImageData / CompressedImageData object. Returns a Love::Texture.
+// Resolve a single image source (a filename String, an ImageData, or a
+// CompressedImageData) to an ImageDataBase* for placement into a Slices. The
+// owning object gets one reference recorded in `keep` (released by the caller
+// after the texture is built); for a CompressedImageData its base slice is used,
+// mirroring the array-form handling in wrap_Graphics.cpp. Raises on a missing
+// module / unreadable file.
+static image::ImageDataBase *resolve_slice_data(mrb_state *mrb, mrb_value v,
+	std::vector<love::Object *> &keep)
+{
+	if (mrbx_istype<image::ImageData>(mrb, v))
+	{
+		auto *d = mrbx_checktype<image::ImageData>(mrb, v);
+		d->retain();
+		keep.push_back(d);
+		return d;
+	}
+	if (mrbx_istype<image::CompressedImageData>(mrb, v))
+	{
+		auto *d = mrbx_checktype<image::CompressedImageData>(mrb, v);
+		d->retain();
+		keep.push_back(d);
+		return d->getSlice(0, 0);
+	}
+
+	std::string filename = mrbx_checkstring(mrb, v);
+	auto imagemodule = Module::getInstance<image::Image>(Module::M_IMAGE);
+	if (imagemodule == nullptr)
+		mrb_raise(mrb, E_RUNTIME_ERROR, "Cannot load images without the love.image module.");
+	auto fs = Module::getInstance<filesystem::Filesystem>(Module::M_FILESYSTEM);
+	if (fs == nullptr)
+		mrb_raise(mrb, E_RUNTIME_ERROR, "Cannot load an image from a filename without the love.filesystem module.");
+
+	Data *fdata = nullptr;
+	mrbx_catchexcept(mrb, [&]() { fdata = fs->read(filename.c_str()); });
+	image::ImageDataBase *result = nullptr;
+	mrbx_catchexcept(mrb, [&]() {
+		if (imagemodule->isCompressed(fdata))
+		{
+			auto *cd = imagemodule->newCompressedData(fdata); // refcount 1
+			keep.push_back(cd);
+			result = cd->getSlice(0, 0);
+		}
+		else
+		{
+			auto *id = imagemodule->newImageData(fdata); // refcount 1
+			keep.push_back(id);
+			result = id;
+		}
+	});
+	if (fdata != nullptr)
+		fdata->release();
+	return result;
+}
+
+// Resolve a single image source strictly to an ImageData (raises if it is a
+// compressed image) -- needed for the single-image cube/volume split.
+static image::ImageData *resolve_image_data(mrb_state *mrb, mrb_value v,
+	std::vector<love::Object *> &keep)
+{
+	image::ImageDataBase *base = resolve_slice_data(mrb, v, keep);
+	auto *id = dynamic_cast<image::ImageData *>(base);
+	if (id == nullptr)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "This form needs an uncompressed ImageData.");
+	return id;
+}
+
+// Apply the optional common texture-creation settings (all may be undef/nil).
+static void apply_texture_settings(mrb_state *mrb, Texture::Settings &s,
+	mrb_value linearv, mrb_value mipmapsv, mrb_value dpiv, mrb_value formatv, mrb_value msaav)
+{
+	s.linear = mrbx_optboolean(mrb, linearv, false);
+	if (mrbx_optboolean(mrb, mipmapsv, false))
+		s.mipmaps = Texture::MIPMAPS_MANUAL;
+	if (!mrb_undef_p(dpiv) && !mrb_nil_p(dpiv))
+		s.dpiScale = (float) mrbx_checkfloat(mrb, dpiv);
+	if (!mrb_undef_p(formatv) && !mrb_nil_p(formatv))
+	{
+		std::string fmt = mrbx_checkstring(mrb, formatv);
+		if (!love::getConstant(fmt.c_str(), s.format))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid pixel format: %s", fmt.c_str());
+	}
+	if (!mrb_undef_p(msaav) && !mrb_nil_p(msaav))
+		s.msaa = mrbx_checkint(mrb, msaav);
+}
+
+// Place one "entry" into slices at `slice`: a single image source (-> mip 0) or
+// an Array of image sources (-> successive mip levels 0..n). Returns the number
+// of mip levels placed.
+static int populate_slice_entry(mrb_state *mrb, Texture::Slices &slices, int slice,
+	mrb_value entry, std::vector<love::Object *> &keep)
+{
+	if (mrb_array_p(entry))
+	{
+		mrb_int m = RARRAY_LEN(entry);
+		for (mrb_int j = 0; j < m; j++)
+			slices.set(slice, (int) j, resolve_slice_data(mrb, mrb_ary_ref(mrb, entry, j), keep));
+		return (int) m;
+	}
+	slices.set(slice, 0, resolve_slice_data(mrb, entry, keep));
+	return 1;
+}
+
+// Build + push a texture from settings and slices, then release every reference
+// gathered in `keep`. If more than one mip level was supplied but no mipmaps
+// mode was set, default to MANUAL (use the provided levels).
+static mrb_value finish_new_texture(mrb_state *mrb, Texture::Settings &settings,
+	Texture::Slices &slices, std::vector<love::Object *> &keep, int maxmips)
+{
+	if (maxmips > 1 && settings.mipmaps == Texture::MIPMAPS_NONE)
+		settings.mipmaps = Texture::MIPMAPS_MANUAL;
+	Texture *tex = nullptr;
+	bool err = mrbx_catchexcept(mrb, [&]() { tex = instance()->newTexture(settings, &slices); });
+	for (love::Object *o : keep)
+		o->release();
+	if (err)
+		return mrb_nil_value();
+	mrb_value r = mrbx_pushtype(mrb, tex);
+	tex->release();
+	return r;
+}
+
+// new_image(file:, linear:, mipmaps:, dpi_scale:, format:, msaa:). `file:` is a
+// filename String, an ImageData / CompressedImageData, or an Array of those (one
+// per mip level). Returns a 2D Love::Texture. `mipmaps: true` builds a full mip
+// chain (generated from level 0 when only the base is supplied).
 static mrb_value w_new_image(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	mrb_value v[2];
-	mrbx_get_kwargs(mrb, {"file", "linear"}, 1, v);
-
-	// Resolve `file:` to image data we hold a reference to (release before return).
-	image::ImageData *idata = nullptr;
-	image::CompressedImageData *cdata = nullptr;
-
-	if (mrbx_istype<image::ImageData>(mrb, v[0]))
-	{
-		idata = mrbx_checktype<image::ImageData>(mrb, v[0]);
-		idata->retain();
-	}
-	else if (mrbx_istype<image::CompressedImageData>(mrb, v[0]))
-	{
-		cdata = mrbx_checktype<image::CompressedImageData>(mrb, v[0]);
-		cdata->retain();
-	}
-	else
-	{
-		std::string filename = mrbx_checkstring(mrb, v[0]);
-		auto imagemodule = Module::getInstance<image::Image>(Module::M_IMAGE);
-		if (imagemodule == nullptr)
-			mrb_raise(mrb, E_RUNTIME_ERROR, "Cannot load images without the love.image module.");
-		auto fs = Module::getInstance<filesystem::Filesystem>(Module::M_FILESYSTEM);
-		if (fs == nullptr)
-			mrb_raise(mrb, E_RUNTIME_ERROR, "Cannot load an image from a filename without the love.filesystem module.");
-
-		Data *fdata = nullptr;
-		if (mrbx_catchexcept(mrb, [&]() { fdata = fs->read(filename.c_str()); }))
-			return mrb_nil_value();
-		bool err = mrbx_catchexcept(mrb, [&]() {
-			if (imagemodule->isCompressed(fdata))
-				cdata = imagemodule->newCompressedData(fdata);
-			else
-				idata = imagemodule->newImageData(fdata);
-		});
-		fdata->release();
-		if (err)
-			return mrb_nil_value();
-	}
+	mrb_value v[6];
+	mrbx_get_kwargs(mrb, {"file", "linear", "mipmaps", "dpi_scale", "format", "msaa"}, 1, v);
 
 	Texture::Settings settings;
 	settings.type = TEXTURE_2D;
-	settings.linear = mrbx_optboolean(mrb, v[1], false);
+	apply_texture_settings(mrb, settings, v[1], v[2], v[3], v[4], v[5]);
 
+	std::vector<love::Object *> keep;
 	Texture::Slices slices(TEXTURE_2D);
-	if (idata != nullptr)
-		slices.set(0, 0, idata);
-	else
-		slices.add(cdata, 0, 0, false, false);
-
-	Texture *tex = nullptr;
-	bool err = mrbx_catchexcept(mrb, [&]() { tex = instance()->newTexture(settings, &slices); });
-	if (idata != nullptr) idata->release();
-	if (cdata != nullptr) cdata->release();
-	if (err)
-		return mrb_nil_value();
-
-	mrb_value r = mrbx_pushtype(mrb, tex);
-	tex->release();
-	return r;
+	int maxmips = populate_slice_entry(mrb, slices, 0, v[0], keep);
+	return finish_new_texture(mrb, settings, slices, keep, maxmips);
 }
 
-// Shared builder for the ImageData-slice texture creators (array / volume /
-// cube). `arr` is an Array of ImageData (one per layer / depth slice / cube
-// face, all at mip 0); `linearv` the optional linear: flag. The engine
-// validates type-specific constraints (e.g. cube faces square) when the texture
-// is built. Mirrors the simple ImageData-array forms of newArrayImage /
-// newVolumeImage / newCubeImage.
-static mrb_value new_sliced_texture(mrb_state *mrb, mrb_value arr, mrb_value linearv,
-	TextureType type, const char *what)
+// Shared body for new_array_image / new_volume_image: an Array `layers:` of one
+// entry per layer/depth-slice (each a single image or an Array of mip levels).
+static mrb_value new_layered_image(mrb_state *mrb, TextureType type)
 {
-	if (!mrb_array_p(arr))
-		mrb_raisef(mrb, E_ARGUMENT_ERROR, "%s: must be an Array of ImageData.", what);
-	mrb_int n = RARRAY_LEN(arr);
+	mrb_value v[4];
+	mrbx_get_kwargs(mrb, {"layers", "linear", "mipmaps", "dpi_scale"}, 1, v);
+	if (!mrb_array_p(v[0]))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "layers: must be an Array (one entry per layer).");
+	mrb_int n = RARRAY_LEN(v[0]);
 	if (n < 1)
-		mrb_raisef(mrb, E_ARGUMENT_ERROR, "%s: needs at least one ImageData.", what);
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "layers: needs at least one layer.");
 
 	Texture::Settings settings;
 	settings.type = type;
-	settings.linear = mrbx_optboolean(mrb, linearv, false);
+	apply_texture_settings(mrb, settings, v[1], v[2], v[3], mrb_undef_value(), mrb_undef_value());
 
+	std::vector<love::Object *> keep;
 	Texture::Slices slices(type);
+	int maxmips = 0;
 	for (mrb_int i = 0; i < n; i++)
-		slices.set((int) i, 0, mrbx_checktype<image::ImageData>(mrb, mrb_ary_ref(mrb, arr, i)));
-
-	Texture *tex = nullptr;
-	if (mrbx_catchexcept(mrb, [&]() { tex = instance()->newTexture(settings, &slices); }))
-		return mrb_nil_value();
-	mrb_value r = mrbx_pushtype(mrb, tex);
-	tex->release();
-	return r;
+		maxmips = std::max(maxmips, populate_slice_entry(mrb, slices, (int) i, mrb_ary_ref(mrb, v[0], i), keep));
+	return finish_new_texture(mrb, settings, slices, keep, maxmips);
 }
 
-// new_array_image(layers:, linear:) -- a 2D **array** Texture from an Array of
-// ImageData (one per layer). An array texture is what a SpriteBatch needs for
+// new_array_image(layers:, linear:, mipmaps:, dpi_scale:) -- a 2D **array**
+// Texture (one layer per `layers:` entry). What a SpriteBatch needs for
 // add_layer/set_layer.
 static mrb_value w_new_array_image(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	mrb_value v[2];
-	mrbx_get_kwargs(mrb, {"layers", "linear"}, 1, v);
-	return new_sliced_texture(mrb, v[0], v[1], TEXTURE_2D_ARRAY, "layers");
+	return new_layered_image(mrb, TEXTURE_2D_ARRAY);
 }
 
-// new_volume_image(layers:, linear:) -- a 3D **volume** Texture from an Array of
-// ImageData (one per depth slice).
+// new_volume_image(layers:, image:, linear:, mipmaps:, dpi_scale:) -- a 3D
+// **volume** Texture: `layers:` (one depth slice per entry, each a single image
+// or an Array of mip levels) or `image:` (a single ImageData sliced into depth
+// layers via the image module).
 static mrb_value w_new_volume_image(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	mrb_value v[2];
-	mrbx_get_kwargs(mrb, {"layers", "linear"}, 1, v);
-	return new_sliced_texture(mrb, v[0], v[1], TEXTURE_VOLUME, "layers");
+	mrb_value v[5];
+	mrbx_get_kwargs(mrb, {"layers", "image", "linear", "mipmaps", "dpi_scale"}, 0, v);
+
+	Texture::Settings settings;
+	settings.type = TEXTURE_VOLUME;
+	apply_texture_settings(mrb, settings, v[2], v[3], v[4], mrb_undef_value(), mrb_undef_value());
+
+	std::vector<love::Object *> keep;
+	Texture::Slices slices(TEXTURE_VOLUME);
+	int maxmips = 1;
+
+	if (!mrb_undef_p(v[1]) && !mrb_nil_p(v[1]))
+	{
+		// Single image split into depth layers.
+		image::ImageData *src = resolve_image_data(mrb, v[1], keep);
+		auto imagemodule = Module::getInstance<image::Image>(Module::M_IMAGE);
+		std::vector<StrongRef<image::ImageData>> layers;
+		if (mrbx_catchexcept(mrb, [&]() { layers = imagemodule->newVolumeLayers(src); }))
+		{
+			for (love::Object *o : keep) o->release();
+			return mrb_nil_value();
+		}
+		for (int i = 0; i < (int) layers.size(); i++)
+		{
+			layers[i]->retain();
+			keep.push_back(layers[i].get());
+			slices.set(i, 0, layers[i].get());
+		}
+	}
+	else if (mrb_array_p(v[0]) && RARRAY_LEN(v[0]) >= 1)
+	{
+		mrb_int n = RARRAY_LEN(v[0]);
+		for (mrb_int i = 0; i < n; i++)
+			maxmips = std::max(maxmips, populate_slice_entry(mrb, slices, (int) i, mrb_ary_ref(mrb, v[0], i), keep));
+	}
+	else
+	{
+		for (love::Object *o : keep) o->release();
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "new_volume_image needs layers: (an Array) or image: (a single ImageData).");
+	}
+
+	return finish_new_texture(mrb, settings, slices, keep, maxmips);
 }
 
-// new_cube_image(faces:, linear:) -- a **cube** Texture from an Array of exactly
-// 6 square ImageData (one per face: +x, -x, +y, -y, +z, -z).
+// new_cube_image(faces:, image:, linear:, mipmaps:, dpi_scale:) -- a **cube**
+// Texture: `faces:` (an Array of exactly 6 entries, each a square image or an
+// Array of mip levels) or `image:` (a single ImageData sliced into 6 faces via
+// the image module).
 static mrb_value w_new_cube_image(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	mrb_value v[2];
-	mrbx_get_kwargs(mrb, {"faces", "linear"}, 1, v);
-	if (mrb_array_p(v[0]) && RARRAY_LEN(v[0]) != 6)
-		mrb_raise(mrb, E_ARGUMENT_ERROR, "faces: must be an Array of exactly 6 square ImageData.");
-	return new_sliced_texture(mrb, v[0], v[1], TEXTURE_CUBE, "faces");
+	mrb_value v[5];
+	mrbx_get_kwargs(mrb, {"faces", "image", "linear", "mipmaps", "dpi_scale"}, 0, v);
+
+	Texture::Settings settings;
+	settings.type = TEXTURE_CUBE;
+	apply_texture_settings(mrb, settings, v[2], v[3], v[4], mrb_undef_value(), mrb_undef_value());
+
+	std::vector<love::Object *> keep;
+	Texture::Slices slices(TEXTURE_CUBE);
+	int maxmips = 1;
+
+	if (!mrb_undef_p(v[1]) && !mrb_nil_p(v[1]))
+	{
+		// Single image split into 6 faces.
+		image::ImageData *src = resolve_image_data(mrb, v[1], keep);
+		auto imagemodule = Module::getInstance<image::Image>(Module::M_IMAGE);
+		std::vector<StrongRef<image::ImageData>> faces;
+		if (mrbx_catchexcept(mrb, [&]() { faces = imagemodule->newCubeFaces(src); }))
+		{
+			for (love::Object *o : keep) o->release();
+			return mrb_nil_value();
+		}
+		for (int i = 0; i < (int) faces.size(); i++)
+		{
+			faces[i]->retain();
+			keep.push_back(faces[i].get());
+			slices.set(i, 0, faces[i].get());
+		}
+	}
+	else if (mrb_array_p(v[0]) && RARRAY_LEN(v[0]) == 6)
+	{
+		for (mrb_int i = 0; i < 6; i++)
+			maxmips = std::max(maxmips, populate_slice_entry(mrb, slices, (int) i, mrb_ary_ref(mrb, v[0], i), keep));
+	}
+	else
+	{
+		for (love::Object *o : keep) o->release();
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "new_cube_image needs faces: (6 entries) or image: (a single ImageData).");
+	}
+
+	return finish_new_texture(mrb, settings, slices, keep, maxmips);
 }
 
 // new_quad(x:, y:, width:, height:, sw:, sh:) or new_quad(x:, y:, width:,
@@ -4478,10 +4621,10 @@ static const MrbReg functions[] =
 	{ "get_width",            w_get_width,            MRB_ARGS_NONE() },
 	{ "get_height",           w_get_height,           MRB_ARGS_NONE() },
 	{ "get_dimensions",       w_get_dimensions,       MRB_ARGS_NONE() },
-	{ "new_image",            w_new_image,            MRB_ARGS_KEY(2, 0) },
-	{ "new_array_image",      w_new_array_image,      MRB_ARGS_KEY(2, 0) },
-	{ "new_volume_image",     w_new_volume_image,     MRB_ARGS_KEY(2, 0) },
-	{ "new_cube_image",       w_new_cube_image,       MRB_ARGS_KEY(2, 0) },
+	{ "new_image",            w_new_image,            MRB_ARGS_KEY(6, 0) },
+	{ "new_array_image",      w_new_array_image,      MRB_ARGS_KEY(4, 0) },
+	{ "new_volume_image",     w_new_volume_image,     MRB_ARGS_KEY(5, 0) },
+	{ "new_cube_image",       w_new_cube_image,       MRB_ARGS_KEY(5, 0) },
 	{ "new_quad",             w_new_quad,             MRB_ARGS_KEY(7, 0) },
 	{ "draw",                 w_draw,                 MRB_ARGS_KEY(11, 0) },
 	{ "new_font",             w_new_font,             MRB_ARGS_KEY(2, 0) },

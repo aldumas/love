@@ -272,7 +272,9 @@ narrative overview.
    variants (sync returns ByteData/ImageData; async returns a pollable
    GraphicsReadback),
    plus
-   `new_image` / `new_array_image` / `new_volume_image` / `new_cube_image` /
+   `new_image` / `new_array_image` / `new_volume_image` / `new_cube_image`
+   (with explicit mip-level arrays, `mipmaps:`/`dpi_scale:`/`format:` settings,
+   and single-image cube/volume splits) /
    `new_quad` / `draw`, `new_font` / `set_font` / `get_font` /
    `print` / `printf`, and the `Love::Texture`, `Love::Quad`, and `Love::Font`
    object types (Texture is-a Drawable, with dimensions + `get_texture_type` /

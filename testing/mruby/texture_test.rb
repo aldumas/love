@@ -1,7 +1,8 @@
 # Exercises the graphics texture-creation family on the real backend:
 #   Love::Graphics.new_image / new_array_image / new_volume_image /
-#   new_cube_image and the Texture query getters (get_texture_type / get_depth /
-#   get_layer_count / get_mipmap_count).
+#   new_cube_image (incl. mipmaps:, explicit mip-level arrays, and the
+#   single-image cube/volume split) and the Texture query getters
+#   (get_texture_type / get_depth / get_layer_count / get_mipmap_count).
 #
 #   ./love_mrb_harness texture_test.rb
 
@@ -61,6 +62,24 @@ begin
 rescue => e
   puts "  2-face cube raises -> #{e.class}"
 end
+
+puts
+puts "=== mipmaps + settings ==="
+mip = g.new_image(file: solid.call(1.0, 1.0, 1.0, 64), mipmaps: true)
+puts "  mipmaps:true mipmap_count -> #{mip.get_mipmap_count}"   # > 1 (full chain)
+# Explicit mip levels: file: an Array of successively halved ImageData.
+explicit = g.new_image(file: [solid.call(1, 0, 0, 16), solid.call(0, 1, 0, 8), solid.call(0, 0, 1, 4)])
+puts "  explicit mip levels -> mipmap_count #{explicit.get_mipmap_count}, dims #{explicit.get_dimensions.inspect}"
+
+puts
+puts "=== cube / volume from a single image ==="
+# A 1x6 vertical strip -> 6 cube faces (each 1x1... use a real square strip).
+strip = Love::Image.new_image_data(width: 16, height: 96, format: "rgba8")  # 6 stacked 16x16 faces
+strip.map_pixel(width: 16, height: 96) { |_x, y, _r, _g, _b, _a| f = y / 16; [f / 5.0, 1.0 - f / 5.0, 0.5, 1.0] }
+cube2 = g.new_cube_image(image: strip)
+puts "  cube from image -> #{cube2.get_texture_type.inspect}, dims #{cube2.get_dimensions.inspect}"
+vol2 = g.new_volume_image(image: strip)
+puts "  volume from image -> #{vol2.get_texture_type.inspect}, depth #{vol2.get_depth}"
 
 puts
 puts "=== draw the array texture's layer 0 via a sprite batch ==="
