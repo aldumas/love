@@ -535,8 +535,13 @@ them changes when we swap.
       **With this every graphics object type is exposed.**
       `ParticleSystem#clone` is ported — `clone()` then `mrbx_pushtype`, mirroring
       wrap_ParticleSystem.cpp; the copy carries over the emitter config + `active`
-      state but starts with no live particles. Covered by `particle_test.rb`. Text is
-      a plain String (the colored-string-segments form isn't ported);
+      state but starts with no live particles. Covered by `particle_test.rb`. Text
+      (`print`/`printf`, `new_text_batch`, and TextBatch `set`/`setf`/`add`/`addf`)
+      accepts either a plain String or the **colored-string-segments** form — a Ruby
+      Array alternating color arrays (`[r,g,b]` or `[r,g,b,a]`, 0..1) with Strings,
+      each color applying to the strings after it. Built by `check_colored_string`
+      in wrap_Graphics_mrb.cpp, faithful to `luax_checkcoloredstring`. Covered by
+      `textbatch_test.rb`.
       SpriteBatch's add_layer/set_layer (array textures) and Mesh
       attach_attribute (binding a Buffer as a custom vertex attribute) aren't
       ported — Buffer itself now is, but the Mesh-side custom-vertex-format and
@@ -592,7 +597,7 @@ them changes when we swap.
       `Buffer` (`GraphicsBuffer`) and `GraphicsReadback` types. What remains is
       a handful of per-type *features*, each already noted at its module in §A/§B
       (e.g. Mesh custom vertex formats / attach_attribute / explicit index
-      buffers, SpriteBatch array-texture layers, colored-string text segments).
+      buffers, SpriteBatch array-texture layers).
       No whole module or object type is unported.
 - [ ] Memory audit (do once the port is otherwise complete): sweep the mruby
       bindings for allocation/deallocation correctness. Two classes to look for:

@@ -1110,6 +1110,43 @@ static mrb_value w_get_font(mrb_state *mrb, mrb_value self)
 	return mrbx_pushtype(mrb, font);
 }
 
+// Parses a `text:` argument into a list of coloured segments. Accepts either a
+// plain String (one white segment -- the common case) or, mirroring
+// love.graphics's coloured-string table, an Array alternating colour arrays
+// ([r,g,b] or [r,g,b,a], components in 0..1) and Strings: a colour applies to
+// the string segments that follow it, the default being opaque white. Used by
+// print/printf, new_text_batch, and TextBatch set/setf/add/addf. Faithful to
+// luax_checkcoloredstring in wrap_Font.cpp.
+static std::vector<love::font::ColoredString> check_colored_string(mrb_state *mrb, mrb_value v)
+{
+	std::vector<love::font::ColoredString> text;
+
+	if (mrb_array_p(v))
+	{
+		Colorf color(1, 1, 1, 1);
+		mrb_int n = RARRAY_LEN(v);
+		for (mrb_int i = 0; i < n; i++)
+		{
+			mrb_value e = mrb_ary_ref(mrb, v, i);
+			if (mrb_array_p(e))
+			{
+				color.r = mrbx_checkfloat(mrb, mrb_ary_ref(mrb, e, 0));
+				color.g = mrbx_checkfloat(mrb, mrb_ary_ref(mrb, e, 1));
+				color.b = mrbx_checkfloat(mrb, mrb_ary_ref(mrb, e, 2));
+				mrb_value a = mrb_ary_ref(mrb, e, 3);
+				color.a = mrb_nil_p(a) ? 1.0f : mrbx_checkfloat(mrb, a);
+			}
+			else
+				text.push_back({ mrbx_checkstring(mrb, e), color });
+		}
+		return text;
+	}
+
+	// Plain String (anything else, mrbx_checkstring rejects with a type error).
+	text.push_back({ mrbx_checkstring(mrb, v), Colorf(1, 1, 1, 1) });
+	return text;
+}
+
 // print(text:, x:, y:, r:, sx:, sy:, ox:, oy:, kx:, ky:, font:) -- draws text
 // with the current (or given) font in the current color.
 static mrb_value w_print(mrb_state *mrb, mrb_value self)
@@ -1119,8 +1156,7 @@ static mrb_value w_print(mrb_state *mrb, mrb_value self)
 	mrbx_get_kwargs(mrb, {"text", "x", "y", "r", "sx", "sy", "ox", "oy",
 		"kx", "ky", "font"}, 1, v);
 
-	std::vector<love::font::ColoredString> text;
-	text.push_back({ mrbx_checkstring(mrb, v[0]), Colorf(1, 1, 1, 1) });
+	std::vector<love::font::ColoredString> text = check_colored_string(mrb, v[0]);
 
 	float x  = mrbx_optfloat(mrb, v[1], 0.0f);
 	float y  = mrbx_optfloat(mrb, v[2], 0.0f);
@@ -1153,8 +1189,7 @@ static mrb_value w_printf(mrb_state *mrb, mrb_value self)
 	mrbx_get_kwargs(mrb, {"text", "x", "y", "limit", "align", "r", "sx", "sy",
 		"ox", "oy", "kx", "ky", "font"}, 4, v);
 
-	std::vector<love::font::ColoredString> text;
-	text.push_back({ mrbx_checkstring(mrb, v[0]), Colorf(1, 1, 1, 1) });
+	std::vector<love::font::ColoredString> text = check_colored_string(mrb, v[0]);
 
 	float x = mrbx_checkfloat(mrb, v[1]);
 	float y = mrbx_checkfloat(mrb, v[2]);
@@ -1673,16 +1708,9 @@ static mrb_value w_new_sprite_batch(mrb_state *mrb, mrb_value self)
 
 // =========================================================================
 // Love::TextBatch  (pre-laid-out text drawn through a font's glyph atlas).
-// Text is a plain String here (the colored-string-segments table form is not
-// ported); align names come from the Font enum, as in print/printf.
+// `text:` is a plain String or the colored-string-segments Array form (see
+// check_colored_string); align names come from the Font enum, as in print/printf.
 // =========================================================================
-
-static std::vector<love::font::ColoredString> plain_text(mrb_state *mrb, mrb_value v)
-{
-	std::vector<love::font::ColoredString> text;
-	text.push_back({ mrbx_checkstring(mrb, v), Colorf(1, 1, 1, 1) });
-	return text;
-}
 
 static Font::AlignMode check_align(mrb_state *mrb, mrb_value v)
 {
@@ -1698,7 +1726,7 @@ static mrb_value w_tb_set(mrb_state *mrb, mrb_value self)
 	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
 	mrb_value v[1];
 	mrbx_get_kwargs(mrb, {"text"}, 1, v);
-	auto text = plain_text(mrb, v[0]);
+	auto text = check_colored_string(mrb, v[0]);
 	mrbx_catchexcept(mrb, [&]() { t->set(text); });
 	return mrb_nil_value();
 }
@@ -1708,7 +1736,7 @@ static mrb_value w_tb_setf(mrb_state *mrb, mrb_value self)
 	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
 	mrb_value v[3];
 	mrbx_get_kwargs(mrb, {"text", "wrap", "align"}, 3, v);
-	auto text = plain_text(mrb, v[0]);
+	auto text = check_colored_string(mrb, v[0]);
 	float wrap = mrbx_checkfloat(mrb, v[1]);
 	Font::AlignMode align = check_align(mrb, v[2]);
 	mrbx_catchexcept(mrb, [&]() { t->set(text, wrap, align); });
@@ -1721,7 +1749,7 @@ static mrb_value w_tb_add(mrb_state *mrb, mrb_value self)
 	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
 	mrb_value v[10];
 	mrbx_get_kwargs(mrb, {"text", "x", "y", "r", "sx", "sy", "ox", "oy", "kx", "ky"}, 1, v);
-	auto text = plain_text(mrb, v[0]);
+	auto text = check_colored_string(mrb, v[0]);
 	Matrix4 m = standard_transform(mrb, v, 1);
 	int index = 0;
 	mrbx_catchexcept(mrb, [&]() { index = t->add(text, m); });
@@ -1734,7 +1762,7 @@ static mrb_value w_tb_addf(mrb_state *mrb, mrb_value self)
 	TextBatch *t = mrbx_checktype<TextBatch>(mrb, self);
 	mrb_value v[12];
 	mrbx_get_kwargs(mrb, {"text", "wrap", "align", "x", "y", "r", "sx", "sy", "ox", "oy", "kx", "ky"}, 3, v);
-	auto text = plain_text(mrb, v[0]);
+	auto text = check_colored_string(mrb, v[0]);
 	float wrap = mrbx_checkfloat(mrb, v[1]);
 	Font::AlignMode align = check_align(mrb, v[2]);
 	Matrix4 m = standard_transform(mrb, v, 3);
@@ -1813,7 +1841,8 @@ static const MrbReg textBatchFunctions[] =
 	{ nullptr, nullptr, 0 }
 };
 
-// new_text_batch(font:, text:) -- font required; text optional plain String.
+// new_text_batch(font:, text:) -- font required; text optional (a plain String
+// or the colored-string-segments Array form, see check_colored_string).
 static mrb_value w_new_text_batch(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
@@ -1829,7 +1858,7 @@ static mrb_value w_new_text_batch(mrb_state *mrb, mrb_value self)
 	}
 	else
 	{
-		auto text = plain_text(mrb, v[1]);
+		auto text = check_colored_string(mrb, v[1]);
 		if (mrbx_catchexcept(mrb, [&]() { t = instance()->newTextBatch(font, text); }))
 			return mrb_nil_value();
 	}
