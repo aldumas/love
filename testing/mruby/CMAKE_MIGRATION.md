@@ -32,6 +32,14 @@ authoritative recipe — the CMake build must reproduce its inputs:
 So the migration is **not** about new dependencies; it is about swapping the
 scripting layer (Lua→mruby) and the bindings (`wrap_*.cpp`→`wrap_*_mrb.cpp`).
 
+## Status
+- **Stage 0 (de-risk): DONE.** `testing/mruby/CMakeLists.txt` builds the harness
+  under CMake against a prebuilt `libmruby.a`; all `*.rb` tests behave identically
+  to the Makefile build (incl. the pre-existing `filesystem_mount_test.rb`
+  fixture failure, which fails the same way under both). Validates the mruby
+  CMake target, flags, archive ordering, and PIC/PIE handling.
+- Stages 1–5 (main `CMakeLists.txt`): not started.
+
 ## The CMake delta, staged
 
 ### Stage 0 — mruby as a CMake dependency (de-risk first)
