@@ -67,6 +67,16 @@ ps.update(dt: 0.1)
 puts "  get_count after update  -> #{ps.get_count}"
 
 puts
+puts "=== clone ==="
+cl = ps.clone
+puts "  clone -> #{cl.class}"
+puts "  clone active? (matches source) -> #{cl.active? == ps.active?}"
+puts "  clone get_count (fresh, no live particles) -> #{cl.get_count}"
+puts "  clone get_buffer_size (matches source) -> #{cl.get_buffer_size == ps.get_buffer_size}"
+puts "  clone get_emission_rate (matches source) -> #{cl.get_emission_rate == ps.get_emission_rate}"
+puts "  clone is a distinct object -> #{!cl.equal?(ps)}"
+
+puts
 puts "=== simulate + draw ==="
 g.set_background_color(r: 0.03, g: 0.03, b: 0.06)
 g.set_blend_mode(mode: "add")

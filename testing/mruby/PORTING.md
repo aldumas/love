@@ -533,7 +533,9 @@ them changes when we swap.
       the `_async` variants return a `Love::GraphicsReadback` (`complete?` /
       `error?` / `wait` / `update` / `get_buffer_data` / `get_image_data`).
       **With this every graphics object type is exposed.**
-      ParticleSystem#clone isn't ported (needs the object identity map). Text is
+      `ParticleSystem#clone` is ported — `clone()` then `mrbx_pushtype`, mirroring
+      wrap_ParticleSystem.cpp; the copy carries over the emitter config + `active`
+      state but starts with no live particles. Covered by `particle_test.rb`. Text is
       a plain String (the colored-string-segments form isn't ported);
       SpriteBatch's add_layer/set_layer (array textures) and Mesh
       attach_attribute (binding a Buffer as a custom vertex attribute) aren't
@@ -590,8 +592,8 @@ them changes when we swap.
       `Buffer` (`GraphicsBuffer`) and `GraphicsReadback` types. What remains is
       a handful of per-type *features*, each already noted at its module in §A/§B
       (e.g. Mesh custom vertex formats / attach_attribute / explicit index
-      buffers, SpriteBatch array-texture layers, colored-string text segments,
-      ParticleSystem#clone). No whole module or object type is unported.
+      buffers, SpriteBatch array-texture layers, colored-string text segments).
+      No whole module or object type is unported.
 - [ ] Memory audit (do once the port is otherwise complete): sweep the mruby
       bindings for allocation/deallocation correctness. Two classes to look for:
       (1) **GC-arena hygiene** — high-iteration loops that create and discard heap

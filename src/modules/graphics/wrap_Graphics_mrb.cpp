@@ -1841,11 +1841,23 @@ static mrb_value w_new_text_batch(mrb_state *mrb, mrb_value self)
 // =========================================================================
 // Love::ParticleSystem  (a CPU particle emitter). Faithful to
 // wrap_ParticleSystem.cpp; multi-value setters/getters use min/max (or
-// component) keyword args and Hash returns. clone is not ported (needs the
-// object identity map).
+// component) keyword args and Hash returns.
 // =========================================================================
 
 #define PS (mrbx_checktype<ParticleSystem>(mrb, self))
+
+// clone -- an identical copy of the emitter's configuration and emitting
+// state (the copy ctor carries over `active`), but with no live particles
+// (activeParticles starts at 0). Faithful to wrap_ParticleSystem.cpp.
+static mrb_value w_ps_clone(mrb_state *mrb, mrb_value self)
+{
+	ParticleSystem *clone = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { clone = PS->clone(); }))
+		return mrb_nil_value();
+	mrb_value res = mrbx_pushtype(mrb, clone);
+	clone->release();
+	return res;
+}
 
 static mrb_value w_ps_set_texture(mrb_state *mrb, mrb_value self)
 {
@@ -2414,6 +2426,7 @@ static const MrbReg particleSystemFunctions[] =
 	{ "stopped?",                    w_ps_is_stopped,                  MRB_ARGS_NONE() },
 	{ "empty?",                      w_ps_is_empty,                    MRB_ARGS_NONE() },
 	{ "full?",                       w_ps_is_full,                     MRB_ARGS_NONE() },
+	{ "clone",                       w_ps_clone,                       MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
 };
 
