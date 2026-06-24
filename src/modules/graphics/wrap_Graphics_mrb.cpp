@@ -864,6 +864,37 @@ static mrb_value w_new_image(mrb_state *mrb, mrb_value self)
 	return r;
 }
 
+// new_array_image(layers:, linear:) -- build a 2D **array** Texture from an
+// Array of ImageData (one per layer); the layer count is the Array length.
+// Mirrors love.graphics.newArrayImage (the ImageData-slice form). An array
+// texture is what a SpriteBatch needs for add_layer/set_layer.
+static mrb_value w_new_array_image(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"layers", "linear"}, 1, v);
+	if (!mrb_array_p(v[0]))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "layers: must be an Array of ImageData (one per layer).");
+	mrb_int n = RARRAY_LEN(v[0]);
+	if (n < 1)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "layers: needs at least one ImageData.");
+
+	Texture::Settings settings;
+	settings.type = TEXTURE_2D_ARRAY;
+	settings.linear = mrbx_optboolean(mrb, v[1], false);
+
+	Texture::Slices slices(TEXTURE_2D_ARRAY);
+	for (mrb_int i = 0; i < n; i++)
+		slices.set((int) i, 0, mrbx_checktype<image::ImageData>(mrb, mrb_ary_ref(mrb, v[0], i)));
+
+	Texture *tex = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { tex = instance()->newTexture(settings, &slices); }))
+		return mrb_nil_value();
+	mrb_value r = mrbx_pushtype(mrb, tex);
+	tex->release();
+	return r;
+}
+
 // new_quad(x:, y:, width:, height:, sw:, sh:) or new_quad(x:, y:, width:,
 // height:, texture:) -- sw/sh are the source texture's reference dimensions.
 static mrb_value w_new_quad(mrb_state *mrb, mrb_value self)
@@ -1525,9 +1556,9 @@ static mrb_value w_get_shader(mrb_state *mrb, mrb_value self)
 
 // =========================================================================
 // Love::SpriteBatch  (batches many quads of a single texture into one draw
-// call). Faithful to wrap_SpriteBatch.cpp; the add_layer/set_layer (array
-// textures) and attach_attribute (custom vertex buffers, needs Mesh) variants
-// are not ported yet.
+// call). Faithful to wrap_SpriteBatch.cpp, including the array-texture layer
+// sprites (add_layer/set_layer, `layer` 1-based) and attach_attribute (binding
+// a Buffer / another Mesh's vertex buffer as a per-sprite vertex attribute).
 // =========================================================================
 
 // Build a standard transform Matrix4 from v[base..base+8] = x,y,r,sx,sy,ox,oy,
@@ -1578,6 +1609,72 @@ static mrb_value w_sb_set(mrb_state *mrb, mrb_value self)
 		else
 			t->add(m, index);
 	});
+	return mrb_nil_value();
+}
+
+// add_layer(layer:, quad:, x:, y:, r:, sx:, sy:, ox:, oy:, kx:, ky:) -- add a
+// sprite sampling array-texture layer `layer` (1-based). quad optional. Returns
+// the 1-based sprite index.
+static mrb_value w_sb_add_layer(mrb_state *mrb, mrb_value self)
+{
+	SpriteBatch *t = mrbx_checktype<SpriteBatch>(mrb, self);
+	mrb_value v[11];
+	mrbx_get_kwargs(mrb, {"layer", "quad", "x", "y", "r", "sx", "sy", "ox", "oy", "kx", "ky"}, 1, v);
+	int layer = mrbx_checkint(mrb, v[0]) - 1;
+	Matrix4 m = standard_transform(mrb, v, 2);
+	int index = -1;
+	mrbx_catchexcept(mrb, [&]() {
+		if (!mrb_undef_p(v[1]) && !mrb_nil_p(v[1]))
+			index = t->addLayer(layer, mrbx_checktype<Quad>(mrb, v[1]), m);
+		else
+			index = t->addLayer(layer, m);
+	});
+	return mrbx_integer(mrb, index + 1);
+}
+
+// set_layer(index:, layer:, quad:, x:, ...) -- overwrite the sprite at the
+// 1-based index with an array-texture-layer sprite (`layer` 1-based).
+static mrb_value w_sb_set_layer(mrb_state *mrb, mrb_value self)
+{
+	SpriteBatch *t = mrbx_checktype<SpriteBatch>(mrb, self);
+	mrb_value v[12];
+	mrbx_get_kwargs(mrb, {"index", "layer", "quad", "x", "y", "r", "sx", "sy", "ox", "oy", "kx", "ky"}, 2, v);
+	int index = mrbx_checkint(mrb, v[0]) - 1;
+	int layer = mrbx_checkint(mrb, v[1]) - 1;
+	Matrix4 m = standard_transform(mrb, v, 3);
+	mrbx_catchexcept(mrb, [&]() {
+		if (!mrb_undef_p(v[2]) && !mrb_nil_p(v[2]))
+			t->addLayer(layer, mrbx_checktype<Quad>(mrb, v[2]), m, index);
+		else
+			t->addLayer(layer, m, index);
+	});
+	return mrb_nil_value();
+}
+
+// attach_attribute(name:, buffer:/mesh:) -- bind a per-sprite vertex attribute
+// sourced from a Buffer (or another Mesh's vertex buffer).
+static mrb_value w_sb_attach_attribute(mrb_state *mrb, mrb_value self)
+{
+	SpriteBatch *t = mrbx_checktype<SpriteBatch>(mrb, self);
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"name", "buffer", "mesh"}, 1, v);
+	std::string name = mrbx_checkstring(mrb, v[0]);
+
+	Buffer *buffer = nullptr;
+	Mesh *mesh = nullptr;
+	if (!mrb_undef_p(v[1]) && !mrb_nil_p(v[1]))
+		buffer = mrbx_checktype<Buffer>(mrb, v[1]);
+	else if (!mrb_undef_p(v[2]) && !mrb_nil_p(v[2]))
+	{
+		mesh = mrbx_checktype<Mesh>(mrb, v[2]);
+		buffer = mesh->getVertexBuffer();
+		if (buffer == nullptr)
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "Mesh does not have its own vertex buffer.");
+	}
+	else
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "attach_attribute needs buffer: or mesh:.");
+
+	mrbx_catchexcept(mrb, [&]() { t->attachAttribute(name, buffer, mesh); });
 	return mrb_nil_value();
 }
 
@@ -1668,6 +1765,9 @@ static const MrbReg spriteBatchFunctions[] =
 {
 	{ "add",             w_sb_add,             MRB_ARGS_KEY(10, 0) },
 	{ "set",             w_sb_set,             MRB_ARGS_KEY(11, 0) },
+	{ "add_layer",       w_sb_add_layer,       MRB_ARGS_KEY(11, 0) },
+	{ "set_layer",       w_sb_set_layer,       MRB_ARGS_KEY(12, 0) },
+	{ "attach_attribute", w_sb_attach_attribute, MRB_ARGS_KEY(3, 0) },
 	{ "clear",           w_sb_clear,           MRB_ARGS_NONE() },
 	{ "flush",           w_sb_flush,           MRB_ARGS_NONE() },
 	{ "set_texture",     w_sb_set_texture,     MRB_ARGS_KEY(1, 0) },
@@ -4191,6 +4291,7 @@ static const MrbReg functions[] =
 	{ "get_height",           w_get_height,           MRB_ARGS_NONE() },
 	{ "get_dimensions",       w_get_dimensions,       MRB_ARGS_NONE() },
 	{ "new_image",            w_new_image,            MRB_ARGS_KEY(2, 0) },
+	{ "new_array_image",      w_new_array_image,      MRB_ARGS_KEY(2, 0) },
 	{ "new_quad",             w_new_quad,             MRB_ARGS_KEY(7, 0) },
 	{ "draw",                 w_draw,                 MRB_ARGS_KEY(11, 0) },
 	{ "new_font",             w_new_font,             MRB_ARGS_KEY(2, 0) },

@@ -449,8 +449,11 @@ them changes when we swap.
       `libxxhash.a`. The Ruby API (`active?`/`clear`/`set_color`/`rectangle`/
       `origin`/`present`/dimensions) now drives the real path — a rectangle goes
       through the default shader and the streaming vertex buffer. Object types
-      exposed so far: **Texture** (`new_image`; query/dimensions +
-      `set_filter`/`get_filter`), **Quad** (`new_quad` + `get_viewport`/
+      exposed so far: **Texture** (`new_image` for a 2D texture, or
+      `new_array_image` (`layers:` an Array of ImageData, one per layer) for a 2D
+      **array** texture — the kind a SpriteBatch needs for add_layer/set_layer;
+      query/dimensions + `set_filter`/`get_filter`. Cube/volume textures and the
+      mipmap/dpiscale/settings forms aren't ported), **Quad** (`new_quad` + `get_viewport`/
       `set_viewport`), and **Font** (`new_font` + metrics: get_height/get_width/
       ascent/descent/baseline/line_height/has_glyphs/get_wrap), plus `draw`
       (Drawable or Texture+Quad), `set_font`/`get_font`, and `print`/`printf`
@@ -487,9 +490,13 @@ them changes when we swap.
       object type is exposed: `new_sprite_batch` (`texture:`, `size:` default
       1000, `usage:` "dynamic"/"static"/"stream") and the methods `add` /`set`
       (`quad:` optional + the standard transform; `add` returns the 1-based
-      index), `clear`, `flush`, `set_texture`/`get_texture`, `set_color`/
-      `get_color`, `get_count`, `get_buffer_size`, `set_draw_range`/
-      `get_draw_range` (1-based, Hash or nil). The `Love::TextBatch` object type
+      index), `add_layer`/`set_layer` (array-texture layer sprites: `layer:`
+      1-based + `quad:` + the standard transform; the batch's texture must be an
+      array texture — see `new_array_image`), `attach_attribute` (`name:` +
+      `buffer:`/`mesh:`, binds a per-sprite vertex attribute), `clear`, `flush`,
+      `set_texture`/`get_texture`, `set_color`/`get_color`, `get_count`,
+      `get_buffer_size`, `set_draw_range`/`get_draw_range` (1-based, Hash or
+      nil). The `Love::TextBatch` object type
       is exposed: `new_text_batch` (`font:`, optional `text:` String) and `set`
       (`text:`) / `setf` (`text:`/`wrap:`/`align:`) / `add` (`text:` + standard
       transform -> 1-based index) / `addf` (`text:`/`wrap:`/`align:` + transform)
@@ -564,11 +571,13 @@ them changes when we swap.
       each color applying to the strings after it. Built by `check_colored_string`
       in wrap_Graphics_mrb.cpp, faithful to `luax_checkcoloredstring`. Covered by
       `textbatch_test.rb`.
-      SpriteBatch's add_layer/set_layer (array textures) aren't ported; nor are
-      the slice/mipmap/explicit-depthstencil-texture set_canvas variants or the
-      low-level set_stencil_state / set_depth_state. (The Mesh custom-vertex-
-      format, attach_attribute, and explicit-index-buffer paths are now ported —
-      see the Mesh paragraph above.)
+      The remaining graphics gaps are all about texture *creation* / low-level
+      render state, not whole features: cube/volume textures and the
+      mipmap/dpiscale set_canvas slice variants aren't ported, nor the
+      explicit-depthstencil-texture set_canvas form or the low-level
+      set_stencil_state / set_depth_state. (The SpriteBatch array-texture layers +
+      attach_attribute, and the Mesh custom-vertex-format / attach_attribute /
+      explicit-index-buffer paths, are now ported — see those paragraphs.)
 
       Name collision (font vs graphics): the love.font module and the graphics `Font`
       *type* both map to `Love::Font`. Resolved as for data/thread/joystick --
@@ -615,10 +624,15 @@ them changes when we swap.
 - [ ] FFI fast paths: re-implement the few wrappers that use LuaJIT FFI.
 - [~] Port the remaining `wrap_*.cpp` modules. All 21 LÖVE modules and every
       object type they expose are now ported, including the low-level GPU
-      `Buffer` (`GraphicsBuffer`) and `GraphicsReadback` types. What remains is
-      a handful of per-type *features*, each already noted at its module in §A/§B
-      (e.g. SpriteBatch array-texture layers).
-      No whole module or object type is unported.
+      `Buffer` (`GraphicsBuffer`) and `GraphicsReadback` types. Every per-type
+      *method* feature noted in §A/§B is now ported too (ParticleSystem#clone,
+      colored-string text, Mesh custom formats / attributes / index buffers,
+      SpriteBatch layers + attach_attribute). What remains is graphics texture
+      *creation* / low-level render-state surface, not whole features: cube/
+      volume textures, the mipmap/dpiscale/settings forms of texture creation,
+      the slice/mipmap/explicit-depthstencil set_canvas variants, and the
+      low-level set_stencil_state / set_depth_state. No whole module or object
+      type is unported.
 - [ ] Memory audit (do once the port is otherwise complete): sweep the mruby
       bindings for allocation/deallocation correctness. Two classes to look for:
       (1) **GC-arena hygiene** — high-iteration loops that create and discard heap

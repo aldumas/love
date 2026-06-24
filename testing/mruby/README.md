@@ -255,7 +255,9 @@ narrative overview.
    canvas / render targets (`new_canvas` / `set_canvas` / `get_canvas`, a canvas
    being a render-target `Love::Texture`), stencil/depth render state
    (`set_stencil_mode` / `set_depth_mode` and their getters), the `Love::SpriteBatch`
-   object type (`new_sprite_batch` + add/set/clear/color/draw-range), the
+   object type (`new_sprite_batch` + add/set/clear/color/draw-range, plus
+   add_layer/set_layer over an array texture from `new_array_image`, and
+   attach_attribute), the
    `Love::TextBatch` object type (`new_text_batch` + set/setf/add/addf/metrics),
    the `Love::ParticleSystem` object type (`new_particle_system` + the full
    config + lifecycle API), the `Love::Mesh` object type (`new_mesh` +
