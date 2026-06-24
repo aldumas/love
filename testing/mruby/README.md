@@ -271,9 +271,11 @@ narrative overview.
    variants (sync returns ByteData/ImageData; async returns a pollable
    GraphicsReadback),
    plus
-   `new_image` / `new_quad` / `draw`, `new_font` / `set_font` / `get_font` /
+   `new_image` / `new_array_image` / `new_volume_image` / `new_cube_image` /
+   `new_quad` / `draw`, `new_font` / `set_font` / `get_font` /
    `print` / `printf`, and the `Love::Texture`, `Love::Quad`, and `Love::Font`
-   object types (Texture is-a Drawable, with dimensions + `set_filter`; `draw`
+   object types (Texture is-a Drawable, with dimensions + `get_texture_type` /
+   `get_layer_count` / `get_depth` / `get_mipmap_count` + `set_filter`; `draw`
    takes a Drawable or a Texture+Quad with the full transform; text renders
    through the real glyph atlas). All of it runs through the real batched
    renderer (e.g. a textured `draw` goes through the default shader and the

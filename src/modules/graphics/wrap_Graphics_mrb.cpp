@@ -755,6 +755,34 @@ static mrb_value w_tex_is_compressed(mrb_state *mrb, mrb_value self)
 	return mrbx_boolean(mrb, mrbx_checktype<Texture>(mrb, self)->isCompressed());
 }
 
+// get_texture_type -> "2d"/"array"/"cube"/"volume".
+static mrb_value w_tex_get_texture_type(mrb_state *mrb, mrb_value self)
+{
+	const char *str = nullptr;
+	Texture::getConstant(mrbx_checktype<Texture>(mrb, self)->getTextureType(), str);
+	return mrbx_string(mrb, str ? str : "");
+}
+
+// get_depth(mipmap:) -- depth-slice count of a volume texture (1 otherwise);
+// mipmap is 1-based, default 1.
+static mrb_value w_tex_get_depth(mrb_state *mrb, mrb_value self)
+{
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"mipmap"}, 0, v);
+	int mip = mrbx_optint(mrb, v[0], 1) - 1;
+	return mrbx_integer(mrb, mrbx_checktype<Texture>(mrb, self)->getDepth(mip < 0 ? 0 : mip));
+}
+
+static mrb_value w_tex_get_layer_count(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, mrbx_checktype<Texture>(mrb, self)->getLayerCount());
+}
+
+static mrb_value w_tex_get_mipmap_count(mrb_state *mrb, mrb_value self)
+{
+	return mrbx_integer(mrb, mrbx_checktype<Texture>(mrb, self)->getMipmapCount());
+}
+
 // set_filter(min:, mag:) -- mag defaults to min. Values are "linear"/"nearest".
 static mrb_value w_tex_set_filter(mrb_state *mrb, mrb_value self)
 {
@@ -802,6 +830,10 @@ static const MrbReg textureFunctions[] =
 	{ "get_pixel_dimensions", w_tex_get_pixel_dimensions, MRB_ARGS_NONE() },
 	{ "get_dpi_scale",        w_tex_get_dpi_scale,        MRB_ARGS_NONE() },
 	{ "is_compressed",        w_tex_is_compressed,        MRB_ARGS_NONE() },
+	{ "get_texture_type",     w_tex_get_texture_type,     MRB_ARGS_NONE() },
+	{ "get_depth",            w_tex_get_depth,            MRB_ARGS_KEY(1, 0) },
+	{ "get_layer_count",      w_tex_get_layer_count,      MRB_ARGS_NONE() },
+	{ "get_mipmap_count",     w_tex_get_mipmap_count,     MRB_ARGS_NONE() },
 	{ "set_filter",           w_tex_set_filter,           MRB_ARGS_KEY(2, 0) },
 	{ "get_filter",           w_tex_get_filter,           MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
@@ -914,28 +946,28 @@ static mrb_value w_new_image(mrb_state *mrb, mrb_value self)
 	return r;
 }
 
-// new_array_image(layers:, linear:) -- build a 2D **array** Texture from an
-// Array of ImageData (one per layer); the layer count is the Array length.
-// Mirrors love.graphics.newArrayImage (the ImageData-slice form). An array
-// texture is what a SpriteBatch needs for add_layer/set_layer.
-static mrb_value w_new_array_image(mrb_state *mrb, mrb_value self)
+// Shared builder for the ImageData-slice texture creators (array / volume /
+// cube). `arr` is an Array of ImageData (one per layer / depth slice / cube
+// face, all at mip 0); `linearv` the optional linear: flag. The engine
+// validates type-specific constraints (e.g. cube faces square) when the texture
+// is built. Mirrors the simple ImageData-array forms of newArrayImage /
+// newVolumeImage / newCubeImage.
+static mrb_value new_sliced_texture(mrb_state *mrb, mrb_value arr, mrb_value linearv,
+	TextureType type, const char *what)
 {
-	(void) self;
-	mrb_value v[2];
-	mrbx_get_kwargs(mrb, {"layers", "linear"}, 1, v);
-	if (!mrb_array_p(v[0]))
-		mrb_raise(mrb, E_ARGUMENT_ERROR, "layers: must be an Array of ImageData (one per layer).");
-	mrb_int n = RARRAY_LEN(v[0]);
+	if (!mrb_array_p(arr))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "%s: must be an Array of ImageData.", what);
+	mrb_int n = RARRAY_LEN(arr);
 	if (n < 1)
-		mrb_raise(mrb, E_ARGUMENT_ERROR, "layers: needs at least one ImageData.");
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "%s: needs at least one ImageData.", what);
 
 	Texture::Settings settings;
-	settings.type = TEXTURE_2D_ARRAY;
-	settings.linear = mrbx_optboolean(mrb, v[1], false);
+	settings.type = type;
+	settings.linear = mrbx_optboolean(mrb, linearv, false);
 
-	Texture::Slices slices(TEXTURE_2D_ARRAY);
+	Texture::Slices slices(type);
 	for (mrb_int i = 0; i < n; i++)
-		slices.set((int) i, 0, mrbx_checktype<image::ImageData>(mrb, mrb_ary_ref(mrb, v[0], i)));
+		slices.set((int) i, 0, mrbx_checktype<image::ImageData>(mrb, mrb_ary_ref(mrb, arr, i)));
 
 	Texture *tex = nullptr;
 	if (mrbx_catchexcept(mrb, [&]() { tex = instance()->newTexture(settings, &slices); }))
@@ -943,6 +975,39 @@ static mrb_value w_new_array_image(mrb_state *mrb, mrb_value self)
 	mrb_value r = mrbx_pushtype(mrb, tex);
 	tex->release();
 	return r;
+}
+
+// new_array_image(layers:, linear:) -- a 2D **array** Texture from an Array of
+// ImageData (one per layer). An array texture is what a SpriteBatch needs for
+// add_layer/set_layer.
+static mrb_value w_new_array_image(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"layers", "linear"}, 1, v);
+	return new_sliced_texture(mrb, v[0], v[1], TEXTURE_2D_ARRAY, "layers");
+}
+
+// new_volume_image(layers:, linear:) -- a 3D **volume** Texture from an Array of
+// ImageData (one per depth slice).
+static mrb_value w_new_volume_image(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"layers", "linear"}, 1, v);
+	return new_sliced_texture(mrb, v[0], v[1], TEXTURE_VOLUME, "layers");
+}
+
+// new_cube_image(faces:, linear:) -- a **cube** Texture from an Array of exactly
+// 6 square ImageData (one per face: +x, -x, +y, -y, +z, -z).
+static mrb_value w_new_cube_image(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"faces", "linear"}, 1, v);
+	if (mrb_array_p(v[0]) && RARRAY_LEN(v[0]) != 6)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "faces: must be an Array of exactly 6 square ImageData.");
+	return new_sliced_texture(mrb, v[0], v[1], TEXTURE_CUBE, "faces");
 }
 
 // new_quad(x:, y:, width:, height:, sw:, sh:) or new_quad(x:, y:, width:,
@@ -4344,6 +4409,8 @@ static const MrbReg functions[] =
 	{ "get_dimensions",       w_get_dimensions,       MRB_ARGS_NONE() },
 	{ "new_image",            w_new_image,            MRB_ARGS_KEY(2, 0) },
 	{ "new_array_image",      w_new_array_image,      MRB_ARGS_KEY(2, 0) },
+	{ "new_volume_image",     w_new_volume_image,     MRB_ARGS_KEY(2, 0) },
+	{ "new_cube_image",       w_new_cube_image,       MRB_ARGS_KEY(2, 0) },
 	{ "new_quad",             w_new_quad,             MRB_ARGS_KEY(7, 0) },
 	{ "draw",                 w_draw,                 MRB_ARGS_KEY(11, 0) },
 	{ "new_font",             w_new_font,             MRB_ARGS_KEY(2, 0) },

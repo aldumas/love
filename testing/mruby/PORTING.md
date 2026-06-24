@@ -449,11 +449,17 @@ them changes when we swap.
       `libxxhash.a`. The Ruby API (`active?`/`clear`/`set_color`/`rectangle`/
       `origin`/`present`/dimensions) now drives the real path — a rectangle goes
       through the default shader and the streaming vertex buffer. Object types
-      exposed so far: **Texture** (`new_image` for a 2D texture, or
-      `new_array_image` (`layers:` an Array of ImageData, one per layer) for a 2D
-      **array** texture — the kind a SpriteBatch needs for add_layer/set_layer;
-      query/dimensions + `set_filter`/`get_filter`. Cube/volume textures and the
-      mipmap/dpiscale/settings forms aren't ported), **Quad** (`new_quad` + `get_viewport`/
+      exposed so far: **Texture** — `new_image` (a 2D texture), `new_array_image`
+      (`layers:` an Array of ImageData, one per layer; the kind a SpriteBatch
+      needs for add_layer/set_layer), `new_volume_image` (`layers:` one ImageData
+      per depth slice -> a 3D volume texture), and `new_cube_image` (`faces:` an
+      Array of exactly 6 square ImageData -> a cube texture); all take an optional
+      `linear:`. The slice creators share one ImageData-array builder; the
+      mipmap/dpiscale/per-slice-table and from-single-atlas-image forms aren't
+      ported. Query getters: dimensions / `get_texture_type` ("2d"/"array"/
+      "cube"/"volume") / `get_layer_count` / `get_depth` (`mipmap:` 1-based) /
+      `get_mipmap_count` / `is_compressed` + `set_filter`/`get_filter`. **Quad**
+      (`new_quad` + `get_viewport`/
       `set_viewport`), and **Font** (`new_font` + metrics: get_height/get_width/
       ascent/descent/baseline/line_height/has_glyphs/get_wrap), plus `draw`
       (Drawable or Texture+Quad), `set_font`/`get_font`, and `print`/`printf`
@@ -576,13 +582,15 @@ them changes when we swap.
       each color applying to the strings after it. Built by `check_colored_string`
       in wrap_Graphics_mrb.cpp, faithful to `luax_checkcoloredstring`. Covered by
       `textbatch_test.rb`.
-      The remaining graphics gaps are all about texture *creation*, not whole
-      features: cube/volume textures and the mipmap/dpiscale/settings forms of
-      texture creation aren't ported, nor the slice/mipmap/explicit-
-      depthstencil-texture set_canvas variants. (The low-level stencil state,
-      the SpriteBatch array-texture layers + attach_attribute, and the Mesh
-      custom-vertex-format / attach_attribute / explicit-index-buffer paths are
-      now ported — see those paragraphs.)
+      The remaining graphics gaps are narrow texture-creation / render-target
+      forms, not whole features: the mipmap/dpiscale/per-slice-table and
+      from-single-atlas-image forms of texture creation aren't ported (the simple
+      ImageData-array forms — 2d/array/volume/cube — are), nor are the
+      slice/mipmap/explicit-depthstencil-texture set_canvas variants (the basic
+      set_canvas, incl. a temporary `stencil:`/`depth:` buffer, is). (The
+      low-level stencil state, the SpriteBatch array-texture layers +
+      attach_attribute, and the Mesh custom-vertex-format / attach_attribute /
+      explicit-index-buffer paths are now ported — see those paragraphs.)
 
       Name collision (font vs graphics): the love.font module and the graphics `Font`
       *type* both map to `Love::Font`. Resolved as for data/thread/joystick --
@@ -632,11 +640,12 @@ them changes when we swap.
       `Buffer` (`GraphicsBuffer`) and `GraphicsReadback` types. Every per-type
       *method* feature noted in §A/§B is now ported too (ParticleSystem#clone,
       colored-string text, Mesh custom formats / attributes / index buffers,
-      SpriteBatch layers + attach_attribute). What remains is graphics texture
-      *creation* / low-level render-state surface, not whole features: cube/
-      volume textures, the mipmap/dpiscale/settings forms of texture creation,
-      the slice/mipmap/explicit-depthstencil set_canvas variants. No whole
-      module or object type is unported.
+      SpriteBatch layers + attach_attribute, low-level stencil state, and the
+      2d/array/volume/cube texture creators). What remains is a few narrow
+      texture-creation / render-target forms, not whole features: the
+      mipmap/dpiscale/per-slice-table/from-atlas texture-creation forms and the
+      slice/mipmap/explicit-depthstencil set_canvas variants. No whole module or
+      object type is unported.
 - [ ] Memory audit (do once the port is otherwise complete): sweep the mruby
       bindings for allocation/deallocation correctness. Two classes to look for:
       (1) **GC-arena hygiene** — high-iteration loops that create and discard heap
