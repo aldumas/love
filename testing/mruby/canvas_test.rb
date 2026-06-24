@@ -1,5 +1,7 @@
 # Exercises the graphics canvas / render-target slice on the real backend:
-#   Love::Graphics.new_canvas / set_canvas / get_canvas. Renders a scene into
+#   Love::Graphics.new_canvas / set_canvas / get_canvas, including layered
+#   (array) and mipmapped render targets with the slice:/mipmap: set_canvas
+#   variants. Renders a scene into
 #   an off-screen canvas, then draws that canvas (a Texture) to the screen.
 #
 #   ./love_mrb_harness canvas_test.rb
@@ -59,3 +61,45 @@ frames.times do |i|
 end
 
 puts "drew #{frames} frames (off-screen canvas composited to the screen)"
+
+puts
+puts "=== array render target + per-layer set_canvas ==="
+acv = g.new_canvas(width: 128, height: 128, type: "array", layers: 3)
+puts "  type -> #{acv.get_texture_type.inspect}, layer_count -> #{acv.get_layer_count}"
+# Render a distinct solid colour into each layer (slice is 1-based).
+[[1.0, 0.3, 0.3], [0.3, 1.0, 0.3], [0.3, 0.4, 1.0]].each_with_index do |c, i|
+  g.set_canvas(canvas: acv, slice: i + 1)
+  g.clear(r: c[0], g: c[1], b: c[2], a: 1.0)
+end
+# get_canvas reports the slice/mipmap for a layered target (Hash form).
+g.set_canvas(canvas: acv, slice: 2)
+gc = g.get_canvas
+puts "  get_canvas (layer 2) -> #{gc.class}, slice #{gc[:slice]}, mipmap #{gc[:mipmap]}"
+g.set_canvas
+puts "  after reset -> #{g.get_canvas.inspect}"
+
+puts
+puts "=== mipmapped render target + per-mip set_canvas ==="
+mcv = g.new_canvas(width: 128, height: 128, mipmaps: true)
+puts "  mipmap_count -> #{mcv.get_mipmap_count}"
+g.set_canvas(canvas: mcv, mipmap: 2)
+g.clear(r: 0.9, g: 0.5, b: 0.1, a: 1.0)
+g.set_canvas
+puts "  rendered into mip level 2 OK"
+
+puts
+puts "=== draw the rendered array layers to the screen ==="
+sb = g.new_sprite_batch(texture: acv, size: 8)
+sb.add_layer(layer: 1, x: 80,  y: 180)
+sb.add_layer(layer: 2, x: 240, y: 180)
+sb.add_layer(layer: 3, x: 400, y: 180)
+30.times do
+  Love::Event.pump
+  g.origin
+  g.clear
+  g.set_color(r: 1.0, g: 1.0, b: 1.0)
+  g.draw(drawable: sb)
+  g.present
+  Love::Timer.sleep(seconds: 0.016)
+end
+puts "drew the three rendered array layers"

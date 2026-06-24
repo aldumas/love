@@ -485,10 +485,17 @@ them changes when we swap.
       `Love::Transform` or row-major number array, and samplers via a
       `Love::Texture`), `send_color`, `has_uniform?`, and `get_warnings`. Canvas /
       render targets are exposed: `new_canvas` (`width:`/`height:` default to the
-      screen, plus optional `format:`/`msaa:`/`readable:`) returns a render-target
-      `Love::Texture`; `set_canvas` (`canvas:` a Texture or Array of them for MRT,
-      nil/omitted resets to the backbuffer; `stencil:`/`depth:` request a
-      temporary depth/stencil buffer) / `get_canvas`. Stencil/depth render state
+      screen, plus optional `format:`/`msaa:`/`readable:`, and `type:` "2d"/
+      "array"/"volume"/"cube" + `layers:` for a layered render target + `mipmaps:`
+      for a mipmapped one) returns a render-target `Love::Texture`; `set_canvas`
+      (`canvas:` a Texture or Array of them for MRT, nil/omitted resets to the
+      backbuffer; for a single non-2D/mipmapped target `slice:`+`mipmap:` (1-based)
+      select the layer/face/depth-slice and mip level, or in the MRT Array each
+      element may be a Hash `{texture:, slice:/layer:/face:, mipmap:}`;
+      `depthstencil:` is an explicit depth/stencil Texture, else `stencil:`/
+      `depth:` request a temporary buffer) / `get_canvas` (a Texture, or a
+      `{texture:, slice:, mipmap:}` Hash for a non-2D/non-zero-slice target, or an
+      Array for MRT, or nil). Stencil/depth render state
       is exposed: `set_stencil_mode` (`mode:` "off"/"draw"/"test"/"custom",
       omitted resets to off; `value:` defaults 1) / `get_stencil_mode` (-> Hash
       {mode:, value:}), the low-level `set_stencil_state` (`action:`/`compare:`/
@@ -582,15 +589,15 @@ them changes when we swap.
       each color applying to the strings after it. Built by `check_colored_string`
       in wrap_Graphics_mrb.cpp, faithful to `luax_checkcoloredstring`. Covered by
       `textbatch_test.rb`.
-      The remaining graphics gaps are narrow texture-creation / render-target
-      forms, not whole features: the mipmap/dpiscale/per-slice-table and
-      from-single-atlas-image forms of texture creation aren't ported (the simple
-      ImageData-array forms — 2d/array/volume/cube — are), nor are the
-      slice/mipmap/explicit-depthstencil-texture set_canvas variants (the basic
-      set_canvas, incl. a temporary `stencil:`/`depth:` buffer, is). (The
-      low-level stencil state, the SpriteBatch array-texture layers +
-      attach_attribute, and the Mesh custom-vertex-format / attach_attribute /
-      explicit-index-buffer paths are now ported — see those paragraphs.)
+      The only remaining graphics gap is a couple of narrow texture-creation
+      input forms, not whole features: the mipmap/dpiscale/per-slice-table and
+      from-single-atlas-image forms of *texture creation* aren't ported (the
+      simple ImageData-array forms — 2d/array/volume/cube — are, as are layered
+      and mipmapped render-target canvases). (The slice/mipmap/explicit-
+      depthstencil set_canvas variants, the low-level stencil state, the
+      SpriteBatch array-texture layers + attach_attribute, and the Mesh
+      custom-vertex-format / attach_attribute / explicit-index-buffer paths are
+      all now ported — see those paragraphs.)
 
       Name collision (font vs graphics): the love.font module and the graphics `Font`
       *type* both map to `Love::Font`. Resolved as for data/thread/joystick --
@@ -640,12 +647,12 @@ them changes when we swap.
       `Buffer` (`GraphicsBuffer`) and `GraphicsReadback` types. Every per-type
       *method* feature noted in §A/§B is now ported too (ParticleSystem#clone,
       colored-string text, Mesh custom formats / attributes / index buffers,
-      SpriteBatch layers + attach_attribute, low-level stencil state, and the
-      2d/array/volume/cube texture creators). What remains is a few narrow
-      texture-creation / render-target forms, not whole features: the
-      mipmap/dpiscale/per-slice-table/from-atlas texture-creation forms and the
-      slice/mipmap/explicit-depthstencil set_canvas variants. No whole module or
-      object type is unported.
+      SpriteBatch layers + attach_attribute, low-level stencil state, the
+      2d/array/volume/cube texture creators, layered/mipmapped render-target
+      canvases, and the slice/mipmap/depthstencil set_canvas variants). What
+      remains is only a couple of alternate texture-creation input forms
+      (mipmap/dpiscale/per-slice-table tables, from-single-atlas-image). No whole
+      module, object type, or feature is unported.
 - [ ] Memory audit (do once the port is otherwise complete): sweep the mruby
       bindings for allocation/deallocation correctness. Two classes to look for:
       (1) **GC-arena hygiene** — high-iteration loops that create and discard heap

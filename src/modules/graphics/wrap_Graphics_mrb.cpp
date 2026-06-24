@@ -3520,11 +3520,17 @@ static mrb_value w_new_video(mrb_state *mrb, mrb_value self)
 
 // new_canvas(width:, height:, format:, msaa:, readable:) -- width/height
 // default to the screen size. Returns a render-target Love::Texture.
+// new_canvas(width:, height:, format:, msaa:, readable:, type:, layers:,
+// mipmaps:) -- a render-target Texture. type: "2d" (default) / "array" /
+// "volume" / "cube"; layers: the layer/depth count for array/volume; mipmaps:
+// true requests a full mipmap chain (so a mipmapped render target exists for
+// set_canvas's mipmap variant). Array/volume/cube render targets are what
+// set_canvas's slice/layer/face variant draws into.
 static mrb_value w_new_canvas(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	mrb_value v[5];
-	mrbx_get_kwargs(mrb, {"width", "height", "format", "msaa", "readable"}, 0, v);
+	mrb_value v[8];
+	mrbx_get_kwargs(mrb, {"width", "height", "format", "msaa", "readable", "type", "layers", "mipmaps"}, 0, v);
 
 	Texture::Settings s;
 	s.renderTarget = true;
@@ -3542,6 +3548,16 @@ static mrb_value w_new_canvas(mrb_state *mrb, mrb_value self)
 		s.msaa = mrbx_checkint(mrb, v[3]);
 	if (!mrb_undef_p(v[4]))
 		s.readable.set(mrbx_checkboolean(mrb, v[4]));
+	if (!mrb_undef_p(v[5]) && !mrb_nil_p(v[5]))
+	{
+		std::string typestr = mrbx_checkstring(mrb, v[5]);
+		if (!Texture::getConstant(typestr.c_str(), s.type))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid texture type: %s", typestr.c_str());
+	}
+	if (!mrb_undef_p(v[6]) && !mrb_nil_p(v[6]))
+		s.layers = mrbx_checkint(mrb, v[6]);
+	if (mrbx_optboolean(mrb, v[7], false))
+		s.mipmaps = Texture::MIPMAPS_AUTO;
 	s.dpiScale = instance()->getScreenDPIScale();
 
 	Texture *texture = nullptr;
@@ -3552,14 +3568,43 @@ static mrb_value w_new_canvas(mrb_state *mrb, mrb_value self)
 	return res;
 }
 
-// set_canvas(canvas:) -- a render-target Texture, an Array of them (MRT), or
-// nil/omitted to reset to the backbuffer. stencil:/depth: request a temporary
-// depth/stencil buffer (needed for stencil tests while drawing to a canvas).
+// Parse one render target: a bare Texture (slice 0, mip 0), or a Hash
+// {texture:, slice:/layer:/face:, mipmap:} (slice/mipmap 1-based) for a
+// specific layer/face/depth-slice or mip level of a non-2D / mipmapped texture.
+static Graphics::RenderTarget check_render_target(mrb_state *mrb, mrb_value v)
+{
+	if (mrb_hash_p(v))
+	{
+		auto field = [&](const char *k) {
+			return mrb_hash_get(mrb, v, mrb_symbol_value(mrb_intern_cstr(mrb, k)));
+		};
+		mrb_value tex = field("texture");
+		if (mrb_nil_p(tex))
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "A render-target Hash needs a texture:.");
+		Graphics::RenderTarget rt(mrbx_checktype<Texture>(mrb, tex), 0, 0);
+		mrb_value slice = field("slice");
+		if (mrb_nil_p(slice)) slice = field("layer");
+		if (mrb_nil_p(slice)) slice = field("face");
+		if (!mrb_nil_p(slice)) rt.slice = mrbx_checkint(mrb, slice) - 1;
+		mrb_value mip = field("mipmap");
+		if (!mrb_nil_p(mip)) rt.mipmap = mrbx_checkint(mrb, mip) - 1;
+		return rt;
+	}
+	return Graphics::RenderTarget(mrbx_checktype<Texture>(mrb, v), 0, 0);
+}
+
+// set_canvas(canvas:, slice:, mipmap:, depthstencil:, stencil:, depth:) -- a
+// render-target Texture, an Array of them (MRT), or nil/omitted to reset to the
+// backbuffer. For a single non-2D (or mipmapped) target, slice: selects the
+// 1-based layer/face/depth-slice and mipmap: the 1-based mip level; in the MRT
+// Array each element may instead be a Hash {texture:, slice:/layer:/face:,
+// mipmap:}. depthstencil: is an explicit depth/stencil Texture (or such a Hash);
+// otherwise stencil:/depth: request a temporary depth/stencil buffer.
 static mrb_value w_set_canvas(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	mrb_value v[3];
-	mrbx_get_kwargs(mrb, {"canvas", "stencil", "depth"}, 0, v);
+	mrb_value v[6];
+	mrbx_get_kwargs(mrb, {"canvas", "slice", "mipmap", "depthstencil", "stencil", "depth"}, 0, v);
 
 	if (mrb_undef_p(v[0]) || mrb_nil_p(v[0]))
 	{
@@ -3572,22 +3617,48 @@ static mrb_value w_set_canvas(mrb_state *mrb, mrb_value self)
 	{
 		mrb_int n = RARRAY_LEN(v[0]);
 		for (mrb_int i = 0; i < n; i++)
-			targets.colors.emplace_back(mrbx_checktype<Texture>(mrb, mrb_ary_ref(mrb, v[0], i)), 0);
+			targets.colors.push_back(check_render_target(mrb, mrb_ary_ref(mrb, v[0], i)));
 	}
 	else
-		targets.colors.emplace_back(mrbx_checktype<Texture>(mrb, v[0]), 0);
+	{
+		Graphics::RenderTarget rt(mrbx_checktype<Texture>(mrb, v[0]), 0, 0);
+		if (!mrb_undef_p(v[1]) && !mrb_nil_p(v[1]))
+			rt.slice = mrbx_checkint(mrb, v[1]) - 1;
+		if (!mrb_undef_p(v[2]) && !mrb_nil_p(v[2]))
+			rt.mipmap = mrbx_checkint(mrb, v[2]) - 1;
+		targets.colors.push_back(rt);
+	}
 
-	if (mrbx_optboolean(mrb, v[1], false))
-		targets.temporaryRTFlags |= Graphics::TEMPORARY_RT_STENCIL;
-	if (mrbx_optboolean(mrb, v[2], false))
-		targets.temporaryRTFlags |= Graphics::TEMPORARY_RT_DEPTH;
+	if (!mrb_undef_p(v[3]) && !mrb_nil_p(v[3]))
+		targets.depthStencil = check_render_target(mrb, v[3]);
+	else
+	{
+		if (mrbx_optboolean(mrb, v[4], false))
+			targets.temporaryRTFlags |= Graphics::TEMPORARY_RT_STENCIL;
+		if (mrbx_optboolean(mrb, v[5], false))
+			targets.temporaryRTFlags |= Graphics::TEMPORARY_RT_DEPTH;
+	}
 
 	mrbx_catchexcept(mrb, [&]() { instance()->setRenderTargets(targets); });
 	return mrb_nil_value();
 }
 
-// get_canvas -> the active render-target Texture, an Array (for MRT), or nil
-// when drawing to the backbuffer.
+// Push a render target: the bare Texture for a plain 2D slice-0/mip-0 target,
+// else a Hash {texture:, slice:, mipmap:} (1-based) so layer/face/mip survives.
+static mrb_value push_render_target(mrb_state *mrb, const Graphics::RenderTarget &rt)
+{
+	if (rt.slice == 0 && rt.mipmap == 0 && rt.texture->getTextureType() == TEXTURE_2D)
+		return mrbx_pushtype(mrb, rt.texture);
+	mrb_value h = mrb_hash_new(mrb);
+	hset(mrb, h, "texture", mrbx_pushtype(mrb, rt.texture));
+	hset(mrb, h, "slice", mrbx_integer(mrb, rt.slice + 1));
+	hset(mrb, h, "mipmap", mrbx_integer(mrb, rt.mipmap + 1));
+	return h;
+}
+
+// get_canvas -> the active render target(s): a Texture (or {texture:, slice:,
+// mipmap:} Hash for a non-2D/non-zero slice/mip target), an Array for MRT, or
+// nil when drawing to the backbuffer.
 static mrb_value w_get_canvas(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
@@ -3596,10 +3667,10 @@ static mrb_value w_get_canvas(mrb_state *mrb, mrb_value self)
 	if (n == 0)
 		return mrb_nil_value();
 	if (n == 1)
-		return mrbx_pushtype(mrb, targets.colors[0].texture);
+		return push_render_target(mrb, targets.colors[0]);
 	mrb_value arr = mrb_ary_new_capa(mrb, n);
 	for (int i = 0; i < n; i++)
-		mrb_ary_push(mrb, arr, mrbx_pushtype(mrb, targets.colors[i].texture));
+		mrb_ary_push(mrb, arr, push_render_target(mrb, targets.colors[i]));
 	return arr;
 }
 
@@ -4421,8 +4492,8 @@ static const MrbReg functions[] =
 	{ "new_shader",           w_new_shader,           MRB_ARGS_KEY(4, 0) },
 	{ "set_shader",           w_set_shader,           MRB_ARGS_KEY(1, 0) },
 	{ "get_shader",           w_get_shader,           MRB_ARGS_NONE() },
-	{ "new_canvas",           w_new_canvas,           MRB_ARGS_KEY(5, 0) },
-	{ "set_canvas",           w_set_canvas,           MRB_ARGS_KEY(3, 0) },
+	{ "new_canvas",           w_new_canvas,           MRB_ARGS_KEY(8, 0) },
+	{ "set_canvas",           w_set_canvas,           MRB_ARGS_KEY(6, 0) },
 	{ "get_canvas",           w_get_canvas,           MRB_ARGS_NONE() },
 	{ "new_sprite_batch",     w_new_sprite_batch,     MRB_ARGS_KEY(3, 0) },
 	{ "new_text_batch",       w_new_text_batch,       MRB_ARGS_KEY(2, 0) },

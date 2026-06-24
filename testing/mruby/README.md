@@ -253,8 +253,9 @@ narrative overview.
    their getters), shaders (`new_shader` / `set_shader` / `get_shader` and the
    `Love::Shader` type: `send` / `send_color` / `has_uniform?` / `get_warnings`),
    canvas / render targets (`new_canvas` / `set_canvas` / `get_canvas`, a canvas
-   being a render-target `Love::Texture`), stencil/depth render state
-   (`set_stencil_mode` / `set_depth_mode` and their getters), the `Love::SpriteBatch`
+   being a render-target `Love::Texture`; incl. layered/mipmapped targets and the
+   slice/mipmap/depthstencil set_canvas variants), stencil/depth render state
+   (`set_stencil_mode` / `set_stencil_state` / `set_depth_mode` and their getters), the `Love::SpriteBatch`
    object type (`new_sprite_batch` + add/set/clear/color/draw-range, plus
    add_layer/set_layer over an array texture from `new_array_image`, and
    attach_attribute), the
