@@ -2479,10 +2479,23 @@ static mrb_value w_new_particle_system(mrb_state *mrb, mrb_value self)
 }
 
 // =========================================================================
-// Love::Mesh  (standard-format only: a vertex is [x, y, u, v, r, g, b, a], the
-// default position/texcoord/color layout). Custom vertex formats, per-attribute
-// access, attached attributes, and index buffers are not ported.
+// Love::Mesh  (a drawable vertex set). Both the standard format (a vertex is
+// [x, y, u, v, r, g, b, a] — position vec2, texcoord vec2, color unorm8 vec4)
+// and **custom vertex formats** are supported: vertex read/write is driven by
+// the mesh's actual format via the shared Buffer data helpers (the standard
+// format is just one such format). Also exposes per-attribute access, attribute
+// enable/disable, attached attributes (binding a Buffer as a custom vertex
+// attribute), an explicit index buffer, and the from-buffers constructor.
 // =========================================================================
+
+// Defined further down with the Buffer type; used here to drive format-aware
+// vertex read/write (a Mesh vertex format is a Buffer DataMember list).
+static int buf_ncomponents(const std::vector<Buffer::DataMember> &members);
+static void buf_write_element(mrb_state *mrb, const std::vector<Buffer::DataMember> &members,
+	const mrb_value *comps, int ncomponents, char *dst);
+static void buf_writebufferdata(mrb_state *mrb, const mrb_value *vals, int navail, DataFormat format, char *data);
+static void buf_readbufferdata(mrb_state *mrb, DataFormat format, const char *data, mrb_value out);
+static Buffer::DataDeclaration buf_check_declaration(mrb_state *mrb, mrb_value h);
 
 static PrimitiveType check_mesh_mode(mrb_state *mrb, mrb_value v, PrimitiveType def)
 {
@@ -2495,36 +2508,26 @@ static PrimitiveType check_mesh_mode(mrb_state *mrb, mrb_value v, PrimitiveType 
 	return mode;
 }
 
-// Read a vertex array element [x, y, u, v, r, g, b, a] (u..a optional) into the
-// default-format Vertex struct.
-static Vertex read_std_vertex(mrb_state *mrb, mrb_value el)
-{
-	if (!mrb_array_p(el))
-		mrb_raise(mrb, E_ARGUMENT_ERROR, "Each vertex must be an [x, y, u, v, r, g, b, a] array.");
-	auto num = [&](int i, float def) {
-		mrb_value c = mrb_ary_ref(mrb, el, i);
-		return mrb_undef_p(c) ? def : mrbx_checkfloat(mrb, c);
-	};
-	Vertex v;
-	v.x = num(0, 0.0f);
-	v.y = num(1, 0.0f);
-	v.s = num(2, 0.0f);
-	v.t = num(3, 0.0f);
-	v.color.r = (unsigned char) (clamp01(num(4, 1.0f)) * 255.0f);
-	v.color.g = (unsigned char) (clamp01(num(5, 1.0f)) * 255.0f);
-	v.color.b = (unsigned char) (clamp01(num(6, 1.0f)) * 255.0f);
-	v.color.a = (unsigned char) (clamp01(num(7, 1.0f)) * 255.0f);
-	return v;
-}
-
+// Write a vertex array element (an Array of component values) into the mesh at
+// `index` (0-based), driven by the mesh's vertex format. Short arrays fall back
+// to each format's per-component defaults. One path for standard and custom
+// formats alike (the standard format is pos vec2 + texcoord vec2 + color
+// unorm8 vec4, so [x,y,u,v,r,g,b,a] still works).
 static void mesh_write_vertex(mrb_state *mrb, Mesh *t, size_t index, mrb_value el)
 {
-	Vertex v = read_std_vertex(mrb, el);
+	if (!mrb_array_p(el))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Each vertex must be an array of component values.");
+	const std::vector<Buffer::DataMember> &fmt = t->getVertexFormat();
+	int ncomponents = buf_ncomponents(fmt);
+	std::vector<mrb_value> comps(ncomponents);
+	for (int j = 0; j < ncomponents; j++)
+		comps[j] = mrb_ary_ref(mrb, el, j);
+
 	char *data = nullptr;
 	size_t offset = 0;
 	if (mrbx_catchexcept(mrb, [&]() { data = (char *) t->checkVertexDataOffset(index, &offset); }))
 		return;
-	memcpy(data, &v, sizeof(Vertex));
+	buf_write_element(mrb, fmt, comps.data(), ncomponents, data);
 	t->setVertexDataModified(offset, t->getVertexStride());
 }
 
@@ -2537,6 +2540,8 @@ static mrb_value w_mesh_set_vertex(mrb_state *mrb, mrb_value self)
 	return mrb_nil_value();
 }
 
+// get_vertex(index:) -> a flat Array of the vertex's component values, in
+// format order (e.g. [x,y,u,v,r,g,b,a] for the standard format).
 static mrb_value w_mesh_get_vertex(mrb_state *mrb, mrb_value self)
 {
 	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
@@ -2545,21 +2550,15 @@ static mrb_value w_mesh_get_vertex(mrb_state *mrb, mrb_value self)
 	const char *data = nullptr;
 	if (mrbx_catchexcept(mrb, [&]() { data = (const char *) t->checkVertexDataOffset((size_t) mrbx_checkint(mrb, v[0]) - 1, nullptr); }))
 		return mrb_nil_value();
-	Vertex vert;
-	memcpy(&vert, data, sizeof(Vertex));
-	mrb_value arr = mrb_ary_new_capa(mrb, 8);
-	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.x));
-	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.y));
-	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.s));
-	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.t));
-	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.color.r / 255.0));
-	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.color.g / 255.0));
-	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.color.b / 255.0));
-	mrb_ary_push(mrb, arr, mrbx_number(mrb, vert.color.a / 255.0));
+	const std::vector<Buffer::DataMember> &fmt = t->getVertexFormat();
+	mrb_value arr = mrb_ary_new(mrb);
+	for (const Buffer::DataMember &member : fmt)
+		buf_readbufferdata(mrb, member.decl.format, data + member.offset, arr);
 	return arr;
 }
 
-// set_vertices(vertices:) -- overwrite from vertex 1 (1-based).
+// set_vertices(vertices:) -- overwrite from vertex 1 (1-based). Each element is
+// an Array of component values for the mesh's vertex format.
 static mrb_value w_mesh_set_vertices(mrb_state *mrb, mrb_value self)
 {
 	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
@@ -2571,6 +2570,79 @@ static mrb_value w_mesh_set_vertices(mrb_state *mrb, mrb_value self)
 	for (mrb_int i = 0; i < n; i++)
 		mesh_write_vertex(mrb, t, (size_t) i, mrb_ary_ref(mrb, v[0], i));
 	return mrb_nil_value();
+}
+
+// set_vertex_attribute(index:, attribute:, value:) -- write one attribute of one
+// vertex. `attribute` is a 1-based attribute index into the vertex format;
+// `value` is an Array of that attribute's component values.
+static mrb_value w_mesh_set_vertex_attribute(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"index", "attribute", "value"}, 3, v);
+	size_t vertindex = (size_t) mrbx_checkint(mrb, v[0]) - 1;
+	int attribindex = mrbx_checkint(mrb, v[1]) - 1;
+	const std::vector<Buffer::DataMember> &fmt = t->getVertexFormat();
+	if (attribindex < 0 || attribindex >= (int) fmt.size())
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid vertex attribute index: %d", attribindex + 1);
+	const Buffer::DataMember &member = fmt[attribindex];
+	if (!mrb_array_p(v[2]))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "value: must be an array of component values.");
+	int nc = member.info.components;
+	std::vector<mrb_value> comps(nc);
+	for (int j = 0; j < nc; j++)
+		comps[j] = mrb_ary_ref(mrb, v[2], j);
+
+	char *data = nullptr;
+	size_t offset = 0;
+	if (mrbx_catchexcept(mrb, [&]() { data = (char *) t->checkVertexDataOffset(vertindex, &offset); }))
+		return mrb_nil_value();
+	buf_writebufferdata(mrb, comps.data(), nc, member.decl.format, data + member.offset);
+	t->setVertexDataModified(offset + member.offset, member.size);
+	return mrb_nil_value();
+}
+
+// get_vertex_attribute(index:, attribute:) -> Array of the attribute's component
+// values (`attribute` 1-based).
+static mrb_value w_mesh_get_vertex_attribute(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"index", "attribute"}, 2, v);
+	size_t vertindex = (size_t) mrbx_checkint(mrb, v[0]) - 1;
+	int attribindex = mrbx_checkint(mrb, v[1]) - 1;
+	const std::vector<Buffer::DataMember> &fmt = t->getVertexFormat();
+	if (attribindex < 0 || attribindex >= (int) fmt.size())
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid vertex attribute index: %d", attribindex + 1);
+	const Buffer::DataMember &member = fmt[attribindex];
+	const char *data = nullptr;
+	if (mrbx_catchexcept(mrb, [&]() { data = (const char *) t->checkVertexDataOffset(vertindex, nullptr); }))
+		return mrb_nil_value();
+	mrb_value arr = mrb_ary_new(mrb);
+	buf_readbufferdata(mrb, member.decl.format, data + member.offset, arr);
+	return arr;
+}
+
+// get_vertex_format -> Array of member Hashes {name:, location:, format:,
+// array_length:, offset:}. Mirrors Mesh:getVertexFormat.
+static mrb_value w_mesh_get_vertex_format(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	const std::vector<Buffer::DataMember> &fmt = t->getVertexFormat();
+	mrb_value arr = mrb_ary_new_capa(mrb, (mrb_int) fmt.size());
+	for (const Buffer::DataMember &member : fmt)
+	{
+		mrb_value h = mrb_hash_new(mrb);
+		hset(mrb, h, "name", mrb_str_new_cstr(mrb, member.decl.name.c_str()));
+		hset(mrb, h, "location", mrbx_integer(mrb, member.decl.bindingLocation));
+		const char *formatstr = "unknown";
+		getConstant(member.decl.format, formatstr);
+		hset(mrb, h, "format", mrb_str_new_cstr(mrb, formatstr));
+		hset(mrb, h, "array_length", mrbx_integer(mrb, member.decl.arrayLength));
+		hset(mrb, h, "offset", mrbx_integer(mrb, (int) member.offset));
+		mrb_ary_push(mrb, arr, h);
+	}
+	return arr;
 }
 
 static mrb_value w_mesh_get_vertex_count(mrb_state *mrb, mrb_value self)
@@ -2640,19 +2712,40 @@ static mrb_value w_mesh_get_draw_range(mrb_state *mrb, mrb_value self)
 	return out;
 }
 
-// set_vertex_map(map:) -- an Array of 1-based vertex indices; omitted clears.
+// set_vertex_map(map:, index_type:, count:) -- `map:` is an Array of 1-based
+// vertex indices, or a Data of raw index bytes (then `index_type:` "uint16"/
+// "uint32" is required, `count:` optional); omitted/nil clears the index map.
 static mrb_value w_mesh_set_vertex_map(mrb_state *mrb, mrb_value self)
 {
 	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
-	mrb_value v[1];
-	mrbx_get_kwargs(mrb, {"map"}, 0, v);
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"map", "index_type", "count"}, 0, v);
 	if (mrb_undef_p(v[0]) || mrb_nil_p(v[0]))
 	{
-		t->setVertexMap();
+		mrbx_catchexcept(mrb, [&]() { t->setVertexMap(); });
 		return mrb_nil_value();
 	}
+
+	// Raw index data from a Data object.
+	if (mrbx_istype<love::Data>(mrb, v[0]))
+	{
+		love::Data *d = mrbx_checktype<love::Data>(mrb, v[0]);
+		if (mrb_undef_p(v[1]) || mrb_nil_p(v[1]))
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "index_type: (\"uint16\"/\"uint32\") is required when map: is a Data.");
+		std::string str = mrbx_checkstring(mrb, v[1]);
+		IndexDataType indextype;
+		if (!getConstant(str.c_str(), indextype))
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid index data type: %s", str.c_str());
+		size_t typesize = getIndexDataSize(indextype);
+		int indexcount = mrbx_optint(mrb, v[2], (int) (d->getSize() / typesize));
+		if (indexcount < 1 || (size_t) indexcount * typesize > d->getSize())
+			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid index count: %d", indexcount);
+		mrbx_catchexcept(mrb, [&]() { t->setVertexMap(indextype, d->getData(), indexcount * typesize); });
+		return mrb_nil_value();
+	}
+
 	if (!mrb_array_p(v[0]))
-		mrb_raise(mrb, E_ARGUMENT_ERROR, "map: must be an Array of 1-based indices.");
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "map: must be an Array of 1-based indices or a Data.");
 	std::vector<uint32> map;
 	mrb_int n = RARRAY_LEN(v[0]);
 	for (mrb_int i = 0; i < n; i++)
@@ -2673,6 +2766,176 @@ static mrb_value w_mesh_get_vertex_map(mrb_state *mrb, mrb_value self)
 	return arr;
 }
 
+// set_attribute_enabled(name:/location:, enable:) -- toggle whether an attribute
+// participates in drawing. Identify the attribute by `name:` (String) or
+// `location:` (Integer binding location).
+static mrb_value w_mesh_set_attribute_enabled(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[3];
+	mrbx_get_kwargs(mrb, {"name", "location", "enable"}, 0, v);
+	if (mrb_undef_p(v[2]) || mrb_nil_p(v[2]))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "enable: is required.");
+	bool enable = mrb_test(v[2]);
+	if (!mrb_undef_p(v[0]) && !mrb_nil_p(v[0]))
+	{
+		std::string name = mrbx_checkstring(mrb, v[0]);
+		mrbx_catchexcept(mrb, [&]() { t->setAttributeEnabled(name, enable); });
+	}
+	else if (!mrb_undef_p(v[1]) && !mrb_nil_p(v[1]))
+	{
+		int location = mrbx_checkint(mrb, v[1]);
+		mrbx_catchexcept(mrb, [&]() { t->setAttributeEnabled(location, enable); });
+	}
+	else
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "set_attribute_enabled needs name: or location:.");
+	return mrb_nil_value();
+}
+
+// attribute_enabled?(name:/location:) -> bool.
+static mrb_value w_mesh_is_attribute_enabled(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"name", "location"}, 0, v);
+	bool enabled = false;
+	if (!mrb_undef_p(v[0]) && !mrb_nil_p(v[0]))
+	{
+		std::string name = mrbx_checkstring(mrb, v[0]);
+		mrbx_catchexcept(mrb, [&]() { enabled = t->isAttributeEnabled(name); });
+	}
+	else if (!mrb_undef_p(v[1]) && !mrb_nil_p(v[1]))
+	{
+		int location = mrbx_checkint(mrb, v[1]);
+		mrbx_catchexcept(mrb, [&]() { enabled = t->isAttributeEnabled(location); });
+	}
+	else
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "attribute_enabled? needs name: or location:.");
+	return mrbx_boolean(mrb, enabled);
+}
+
+static AttributeStep check_attribute_step(mrb_state *mrb, mrb_value v, AttributeStep def)
+{
+	if (mrb_undef_p(v) || mrb_nil_p(v))
+		return def;
+	std::string str = mrbx_checkstring(mrb, v);
+	AttributeStep step;
+	if (!getConstant(str.c_str(), step))
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid vertex attribute step: %s", str.c_str());
+	return step;
+}
+
+// attach_attribute(name:/location:, buffer:/mesh:, step:, attach_name:/
+// attach_location:, start_index:) -- bind a vertex attribute sourced from
+// another Buffer (or another Mesh's vertex buffer). Identify the local attribute
+// by name: or location:; the source attribute defaults to the same name/location
+// unless attach_name:/attach_location: override it. step: is "pervertex"
+// (default) or "perinstance"; start_index: is 1-based (default 1).
+static mrb_value w_mesh_attach_attribute(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[8];
+	mrbx_get_kwargs(mrb, {"name", "location", "buffer", "mesh", "step", "attach_name", "attach_location", "start_index"}, 0, v);
+
+	bool byname = !mrb_undef_p(v[0]) && !mrb_nil_p(v[0]);
+	bool byloc = !mrb_undef_p(v[1]) && !mrb_nil_p(v[1]);
+	if (!byname && !byloc)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "attach_attribute needs name: or location:.");
+
+	Buffer *buffer = nullptr;
+	if (!mrb_undef_p(v[2]) && !mrb_nil_p(v[2]))
+		buffer = mrbx_checktype<Buffer>(mrb, v[2]);
+	else if (!mrb_undef_p(v[3]) && !mrb_nil_p(v[3]))
+	{
+		Mesh *src = mrbx_checktype<Mesh>(mrb, v[3]);
+		buffer = src->getVertexBuffer();
+		if (buffer == nullptr)
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "Mesh does not have its own vertex buffer.");
+	}
+	else
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "attach_attribute needs buffer: or mesh:.");
+
+	AttributeStep step = check_attribute_step(mrb, v[4], STEP_PER_VERTEX);
+	int startindex = mrbx_optint(mrb, v[7], 1) - 1;
+
+	if (byname)
+	{
+		std::string name = mrbx_checkstring(mrb, v[0]);
+		std::string attachname = (!mrb_undef_p(v[5]) && !mrb_nil_p(v[5])) ? mrbx_checkstring(mrb, v[5]) : name;
+		mrbx_catchexcept(mrb, [&]() { t->attachAttribute(name, buffer, nullptr, attachname, startindex, step); });
+	}
+	else
+	{
+		int location = mrbx_checkint(mrb, v[1]);
+		int attachloc = mrbx_optint(mrb, v[6], location);
+		mrbx_catchexcept(mrb, [&]() { t->attachAttribute(location, buffer, nullptr, attachloc, startindex, step); });
+	}
+	return mrb_nil_value();
+}
+
+// detach_attribute(name:) -> true if an attribute was detached.
+static mrb_value w_mesh_detach_attribute(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"name"}, 1, v);
+	std::string name = mrbx_checkstring(mrb, v[0]);
+	bool success = false;
+	mrbx_catchexcept(mrb, [&]() { success = t->detachAttribute(name); });
+	return mrbx_boolean(mrb, success);
+}
+
+// get_attached_attributes -> Array of Hashes {name:, location:, buffer:, step:,
+// name_in_buffer:, location_in_buffer:, start_index:}.
+static mrb_value w_mesh_get_attached_attributes(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	const std::vector<Mesh::BufferAttribute> &attributes = t->getAttachedAttributes();
+	mrb_value arr = mrb_ary_new_capa(mrb, (mrb_int) attributes.size());
+	for (const Mesh::BufferAttribute &attrib : attributes)
+	{
+		mrb_value h = mrb_hash_new(mrb);
+		hset(mrb, h, "name", mrb_str_new_cstr(mrb, attrib.name.c_str()));
+		hset(mrb, h, "location", mrbx_integer(mrb, attrib.bindingLocation));
+		hset(mrb, h, "buffer", mrbx_pushtype(mrb, attrib.buffer.get()));
+		const char *stepstr = nullptr;
+		getConstant(attrib.step, stepstr);
+		hset(mrb, h, "step", mrb_str_new_cstr(mrb, stepstr ? stepstr : ""));
+		const Buffer::DataMember &member = attrib.buffer->getDataMember(attrib.indexInBuffer);
+		hset(mrb, h, "name_in_buffer", mrb_str_new_cstr(mrb, member.decl.name.c_str()));
+		hset(mrb, h, "location_in_buffer", mrbx_integer(mrb, member.decl.bindingLocation));
+		hset(mrb, h, "start_index", mrbx_integer(mrb, attrib.startArrayIndex + 1));
+		mrb_ary_push(mrb, arr, h);
+	}
+	return arr;
+}
+
+static mrb_value w_mesh_get_vertex_buffer(mrb_state *mrb, mrb_value self)
+{
+	Buffer *b = mrbx_checktype<Mesh>(mrb, self)->getVertexBuffer();
+	return b ? mrbx_pushtype(mrb, b) : mrb_nil_value();
+}
+
+// set_index_buffer(buffer:) -- use a Buffer as the explicit index buffer
+// (nil/omitted clears it).
+static mrb_value w_mesh_set_index_buffer(mrb_state *mrb, mrb_value self)
+{
+	Mesh *t = mrbx_checktype<Mesh>(mrb, self);
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"buffer"}, 0, v);
+	Buffer *b = nullptr;
+	if (!mrb_undef_p(v[0]) && !mrb_nil_p(v[0]))
+		b = mrbx_checktype<Buffer>(mrb, v[0]);
+	mrbx_catchexcept(mrb, [&]() { t->setIndexBuffer(b); });
+	return mrb_nil_value();
+}
+
+static mrb_value w_mesh_get_index_buffer(mrb_state *mrb, mrb_value self)
+{
+	Buffer *b = mrbx_checktype<Mesh>(mrb, self)->getIndexBuffer();
+	return b ? mrbx_pushtype(mrb, b) : mrb_nil_value();
+}
+
 static mrb_value w_mesh_flush(mrb_state *mrb, mrb_value self)
 {
 	mrbx_checktype<Mesh>(mrb, self)->flush();
@@ -2681,63 +2944,156 @@ static mrb_value w_mesh_flush(mrb_state *mrb, mrb_value self)
 
 static const MrbReg meshFunctions[] =
 {
-	{ "set_vertex",       w_mesh_set_vertex,       MRB_ARGS_KEY(2, 0) },
-	{ "get_vertex",       w_mesh_get_vertex,       MRB_ARGS_KEY(1, 0) },
-	{ "set_vertices",     w_mesh_set_vertices,     MRB_ARGS_KEY(1, 0) },
-	{ "get_vertex_count", w_mesh_get_vertex_count, MRB_ARGS_NONE() },
-	{ "set_texture",      w_mesh_set_texture,      MRB_ARGS_KEY(1, 0) },
-	{ "get_texture",      w_mesh_get_texture,      MRB_ARGS_NONE() },
-	{ "set_draw_mode",    w_mesh_set_draw_mode,    MRB_ARGS_KEY(1, 0) },
-	{ "get_draw_mode",    w_mesh_get_draw_mode,    MRB_ARGS_NONE() },
-	{ "set_draw_range",   w_mesh_set_draw_range,   MRB_ARGS_KEY(2, 0) },
-	{ "get_draw_range",   w_mesh_get_draw_range,   MRB_ARGS_NONE() },
-	{ "set_vertex_map",   w_mesh_set_vertex_map,   MRB_ARGS_KEY(1, 0) },
-	{ "get_vertex_map",   w_mesh_get_vertex_map,   MRB_ARGS_NONE() },
-	{ "flush",            w_mesh_flush,            MRB_ARGS_NONE() },
+	{ "set_vertex",            w_mesh_set_vertex,            MRB_ARGS_KEY(2, 0) },
+	{ "get_vertex",            w_mesh_get_vertex,            MRB_ARGS_KEY(1, 0) },
+	{ "set_vertices",          w_mesh_set_vertices,          MRB_ARGS_KEY(1, 0) },
+	{ "set_vertex_attribute",  w_mesh_set_vertex_attribute,  MRB_ARGS_KEY(3, 0) },
+	{ "get_vertex_attribute",  w_mesh_get_vertex_attribute,  MRB_ARGS_KEY(2, 0) },
+	{ "get_vertex_count",      w_mesh_get_vertex_count,      MRB_ARGS_NONE() },
+	{ "get_vertex_format",     w_mesh_get_vertex_format,     MRB_ARGS_NONE() },
+	{ "set_attribute_enabled", w_mesh_set_attribute_enabled, MRB_ARGS_KEY(3, 0) },
+	{ "attribute_enabled?",    w_mesh_is_attribute_enabled,  MRB_ARGS_KEY(2, 0) },
+	{ "attach_attribute",      w_mesh_attach_attribute,      MRB_ARGS_KEY(8, 0) },
+	{ "detach_attribute",      w_mesh_detach_attribute,      MRB_ARGS_KEY(1, 0) },
+	{ "get_attached_attributes", w_mesh_get_attached_attributes, MRB_ARGS_NONE() },
+	{ "get_vertex_buffer",     w_mesh_get_vertex_buffer,     MRB_ARGS_NONE() },
+	{ "set_texture",           w_mesh_set_texture,           MRB_ARGS_KEY(1, 0) },
+	{ "get_texture",           w_mesh_get_texture,           MRB_ARGS_NONE() },
+	{ "set_draw_mode",         w_mesh_set_draw_mode,         MRB_ARGS_KEY(1, 0) },
+	{ "get_draw_mode",         w_mesh_get_draw_mode,         MRB_ARGS_NONE() },
+	{ "set_draw_range",        w_mesh_set_draw_range,        MRB_ARGS_KEY(2, 0) },
+	{ "get_draw_range",        w_mesh_get_draw_range,        MRB_ARGS_NONE() },
+	{ "set_vertex_map",        w_mesh_set_vertex_map,        MRB_ARGS_KEY(3, 0) },
+	{ "get_vertex_map",        w_mesh_get_vertex_map,        MRB_ARGS_NONE() },
+	{ "set_index_buffer",      w_mesh_set_index_buffer,      MRB_ARGS_KEY(1, 0) },
+	{ "get_index_buffer",      w_mesh_get_index_buffer,      MRB_ARGS_NONE() },
+	{ "flush",                 w_mesh_flush,                 MRB_ARGS_NONE() },
 	{ nullptr, nullptr, 0 }
 };
 
-// new_mesh(vertices:, count:, mode:, usage:) -- give vertices: (an Array of
-// [x,y,u,v,r,g,b,a]) or count: (an empty mesh of N vertices). mode defaults to
-// "fan", usage to "dynamic". Standard vertex format only.
+// Parse one Mesh::BufferAttribute from a Ruby Hash {buffer:, location:, name:,
+// step:, location_in_buffer:, name_in_buffer:, start_index:}. Mirrors
+// luax_checkbufferattributetable.
+static Mesh::BufferAttribute mesh_check_buffer_attribute(mrb_state *mrb, mrb_value h)
+{
+	if (!mrb_hash_p(h))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Each Mesh buffer attribute must be a Hash.");
+	auto field = [&](const char *k) {
+		return mrb_hash_get(mrb, h, mrb_symbol_value(mrb_intern_cstr(mrb, k)));
+	};
+
+	Mesh::BufferAttribute attrib;
+	attrib.step = STEP_PER_VERTEX;
+	attrib.enabled = true;
+
+	mrb_value buf = field("buffer");
+	if (mrb_nil_p(buf))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Mesh buffer attribute needs a buffer:.");
+	attrib.buffer = mrbx_checktype<Buffer>(mrb, buf);
+
+	mrb_value loc = field("location");
+	if (mrb_nil_p(loc))
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Mesh buffer attribute needs a location:.");
+	attrib.bindingLocation = mrbx_checkint(mrb, loc);
+
+	mrb_value name = field("name");
+	if (!mrb_nil_p(name))
+		attrib.name = mrbx_checkstring(mrb, name);
+
+	attrib.step = check_attribute_step(mrb, field("step"), STEP_PER_VERTEX);
+
+	mrb_value locinbuf = field("location_in_buffer");
+	attrib.bindingLocationInBuffer = mrb_nil_p(locinbuf) ? attrib.bindingLocation : mrbx_checkint(mrb, locinbuf);
+
+	mrb_value nameinbuf = field("name_in_buffer");
+	attrib.nameInBuffer = mrb_nil_p(nameinbuf) ? attrib.name : mrbx_checkstring(mrb, nameinbuf);
+
+	mrb_value startidx = field("start_index");
+	attrib.startArrayIndex = (mrb_nil_p(startidx) ? 1 : mrbx_checkint(mrb, startidx)) - 1;
+
+	return attrib;
+}
+
+// new_mesh(vertices:, count:, format:, data:, buffers:, mode:, usage:).
+// Three constructors, mirroring love.graphics.newMesh:
+//  - buffers: an Array of attribute Hashes -> a Mesh sourced from existing GPU
+//    Buffers (see mesh_check_buffer_attribute); mode: only.
+//  - otherwise a vertex format: format: an Array of declaration Hashes for a
+//    custom format, else the default [position, texcoord, color] standard
+//    format. Supply vertices: (an Array of per-vertex component arrays), data:
+//    (a Data of packed vertex bytes), or count: (an empty mesh of N vertices).
+// mode: defaults to "fan", usage: to "dynamic".
 static mrb_value w_new_mesh(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
-	mrb_value v[4];
-	mrbx_get_kwargs(mrb, {"vertices", "count", "mode", "usage"}, 0, v);
+	mrb_value v[7];
+	mrbx_get_kwargs(mrb, {"vertices", "count", "format", "data", "buffers", "mode", "usage"}, 0, v);
 
-	PrimitiveType drawmode = check_mesh_mode(mrb, v[2], PRIMITIVE_TRIANGLE_FAN);
+	PrimitiveType drawmode = check_mesh_mode(mrb, v[5], PRIMITIVE_TRIANGLE_FAN);
 	BufferDataUsage usage = BUFFERDATAUSAGE_DYNAMIC;
-	if (!mrb_undef_p(v[3]))
+	if (!mrb_undef_p(v[6]) && !mrb_nil_p(v[6]))
 	{
-		std::string str = mrbx_checkstring(mrb, v[3]);
+		std::string str = mrbx_checkstring(mrb, v[6]);
 		if (!getConstant(str.c_str(), usage))
 			mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid usage hint: %s", str.c_str());
 	}
 
-	std::vector<Buffer::DataDeclaration> format = Mesh::getDefaultVertexFormat();
 	Mesh *t = nullptr;
 
-	if (!mrb_undef_p(v[0]) && mrb_array_p(v[0]))
+	// From-buffers constructor.
+	if (!mrb_undef_p(v[4]) && !mrb_nil_p(v[4]))
 	{
-		mrb_int n = RARRAY_LEN(v[0]);
-		std::vector<Vertex> vertices;
-		vertices.reserve(n);
+		if (!mrb_array_p(v[4]))
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "buffers: must be an Array of attribute Hashes.");
+		std::vector<Mesh::BufferAttribute> attributes;
+		mrb_int n = RARRAY_LEN(v[4]);
 		for (mrb_int i = 0; i < n; i++)
-			vertices.push_back(read_std_vertex(mrb, mrb_ary_ref(mrb, v[0], i)));
-		if (mrbx_catchexcept(mrb, [&]() {
-			t = instance()->newMesh(format, vertices.data(), vertices.size() * sizeof(Vertex), drawmode, usage);
-		}))
+			attributes.push_back(mesh_check_buffer_attribute(mrb, mrb_ary_ref(mrb, v[4], i)));
+		if (mrbx_catchexcept(mrb, [&]() { t = instance()->newMesh(attributes, drawmode); }))
+			return mrb_nil_value();
+		mrb_value resb = mrbx_pushtype(mrb, t);
+		t->release();
+		return resb;
+	}
+
+	// Vertex format: custom (format:) or the default standard format.
+	std::vector<Buffer::DataDeclaration> format;
+	if (!mrb_undef_p(v[2]) && !mrb_nil_p(v[2]))
+	{
+		if (!mrb_array_p(v[2]))
+			mrb_raise(mrb, E_ARGUMENT_ERROR, "format: must be an Array of declaration Hashes.");
+		mrb_int n = RARRAY_LEN(v[2]);
+		for (mrb_int i = 0; i < n; i++)
+			format.push_back(buf_check_declaration(mrb, mrb_ary_ref(mrb, v[2], i)));
+	}
+	else
+		format = Mesh::getDefaultVertexFormat();
+
+	if (!mrb_undef_p(v[3]) && mrbx_istype<love::Data>(mrb, v[3]))
+	{
+		// Packed vertex bytes straight from a Data object.
+		love::Data *d = mrbx_checktype<love::Data>(mrb, v[3]);
+		if (mrbx_catchexcept(mrb, [&]() { t = instance()->newMesh(format, d->getData(), d->getSize(), drawmode, usage); }))
 			return mrb_nil_value();
 	}
-	else if (!mrb_undef_p(v[1]))
+	else if (!mrb_undef_p(v[0]) && mrb_array_p(v[0]))
+	{
+		// Empty mesh of N vertices, then fill format-aware from the Array.
+		mrb_int n = RARRAY_LEN(v[0]);
+		if (mrbx_catchexcept(mrb, [&]() { t = instance()->newMesh(format, (int) n, drawmode, usage); }))
+			return mrb_nil_value();
+		for (mrb_int i = 0; i < n; i++)
+			mesh_write_vertex(mrb, t, (size_t) i, mrb_ary_ref(mrb, v[0], i));
+		t->flush();
+	}
+	else if (!mrb_undef_p(v[1]) && !mrb_nil_p(v[1]))
 	{
 		int count = mrbx_checkint(mrb, v[1]);
 		if (mrbx_catchexcept(mrb, [&]() { t = instance()->newMesh(format, count, drawmode, usage); }))
 			return mrb_nil_value();
 	}
 	else
-		mrb_raise(mrb, E_ARGUMENT_ERROR, "new_mesh needs vertices: or count:.");
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "new_mesh needs vertices:, data:, count:, or buffers:.");
 
 	mrb_value res = mrbx_pushtype(mrb, t);
 	t->release();
@@ -3153,6 +3509,81 @@ static void buf_writebufferdata(mrb_state *mrb, const mrb_value *vals, int navai
 		case DATAFORMAT_UINT16:      buf_writeData<uint16>(mrb, vals, navail, 1, data); break;
 		case DATAFORMAT_UINT16_VEC2: buf_writeData<uint16>(mrb, vals, navail, 2, data); break;
 		case DATAFORMAT_UINT16_VEC4: buf_writeData<uint16>(mrb, vals, navail, 4, data); break;
+
+		default: break;
+	}
+}
+
+// Read templates: append `components` values of type T from `data` to the Ruby
+// Array `out`. Mirror readData/readSNormData/readUNormData in wrap_Buffer.cpp.
+template <typename T>
+static void buf_readData(mrb_state *mrb, int components, const char *data, mrb_value out)
+{
+	auto cd = (const T *) data;
+	for (int i = 0; i < components; i++)
+		mrb_ary_push(mrb, out, mrbx_number(mrb, (double) cd[i]));
+}
+
+template <typename T>
+static void buf_readSNorm(mrb_state *mrb, int components, const char *data, mrb_value out)
+{
+	auto cd = (const T *) data;
+	constexpr auto maxval = std::numeric_limits<T>::max();
+	for (int i = 0; i < components; i++)
+	{
+		double d = (double) cd[i] / (double) maxval;
+		mrb_ary_push(mrb, out, mrbx_number(mrb, d < -1.0 ? -1.0 : d));
+	}
+}
+
+template <typename T>
+static void buf_readUNorm(mrb_state *mrb, int components, const char *data, mrb_value out)
+{
+	auto cd = (const T *) data;
+	constexpr auto maxval = std::numeric_limits<T>::max();
+	for (int i = 0; i < components; i++)
+		mrb_ary_push(mrb, out, mrbx_number(mrb, (double) cd[i] / (double) maxval));
+}
+
+// mruby analog of luax_readbufferdata: append one member's components (as
+// Numbers) to `out`. Faithful to wrap_Buffer.cpp's read path (no matrix
+// formats, matching the Lua reader).
+static void buf_readbufferdata(mrb_state *mrb, DataFormat format, const char *data, mrb_value out)
+{
+	switch (format)
+	{
+		case DATAFORMAT_FLOAT:      buf_readData<float>(mrb, 1, data, out); break;
+		case DATAFORMAT_FLOAT_VEC2: buf_readData<float>(mrb, 2, data, out); break;
+		case DATAFORMAT_FLOAT_VEC3: buf_readData<float>(mrb, 3, data, out); break;
+		case DATAFORMAT_FLOAT_VEC4: buf_readData<float>(mrb, 4, data, out); break;
+
+		case DATAFORMAT_INT32:      buf_readData<int32>(mrb, 1, data, out); break;
+		case DATAFORMAT_INT32_VEC2: buf_readData<int32>(mrb, 2, data, out); break;
+		case DATAFORMAT_INT32_VEC3: buf_readData<int32>(mrb, 3, data, out); break;
+		case DATAFORMAT_INT32_VEC4: buf_readData<int32>(mrb, 4, data, out); break;
+
+		case DATAFORMAT_UINT32:      buf_readData<uint32>(mrb, 1, data, out); break;
+		case DATAFORMAT_UINT32_VEC2: buf_readData<uint32>(mrb, 2, data, out); break;
+		case DATAFORMAT_UINT32_VEC3: buf_readData<uint32>(mrb, 3, data, out); break;
+		case DATAFORMAT_UINT32_VEC4: buf_readData<uint32>(mrb, 4, data, out); break;
+
+		case DATAFORMAT_SNORM8_VEC4: buf_readSNorm<int8>(mrb, 4, data, out); break;
+		case DATAFORMAT_UNORM8_VEC4: buf_readUNorm<uint8>(mrb, 4, data, out); break;
+		case DATAFORMAT_INT8_VEC4:   buf_readData<int8>(mrb, 4, data, out); break;
+		case DATAFORMAT_UINT8_VEC4:  buf_readData<uint8>(mrb, 4, data, out); break;
+
+		case DATAFORMAT_SNORM16_VEC2: buf_readSNorm<int16>(mrb, 2, data, out); break;
+		case DATAFORMAT_SNORM16_VEC4: buf_readSNorm<int16>(mrb, 4, data, out); break;
+
+		case DATAFORMAT_UNORM16_VEC2: buf_readUNorm<uint16>(mrb, 2, data, out); break;
+		case DATAFORMAT_UNORM16_VEC4: buf_readUNorm<uint16>(mrb, 4, data, out); break;
+
+		case DATAFORMAT_INT16_VEC2: buf_readData<int16>(mrb, 2, data, out); break;
+		case DATAFORMAT_INT16_VEC4: buf_readData<int16>(mrb, 4, data, out); break;
+
+		case DATAFORMAT_UINT16:      buf_readData<uint16>(mrb, 1, data, out); break;
+		case DATAFORMAT_UINT16_VEC2: buf_readData<uint16>(mrb, 2, data, out); break;
+		case DATAFORMAT_UINT16_VEC4: buf_readData<uint16>(mrb, 4, data, out); break;
 
 		default: break;
 	}
@@ -3776,7 +4207,7 @@ static const MrbReg functions[] =
 	{ "new_sprite_batch",     w_new_sprite_batch,     MRB_ARGS_KEY(3, 0) },
 	{ "new_text_batch",       w_new_text_batch,       MRB_ARGS_KEY(2, 0) },
 	{ "new_particle_system",  w_new_particle_system,  MRB_ARGS_KEY(2, 0) },
-	{ "new_mesh",             w_new_mesh,             MRB_ARGS_KEY(4, 0) },
+	{ "new_mesh",             w_new_mesh,             MRB_ARGS_KEY(7, 0) },
 	{ "new_buffer",           w_new_buffer,           MRB_ARGS_KEY(6, 0) },
 	{ "readback_buffer",      w_readback_buffer,      MRB_ARGS_KEY(5, 0) },
 	{ "readback_buffer_async", w_readback_buffer_async, MRB_ARGS_KEY(5, 0) },

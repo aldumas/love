@@ -504,14 +504,36 @@ them changes when we swap.
       `emit`(`count:`)/`update`(`dt:`)/`get_count`/`active?`/`paused?`/`stopped?`/
       `empty?`/`full?`). min/max (or x/y component) pairs are keyword args, and
       multi-value getters return Hashes; colors are Arrays of [r,g,b,a]. The
-      `Love::Mesh` object type is exposed for the **standard vertex format** (a
-      vertex is `[x, y, u, v, r, g, b, a]`): `new_mesh` (`vertices:` an Array of
-      such, or `count:` for an empty mesh; `mode:` "fan"/"strip"/"triangles"/
-      "points"; `usage:`) and `set_vertex`/`get_vertex` (1-based) / `set_vertices`
-      / `get_vertex_count` / `set_texture`/`get_texture` / `set_draw_mode`/
-      `get_draw_mode` / `set_draw_range`/`get_draw_range` / `set_vertex_map`/
-      `get_vertex_map` (1-based) / `flush`. Custom vertex formats, per-attribute
-      access, attached attributes, and explicit index buffers aren't ported. The
+      `Love::Mesh` object type is fully exposed, for both the **standard vertex
+      format** (a vertex is `[x, y, u, v, r, g, b, a]`) and **custom vertex
+      formats**. Vertex read/write is driven by the mesh's actual format via the
+      shared Buffer data helpers (the standard format is just one such format,
+      so it round-trips identically). `new_mesh` takes three constructors:
+      `format:` (an Array of declaration Hashes `{name:, format:, array_length:,
+      location:}`) for a custom format, else the default standard format, with
+      `vertices:` (an Array of per-vertex component arrays), `data:` (a Data of
+      packed vertex bytes), or `count:` (empty); or `buffers:` (an Array of
+      attribute Hashes `{buffer:, location:, name:, step:, location_in_buffer:,
+      name_in_buffer:, start_index:}`) for a mesh sourced from existing GPU
+      Buffers; plus `mode:` "fan"/"strip"/"triangles"/"points" and `usage:`. The
+      methods: `set_vertex`/`get_vertex` (1-based; `get_vertex` returns a flat
+      component Array in format order) / `set_vertices` / `set_vertex_attribute`/
+      `get_vertex_attribute` (`attribute:` a 1-based attribute index, `value:`/
+      return an Array of that attribute's components) / `get_vertex_count` /
+      `get_vertex_format` (-> Array of member Hashes `{name:, location:, format:,
+      array_length:, offset:}`) / `set_attribute_enabled`/`attribute_enabled?`
+      (by `name:` or `location:`) / `attach_attribute` (bind a Buffer/Mesh as a
+      named or located attribute; `step:` "pervertex"/"perinstance",
+      `attach_name:`/`attach_location:`, `start_index:`) / `detach_attribute`
+      (`name:` -> bool) / `get_attached_attributes` (-> Array of Hashes) /
+      `get_vertex_buffer` / `set_texture`/`get_texture` / `set_draw_mode`/
+      `get_draw_mode` / `set_draw_range`/`get_draw_range` / `set_vertex_map`
+      (an Array of 1-based indices, or a Data + `index_type:` "uint16"/"uint32"
+      + optional `count:`) / `get_vertex_map` (1-based) / `set_index_buffer`/
+      `get_index_buffer` (an explicit GPU index Buffer) / `flush`. The legacy
+      `{name, datatype, components}` format-declaration form is intentionally
+      dropped (deprecated upstream; use the declaration Hash). Covered by
+      `mesh_test.rb`. The
       `Love::Video` object type is exposed (`new_video` (`file:` an .ogv theora
       filename, `dpi_scale:`) + `play`/`pause`/`seek`/`rewind`/`tell`/`playing?`
       / `get_stream` / `get_source` / dimensions / `set_filter`/`get_filter`),
@@ -542,12 +564,11 @@ them changes when we swap.
       each color applying to the strings after it. Built by `check_colored_string`
       in wrap_Graphics_mrb.cpp, faithful to `luax_checkcoloredstring`. Covered by
       `textbatch_test.rb`.
-      SpriteBatch's add_layer/set_layer (array textures) and Mesh
-      attach_attribute (binding a Buffer as a custom vertex attribute) aren't
-      ported — Buffer itself now is, but the Mesh-side custom-vertex-format and
-      explicit-index-buffer paths still aren't; nor are the
-      slice/mipmap/explicit-depthstencil-texture set_canvas variants or the
-      low-level set_stencil_state / set_depth_state.
+      SpriteBatch's add_layer/set_layer (array textures) aren't ported; nor are
+      the slice/mipmap/explicit-depthstencil-texture set_canvas variants or the
+      low-level set_stencil_state / set_depth_state. (The Mesh custom-vertex-
+      format, attach_attribute, and explicit-index-buffer paths are now ported —
+      see the Mesh paragraph above.)
 
       Name collision (font vs graphics): the love.font module and the graphics `Font`
       *type* both map to `Love::Font`. Resolved as for data/thread/joystick --
@@ -596,8 +617,7 @@ them changes when we swap.
       object type they expose are now ported, including the low-level GPU
       `Buffer` (`GraphicsBuffer`) and `GraphicsReadback` types. What remains is
       a handful of per-type *features*, each already noted at its module in §A/§B
-      (e.g. Mesh custom vertex formats / attach_attribute / explicit index
-      buffers, SpriteBatch array-texture layers).
+      (e.g. SpriteBatch array-texture layers).
       No whole module or object type is unported.
 - [ ] Memory audit (do once the port is otherwise complete): sweep the mruby
       bindings for allocation/deallocation correctness. Two classes to look for:
