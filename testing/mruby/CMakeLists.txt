@@ -309,9 +309,28 @@ set(HARNESS_SRCS
 	${LOVE_SRC}/modules/physics/box2d/MotorJoint.cpp
 	${LOVE_SRC}/modules/physics/box2d/Contact.cpp)
 
-add_executable(love_mrb_harness ${HARNESS_SRCS})
-target_compile_definitions(love_mrb_harness PRIVATE ${LOVE_DEFS})
-target_include_directories(love_mrb_harness PRIVATE ${LOVE_INCS})
+# Bake the ported boot scripts into the binary (Stage-3 embedding de-risk; see
+# CMAKE_MIGRATION.md). Each .rb -> a generated <name>_rb.h C string via the
+# robust hex generator, so the harness boots without reading them from disk.
+set(LOVE_MODULE_DIR "${LOVE_SRC}/modules/love")
+set(EMBED_DIR "${CMAKE_CURRENT_BINARY_DIR}/embedded")
+file(MAKE_DIRECTORY ${EMBED_DIR})
+set(EMBEDDED_HEADERS "")
+foreach(script arg callbacks boot)
+	set(out "${EMBED_DIR}/${script}_rb.h")
+	add_custom_command(
+		OUTPUT "${out}"
+		COMMAND ${CMAKE_COMMAND}
+			-DIN=${LOVE_MODULE_DIR}/${script}.rb -DOUT=${out} -DVAR=${script}_rb
+			-P ${CMAKE_CURRENT_SOURCE_DIR}/embed_script.cmake
+		DEPENDS "${LOVE_MODULE_DIR}/${script}.rb" "${CMAKE_CURRENT_SOURCE_DIR}/embed_script.cmake"
+		COMMENT "Embedding ${script}.rb")
+	list(APPEND EMBEDDED_HEADERS "${out}")
+endforeach()
+
+add_executable(love_mrb_harness ${HARNESS_SRCS} ${EMBEDDED_HEADERS})
+target_compile_definitions(love_mrb_harness PRIVATE ${LOVE_DEFS} LOVE_MRB_EMBEDDED_SCRIPTS)
+target_include_directories(love_mrb_harness PRIVATE ${LOVE_INCS} ${EMBED_DIR})
 target_compile_options(love_mrb_harness PRIVATE -Wall)
 
 target_link_libraries(love_mrb_harness PRIVATE

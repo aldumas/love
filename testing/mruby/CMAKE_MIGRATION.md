@@ -38,7 +38,38 @@ scripting layer (Lua→mruby) and the bindings (`wrap_*.cpp`→`wrap_*_mrb.cpp`)
   to the Makefile build (incl. the pre-existing `filesystem_mount_test.rb`
   fixture failure, which fails the same way under both). Validates the mruby
   CMake target, flags, archive ordering, and PIC/PIE handling.
-- Stages 1–5 (main `CMakeLists.txt`): not started.
+- **Stage 3 embedding (de-risk): DONE.** `embed_script.cmake` hex-encodes a
+  script into a `<name>_rb.h` C string (robust — no escaping / raw-string
+  pitfalls; the Lua in-file `R"luastring"--(` trick relies on `--` comments and
+  does **not** translate to Ruby). The harness CMake bakes in arg/callbacks/boot;
+  `harness.cpp` boots from the embedded strings under
+  `LOVE_MRB_EMBEDDED_SCRIPTS` (verified booting from a foreign cwd — scripts are
+  in the binary, only the game file is read from disk). Reusable verbatim by the
+  main migration. **Note**: emit `unsigned char` (UTF-8 bytes like the "Ö" in
+  LÖVE narrow in signed `char`); the consumer casts to `const char *`.
+- **`nogame.rb` not ported.** `src/scripts/nogame.lua` is 3302 lines (the
+  animated no-game screen with base64-embedded art). It's only the "no game
+  provided" fallback, not needed to *run* a game; defer to a later pass and use a
+  minimal placeholder for the first mruby `love` build.
+- Stages 1, 2, 4, 5 (main `CMakeLists.txt`): not started — see the open decision
+  below.
+
+## OPEN DECISION (needed before the main CMakeLists.txt work)
+How to structure the mruby build in the 2176-line `CMakeLists.txt`:
+- **(A) Retrofit** — add `option(LOVE_MRUBY)`; behind it, swap each module
+  group's `wrap_X.cpp`→`wrap_X_mrb.cpp`, `runtime.cpp`→`mrb_runtime.cpp`,
+  `LuaThread.cpp`→`LuaThread_mrb.cpp`, replace `lovedep::Lua` with mruby, exclude
+  lua53/luajit/socket/enet, and fork the boot in `love.cpp`/`love_mrb.cpp`.
+  Faithful to the ledger wording; one build system; but invasive across ~21
+  groups + boot + exe, and the Lua and mruby builds must both keep working.
+- **(B) Parallel path** — a dedicated `cmake/LoveMruby.cmake` (promoting the
+  proven harness source list) that builds `love`/`liblove` when
+  `-DLOVE_MRUBY=ON`, leaving the Lua machinery untouched. Lower risk,
+  self-contained, some source-list duplication.
+Recommendation: **(A)** for fidelity if the Lua build must stay first-class; **(B)**
+if the mruby build is the future and we want it isolated and low-risk. Either
+way the boot entry + embedding (done above) and the source list (from the
+harness) are reused.
 
 ## The CMake delta, staged
 

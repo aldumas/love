@@ -108,20 +108,13 @@ static bool read_file(const char *path, std::string &out)
 	return true;
 }
 
-// Loads and runs a Ruby file with a filename context (for backtraces). Returns
-// false if the file can't be read or raised an exception (which is printed).
-static bool run_file(mrb_state *mrb, const std::string &path)
+// Runs Ruby source with a filename context (for backtraces). Returns false if it
+// raised an exception (which is printed).
+static bool run_source(mrb_state *mrb, const char *source, const char *name)
 {
-	std::string source;
-	if (!read_file(path.c_str(), source))
-	{
-		fprintf(stderr, "could not read script: %s\n", path.c_str());
-		return false;
-	}
-
 	mrbc_context *ctx = mrbc_context_new(mrb);
-	mrbc_filename(mrb, ctx, path.c_str());
-	mrb_load_string_cxt(mrb, source.c_str(), ctx);
+	mrbc_filename(mrb, ctx, name);
+	mrb_load_string_cxt(mrb, source, ctx);
 	mrbc_context_free(mrb, ctx);
 
 	if (mrb->exc)
@@ -132,6 +125,29 @@ static bool run_file(mrb_state *mrb, const std::string &path)
 	}
 	return true;
 }
+
+// Loads and runs a Ruby file with a filename context. Returns false if the file
+// can't be read or raised an exception (which is printed).
+static bool run_file(mrb_state *mrb, const std::string &path)
+{
+	std::string source;
+	if (!read_file(path.c_str(), source))
+	{
+		fprintf(stderr, "could not read script: %s\n", path.c_str());
+		return false;
+	}
+	return run_source(mrb, source.c_str(), path.c_str());
+}
+
+// When the build bakes the boot scripts in (the CMake builds; see
+// embed_script.cmake), boot from the embedded strings rather than reading them
+// from LOVE_SRC_DIR -- the path a shipped binary takes. The Makefile build
+// leaves this undefined and reads the scripts from disk (a dev convenience).
+#ifdef LOVE_MRB_EMBEDDED_SCRIPTS
+#include "arg_rb.h"
+#include "callbacks_rb.h"
+#include "boot_rb.h"
+#endif
 
 #ifndef LOVE_SRC_DIR
 #define LOVE_SRC_DIR "."
@@ -157,9 +173,16 @@ static int run_boot(mrb_state *mrb, const std::string &game)
 	mrb_gv_set(mrb, mrb_intern_lit(mrb, "$LOVE_GAME_FILE"), mrb_str_new_cstr(mrb, game.c_str()));
 	mrb_gv_set(mrb, mrb_intern_lit(mrb, "$LOVE_GAME_SOURCE"), mrb_str_new(mrb, gamesrc.data(), gamesrc.size()));
 
+#ifdef LOVE_MRB_EMBEDDED_SCRIPTS
+	(void) scriptdir;
+	if (!run_source(mrb, (const char *) arg_rb,       "arg.rb"))       return 1;
+	if (!run_source(mrb, (const char *) callbacks_rb, "callbacks.rb")) return 1;
+	if (!run_source(mrb, (const char *) boot_rb,      "boot.rb"))      return 1;
+#else
 	if (!run_file(mrb, scriptdir + "arg.rb"))       return 1;
 	if (!run_file(mrb, scriptdir + "callbacks.rb")) return 1;
 	if (!run_file(mrb, scriptdir + "boot.rb"))      return 1;
+#endif
 
 	mrb_value fiber = mrb_gv_get(mrb, mrb_intern_lit(mrb, "$LOVE_MAIN"));
 	mrb_value last = mrb_nil_value();
