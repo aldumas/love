@@ -92,17 +92,24 @@ The core migration is done — `-DLOVE_MRUBY=ON` builds a working `love`. Left:
 - **`nogame.rb`**: `src/scripts/nogame.lua` (3302 lines, animated, base64 art)
   isn't ported; `love` currently requires a game arg (prints usage otherwise).
   Port or use a minimal placeholder — not needed to *run* a game.
-- **Install rules**: `cmake/LoveMruby.cmake` builds `love` but adds no
-  `install()` rules yet (the Lua path's are skipped by the `return()`).
-- **A `liblove` shared lib** (optional): the mruby build currently produces a
-  single static-linked `love` exe (like the harness). Splitting out a shared
-  `liblove` can come later if needed; the OBJECT library makes that easy.
 - **Other platforms**: Linux/OpenGL only (`LOVE_MRUBY_NO_VULKAN`); Windows/macOS
   /Android + Vulkan/Metal are separate efforts.
 - **CI**: validate `.github/workflows/mruby.yml` on a real runner (it builds the
   harness; point it at `-DLOVE_MRUBY=ON` once install/packaging lands).
 - **Stage 5**: the ASan memory audit (the other open §C item), now runnable since
   CMake controls the flags.
+- **Hidden-ABI cleanup** (optional): `liblove` currently uses default visibility
+  (exports module + mruby symbols) so the dev harness can drive mruby directly.
+  Tightening to export only `love_mrb_main` (hidden preset + `LOVE_EXPORT`) would
+  need the harness to go through exported entry points or share mruby explicitly.
+
+**Done since:** the **shared-`liblove` split** — `cmake/LoveMruby.cmake` now
+builds `liblove.so` (modules + runtime + the boot driver `src/love_mrb.cpp`,
+which exports `love_mrb_main`) and a thin `love` exe (`src/love_mrb_exe.cpp`,
+~16 KB) that forwards to it, mirroring the Lua `src/love.cpp`→`liblove` layout.
+Both install (`bin/love`, `lib/liblove.so`; the installed `love` finds the lib
+via `$ORIGIN/../lib`). The dev harness links the same `liblove`. Plus the
+`love` **install rule**.
 
 > Maintenance note (sync): the **one** mruby source list lives in
 > `cmake/LoveMruby.cmake` (`LOVE_MRB_MODULE_SRCS`). When upstream adds a source

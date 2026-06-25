@@ -300,33 +300,47 @@ set(LOVE_MRB_MODULE_SRCS
 	${LOVE_SRC}/modules/physics/box2d/MotorJoint.cpp
 	${LOVE_SRC}/modules/physics/box2d/Contact.cpp)
 
-# OBJECT (not STATIC): love_mrb and the gfx archive reference each other (e.g.
-# gfx pulls common/memory.cpp's alignUp), a cycle a single static-link pass can't
-# resolve. As an object library all its objects land in the exe directly (what
-# compiling them into the exe would do), so order/cycles don't matter.
-add_library(love_mrb OBJECT ${LOVE_MRB_MODULE_SRCS})
-# PUBLIC so the exes (love, the dev harness) inherit the defs/includes, incl. the
-# embedded-headers dir.
-target_compile_definitions(love_mrb PUBLIC ${LOVE_MRB_DEFS})
-target_include_directories(love_mrb PUBLIC ${LOVE_MRB_INCS} ${LOVE_MRB_EMBED_DIR})
+# --- liblove: the shared engine library ---------------------------------------
+# Every ported module + common runtime + the boot driver (src/love_mrb.cpp,
+# which exports love_mrb_main). The bundled archives + mruby + system libs are
+# linked PRIVATE (baked into the .so). The modules are *direct* sources (not an
+# archive), so the liblove<->gfx cycle (gfx pulls common/memory.cpp's alignUp)
+# resolves with all module objects present -- the same reason the OBJECT-library
+# form worked. Default visibility (no hidden preset): the dev harness drives
+# mruby and the module openers directly, so it needs those symbols exported.
+# Tightening to a hidden ABI (export only love_mrb_main) is a future cleanup.
+include(GNUInstallDirs)
 
-# Link list for any exe built on top of love_mrb. Archive order matters: a static
-# lib must follow the objects that reference it (love_mrb -> gfx -> glslang/xxhash).
-set(LOVE_MRB_LIBS
-	love_mrb
+add_library(liblove SHARED
+	${LOVE_MRB_MODULE_SRCS}
+	${LOVE_SRC}/love_mrb.cpp
+	${LOVE_MRB_EMBEDDED_HEADERS})
+set_target_properties(liblove PROPERTIES PREFIX "" OUTPUT_NAME liblove)
+target_compile_definitions(liblove PUBLIC ${LOVE_MRB_DEFS})
+target_include_directories(liblove PUBLIC ${LOVE_MRB_INCS} ${LOVE_MRB_EMBED_DIR})
+target_link_libraries(liblove PRIVATE
 	mrbh_physfs mrbh_lz4 mrbh_wuff mrbh_gfx mrbh_glslang mrbh_xxhash mrbh_box2d
 	${MRUBY_LIB}
 	SDL3 GL pthread m z
 	${FREETYPE_LIBRARIES} ${HARFBUZZ_LIBRARIES}
 	vorbisfile vorbis ogg modplug ${OPENAL_LIBRARIES} theoradec)
+target_link_directories(liblove PRIVATE ${SDL_LIBDIR})
+set_target_properties(liblove PROPERTIES BUILD_RPATH ${SDL_LIBDIR})
 
-# --- the love executable ------------------------------------------------------
-add_executable(love ${LOVE_SRC}/love_mrb.cpp ${LOVE_MRB_EMBEDDED_HEADERS})
-target_compile_definitions(love PRIVATE LOVE_BUILD_EXE)
+# Consumers (the love exe, the dev harness) link just liblove.
+set(LOVE_MRB_LIBS liblove)
+
+# --- the thin love executable -------------------------------------------------
+# Forwards to liblove's love_mrb_main (mirrors the Lua src/love.cpp -> liblove).
+add_executable(love ${LOVE_SRC}/love_mrb_exe.cpp)
 target_compile_options(love PRIVATE -Wall)
-target_link_libraries(love PRIVATE ${LOVE_MRB_LIBS})
-target_link_directories(love PRIVATE ${SDL_LIBDIR})
-set_target_properties(love PROPERTIES BUILD_RPATH ${SDL_LIBDIR})
+target_link_libraries(love PRIVATE liblove)
+# CMake auto-adds liblove's build dir to the exe RPATH; add SDL for runtime, and
+# $ORIGIN/../lib so the installed love finds the installed liblove.
+set_target_properties(love PROPERTIES
+	BUILD_RPATH ${SDL_LIBDIR}
+	INSTALL_RPATH "${SDL_LIBDIR};$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
 
-include(GNUInstallDirs)
-install(TARGETS love RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS love liblove
+	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})

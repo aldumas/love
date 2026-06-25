@@ -18,13 +18,16 @@
  * 3. This notice may not be removed or altered from any source distribution.
  **/
 
-// The mruby-build `love` entry point -- the production counterpart to
+// The mruby liblove boot driver -- the production counterpart to
 // testing/mruby/harness.cpp, replacing the Lua src/love.cpp's runlove(). Opens
 // an mruby state, registers every ported Love:: module, and drives the boot
 // pipeline (the embedded arg.rb/callbacks.rb/boot.rb + the $LOVE_MAIN Fiber
-// resume loop) against the game given on the command line. Built only in the
+// resume loop) against the game given on the command line. Compiled into the
+// shared liblove and reached via the exported `love_mrb_main`; the thin `love`
+// executable (src/love_mrb_exe.cpp) just forwards to it. Built only in the
 // LOVE_MRUBY build (the parallel cmake/LoveMruby.cmake path).
 
+#include "common/config.h"   // LOVE_EXPORT
 #include "common/version.h"
 #include "common/mrb_runtime.h"
 
@@ -217,7 +220,10 @@ static void print_usage()
 		"    love path/to/main.rb      runs a single Ruby game file\n");
 }
 
-int main(int argc, char **argv)
+// The exported liblove entry point. The thin `love` executable
+// (src/love_mrb_exe.cpp) just forwards to this, mirroring the Lua build's
+// src/love.cpp -> liblove split.
+extern "C" LOVE_EXPORT int love_mrb_main(int argc, char **argv)
 {
 	g_arg0 = argc > 0 ? argv[0] : "love";
 
