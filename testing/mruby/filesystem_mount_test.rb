@@ -2,10 +2,9 @@
 #   mount_full_path / unmount_full_path, mount_common_path / get_full_common_path,
 #   Data/FileData-backed mount + unmount, and set/symlinks_enabled?.
 #
-# Requires two fixtures under /tmp (a plain dir + a zip archive). Create them:
-#   mkdir -p /tmp/lovefs_test && printf 'from full path mount' > /tmp/lovefs_test/hello.txt
-#   d=$(mktemp -d); printf 'bytes from a mounted zip' > "$d/inzip.txt"
-#   (cd "$d" && zip -q /tmp/lovefs_test/test.zip inzip.txt); rm -rf "$d"
+# Self-contained: it provisions its own fixtures, so it needs nothing pre-existing
+# on disk. The full-path mount writes a file into a subdir of the save area (a real
+# OS path it then mounts), and the Data mount decodes an embedded base64 zip. Run:
 #
 #   ./love_mrb_harness filesystem_mount_test.rb
 
@@ -60,20 +59,26 @@ end
 
 puts
 puts "=== mount_full_path: mount a real OS directory read-only ==="
-ok = fs.mount_full_path(archive: "/tmp/lovefs_test", mountpoint: "ext", permissions: "read")
+# Provision a real OS directory to mount: make a fresh subdir of the save area and
+# write a file into it, then resolve that subdir's absolute path. It's distinct from
+# the auto-mounted appsavedir itself, so mount_full_path accepts it.
+fs.create_directory(name: "mountsrc")
+fs.write(name: "mountsrc/hello.txt", data: "from full path mount")
+srcdir = "#{fs.get_full_common_path(common_path: "appsavedir")}/mountsrc"
+ok = fs.mount_full_path(archive: srcdir, mountpoint: "ext", permissions: "read")
 fail += 1 unless check("mount_full_path returns true", ok, true)
 fail += 1 unless check("read mounted file", fs.read(name: "ext/hello.txt"), "from full path mount")
 fail += 1 unless check("get_info sees it", fs.get_info(path: "ext/hello.txt")[:type], "file")
-fail += 1 unless check("unmount_full_path", fs.unmount_full_path(archive: "/tmp/lovefs_test"), true)
+fail += 1 unless check("unmount_full_path", fs.unmount_full_path(archive: srcdir), true)
 fail += 1 unless check("gone after unmount", fs.get_info(path: "ext/hello.txt"), nil)
 
 puts
 puts "=== Data-based mounting: mount a zip held in a FileData ==="
-# Bring the zip's bytes in via a brief full-path mount, then mount them as a
-# FileData archive (exercises the love::Data* mount overload).
-fs.mount_full_path(archive: "/tmp/lovefs_test", mountpoint: "ext", permissions: "read")
-zipbytes = fs.read(name: "ext/test.zip")
-fs.unmount_full_path(archive: "/tmp/lovefs_test")
+# An embedded zip (one entry inzip.txt -> "bytes from a mounted zip"), base64-decoded
+# to bytes and mounted as a FileData archive (exercises the love::Data* mount
+# overload) -- no on-disk archive needed.
+zip_b64 = "UEsDBAoAAAAAANJ+2Vx2YKqDGAAAABgAAAAJAAAAaW56aXAudHh0Ynl0ZXMgZnJvbSBhIG1vdW50ZWQgemlwUEsBAh4DCgAAAAAA0n7ZXHZgqoMYAAAAGAAAAAkAAAAAAAAAAQAAALSBAAAAAGluemlwLnR4dFBLBQYAAAAAAQABADcAAAA/AAAAAAA="
+zipbytes = Love::Data.decode(format: "base64", string: zip_b64, container: "string")
 fd = fs.new_file_data(contents: zipbytes, name: "test.zip")
 fail += 1 unless check("FileData built", !fd.nil?, true)
 fail += 1 unless check("mount FileData archive", fs.mount(data: fd, mountpoint: "z"), true)
