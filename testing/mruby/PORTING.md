@@ -729,10 +729,11 @@ them changes when we swap.
         window file-dialog) are one-shot, not loops. Output-proportional builders
         (`get_bodies`, the per-step collision-callback argv) stay as-is (bounded
         by the result / by one physics step).
-      • **UAF/error run: done** (see the ASan summary at the top of this item —
-        the harness is `make SANITIZE=1`, run with
-        `ASAN_OPTIONS=detect_leaks=0`). The only remaining sliver is the
-        suppression-filtered leak pass noted above.
+      • **UAF/error + leak runs: both done** (see the ASan and LeakSanitizer
+        summaries at the top of this item — the harness is `make SANITIZE=1`, run
+        with `ASAN_OPTIONS=detect_leaks=0` for errors and `detect_leaks=1` +
+        `leak_suppressions.txt` for leaks). Broader tool coverage beyond ASan is
+        tracked as its own item below.
       The original guidance follows.
 
       Sweep the mruby bindings for allocation/deallocation correctness. Two
@@ -750,6 +751,45 @@ them changes when we swap.
       `World#get_bodies`, collision-callback argv) are fine — their arena use is
       bounded by the result they hand back. Consider a leak run under
       valgrind/ASan once CMake replaces the harness Makefile.
+
+- [ ] Broader bug-hunt beyond ASan. The ASan/LSan pass (above) only covers heap
+      errors and leaks; run the port through complementary tools to catch the
+      bug classes ASan misses. None of these has a code site yet — this is a
+      standing audit task, each tool a sub-checkbox:
+      - [ ] **UBSan** (`-fsanitize=undefined`, ideally `+integer,implicit-conversion`)
+            over the binding layer — signed/unsigned overflow, bad shifts, null/
+            misaligned derefs, bad enum/bool values, and vptr type confusion.
+            Cheap: same `make SANITIZE=` mechanism, just a different flag. The
+            keyword-arg coercions (`mrbx_opt*`/`mrbx_check*`), the lstrlib
+            `pack`/`unpack` size math, and 1-based↔0-based index conversions are
+            prime suspects.
+      - [ ] **TSan** (`-fsanitize=thread`) — the port has real concurrency the
+            single-threaded test scripts barely exercise: per-thread `mrb_state`s
+            (thread module), `Channel` round-trips, `perform_atomic`, the audio
+            mix/stream pool, the theora decode worker, and the `mrbx_*` global
+            stores (typeClasses/userData/objectWrappers/callbacks keyed by
+            `mrb_state*`). Needs a thread-heavy test (spawn N threads pushing/
+            popping channels + sharing wrappers) to be meaningful. High value,
+            since data races are exactly what review + ASan won't find.
+      - [ ] **Valgrind/memcheck** — catches uninitialized-value reads (which ASan
+            doesn't) and instruments the *uninstrumented* archives (box2d/gfx/
+            glslang/physfs) and mruby itself, complementing ASan's binding-layer
+            focus. Slow but needs no rebuild; run a representative subset of the
+            suite under it.
+      - [ ] **Static analysis** — `scan-build` (clang analyzer) and/or
+            GCC `-fanalyzer` over the `wrap_*_mrb.cpp` + `mrb_runtime.cpp` TUs for
+            leak/null/use-after-free paths the dynamic runs don't reach (error
+            branches, rare kwargs). `cppcheck` as a cheap second opinion.
+      - [ ] **Fuzzing** the data-driven entry points — the `pack`/`unpack` format
+            string engine, `require`'s path resolver, and the image/sound/font
+            decoders (already fed untrusted bytes) — with libFuzzer or AFL++ over
+            a thin harness, run under ASan+UBSan.
+      - [ ] **Run the real `love` (CMake `build-mrb/`) under the sanitizers**, not
+            just the Makefile harness — exercises the full boot pipeline + module
+            teardown on quit (which the one-shot harness skips), so it can surface
+            shutdown-ordering UAFs and the leaks the harness suppressions hide.
+      Record findings + fixes inline here (as the memory-audit item does) and tick
+      each tool off as it's run.
 
 ---
 
