@@ -647,10 +647,17 @@ them changes when we swap.
       its C++ object alive); `mrbx_object_free` evicts on collection and
       `mrbx_forgetstate` drops a closing VM's entries. This is the mruby analog
       of Lua's weak-valued userdata table.
-- [ ] CMake: build/link `libmruby.a` instead of `lovedep::Lua`; drop
-      `src/libraries/lua53` and the LuaJIT path. **Scoping plan:**
-      `testing/mruby/CMAKE_MIGRATION.md` (staged 0–5; recommended first step is a
-      CMake-driven harness `testing/mruby/CMakeLists.txt`).
+- [x] CMake: build/link `libmruby.a` instead of `lovedep::Lua`. Done via
+      `cmake -DLOVE_MRUBY=ON`: a ~10-line hook in `CMakeLists.txt` includes
+      `cmake/LoveMruby.cmake`, which builds a working `love` (the `love_mrb`
+      OBJECT library of every ported binding + the bundled archives + the
+      embedded boot scripts + `src/love_mrb.cpp`). `testing/mruby/CMakeLists.txt`
+      reuses the same module so there is one source list. `src/libraries/lua53`
+      and the LuaJIT path are **not** removed — deliberately: the parallel-path
+      approach (chosen for upstream-sync friendliness, see `SYNC.md`) leaves the
+      Lua build intact and simply doesn't reference lua53/LuaJIT/socket/enet in
+      the mruby path. Remaining polish (nogame.rb, install rules, optional shared
+      `liblove`, CI-on-real-runner) is tracked in `CMAKE_MIGRATION.md`.
 - [ ] FFI fast paths: re-implement the few wrappers that use LuaJIT FFI.
 - [x] Port the remaining `wrap_*.cpp` modules. All 21 LÖVE modules and every
       object type they expose are ported, including the low-level GPU `Buffer`
