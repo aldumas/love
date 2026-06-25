@@ -805,7 +805,8 @@ them changes when we swap.
         summaries at the top of this item — the harness is `make SANITIZE=1`, run
         with `ASAN_OPTIONS=detect_leaks=0` for errors and `detect_leaks=1` +
         `leak_suppressions.txt` for leaks). Broader tool coverage beyond ASan is
-        tracked as its own item below.
+        tracked in **§E. Bug-hunt tool roster** (ASan/LSan are its first two,
+        done rows).
       The original guidance follows.
 
       Sweep the mruby bindings for allocation/deallocation correctness. Two
@@ -824,47 +825,11 @@ them changes when we swap.
       bounded by the result they hand back. Consider a leak run under
       valgrind/ASan once CMake replaces the harness Makefile.
 
-- [ ] Broader bug-hunt beyond ASan. The ASan/LSan pass (above) only covers heap
-      errors and leaks; run the port through complementary tools to catch the
-      bug classes ASan misses. None of these has a code site yet — this is a
-      standing audit task, each tool a sub-checkbox:
-      - [ ] **UBSan** (`-fsanitize=undefined`, ideally `+integer,implicit-conversion`)
-            over the binding layer — signed/unsigned overflow, bad shifts, null/
-            misaligned derefs, bad enum/bool values, and vptr type confusion.
-            Cheap: same `make SANITIZE=` mechanism, just a different flag. The
-            keyword-arg coercions (`mrbx_opt*`/`mrbx_check*`), the lstrlib
-            `pack`/`unpack` size math, and 1-based↔0-based index conversions are
-            prime suspects.
-      - [ ] **TSan** (`-fsanitize=thread`) — the port has real concurrency the
-            single-threaded test scripts barely exercise: per-thread `mrb_state`s
-            (thread module), `Channel` round-trips, `perform_atomic`, the audio
-            mix/stream pool, the theora decode worker, and the `mrbx_*` global
-            stores (typeClasses/userData/objectWrappers/callbacks keyed by
-            `mrb_state*`). Needs a thread-heavy test (spawn N threads pushing/
-            popping channels + sharing wrappers) to be meaningful. High value,
-            since data races are exactly what review + ASan won't find.
-      - [ ] **Valgrind/memcheck** — catches uninitialized-value reads (which ASan
-            doesn't) and instruments the *uninstrumented* archives (box2d/gfx/
-            glslang/physfs) and mruby itself, complementing ASan's binding-layer
-            focus. Slow but needs no rebuild; run a representative subset of the
-            suite under it.
-      - [ ] **Static analysis** — `scan-build` (clang analyzer) and/or
-            GCC `-fanalyzer` over the `wrap_*_mrb.cpp` + `mrb_runtime.cpp` TUs for
-            leak/null/use-after-free paths the dynamic runs don't reach (error
-            branches, rare kwargs). `cppcheck` as a cheap second opinion.
-      - [ ] **Fuzzing** the data-driven entry points — the `pack`/`unpack` format
-            string engine, `require`'s path resolver, and the image/sound/font
-            decoders (already fed untrusted bytes) — with libFuzzer or AFL++ over
-            a thin harness, run under ASan+UBSan.
-      - [ ] **Run the real `love` (CMake `build-mrb/`) under the sanitizers**, not
-            just the Makefile harness — exercises the full boot pipeline against a
-            real game. (Module teardown on quit is no longer harness-vs-exe specific:
-            both now go through `mrbx_close_state` — see the §C item. An ASan run of
-            `build-mrb/love` on a quitting game already comes back with 0 errors and
-            0 `love::` leak frames; only external dbus/nvidia driver allocations
-            remain. Still worth a broader-game pass for shutdown-ordering UAFs.)
-      Record findings + fixes inline here (as the memory-audit item does) and tick
-      each tool off as it's run.
+- Broader bug-hunt beyond ASan — promoted to its own section so each tool is a
+  self-contained, context-clear-safe run and the whole set is one roster to work
+  from. **See §E. Bug-hunt tool roster.** ASan + LeakSanitizer are done (findings
+  in the memory-audit item above); UBSan, TSan, Valgrind, static analysis,
+  fuzzing, and the real-exe sanitizer pass are pending there.
 
 ---
 
@@ -876,3 +841,117 @@ them changes when we swap.
 
 This unblocks the `#event-backend` swap in §B (the real SDL event backend needs
 the joystick/touch/sensor modules to translate their events).
+
+---
+
+## E. Bug-hunt tool roster — "run the code through all the tools"
+
+A standing QA roster: run the port through each tool below, each specializing in
+a bug class the others miss. **This is the single list to work from when asked
+to "run the code through all the tools."** Every entry is self-contained (what
+it catches · how to run · target · status · findings) so a run can start cold
+after a context clear — you do not need any prior conversation, just this
+section. As each tool runs, record its findings + fixes inline under that tool
+and flip its box. None of these items has a code site (they are process/audit
+tasks), so they are untagged and the pre-commit hook ignores them.
+
+### Status at a glance
+
+| # | Tool | Catches | Status |
+|---|------|---------|--------|
+| 1 | AddressSanitizer (ASan) | heap overflow · UAF · double-free · alloc/dealloc mismatch | ✅ done |
+| 2 | LeakSanitizer (LSan) | memory leaks | ✅ done |
+| 3 | UBSan | overflow · bad shift/enum/bool · null/misaligned deref · vptr confusion | ☐ pending |
+| 4 | ThreadSanitizer (TSan) | data races · lock-order issues across threads | ☐ pending |
+| 5 | Valgrind / memcheck | uninitialized reads + the *uninstrumented* archives & mruby | ☐ pending |
+| 6 | Static analysis (scan-build / `-fanalyzer` / cppcheck) | unreached error/rare-kwarg paths | ☐ pending |
+| 7 | Fuzzing (libFuzzer / AFL++) | data-driven entry points (`pack`/`unpack`, loader, decoders) | ☐ pending |
+| 8 | Real `love` exe under sanitizers | full boot pipeline / shutdown ordering vs a real game | ☐ partial (one ASan run) |
+
+### Shared harness mechanism (read once, applies to the sanitizer rows)
+
+- **Build knob.** `testing/mruby/Makefile` has a `SANITIZE` knob that instruments
+  only the directly-compiled binding layer (`$(SRCS)`: `wrap_*_mrb.cpp` +
+  `mrb_runtime` + the module engine `.cpp`); the prebuilt archives (gfx/glslang/
+  box2d/physfs/lz4/wuff/xxhash) and libmruby stay uninstrumented. The sanitizer's
+  global `operator new/delete` + malloc interceptors still cover those, so heap
+  errors are caught process-wide while the noise from external libs is muted.
+- **Today the knob is ASan-only:** `ifeq ($(SANITIZE),1)` hardcodes
+  `-fsanitize=address` (CXXFLAGS `-fno-omit-frame-pointer -g -O1`, LDFLAGS
+  `-fsanitize=address`). **UBSan/TSan first require generalizing the knob** to
+  dispatch on the sanitizer kind — e.g. accept `SANITIZE=undefined` /
+  `SANITIZE=thread` and map to the matching `-fsanitize=` flag (a few lines;
+  do this as step 0 of rows 3–4). Build each to its own binary via `BIN=`.
+- **Run the whole suite (23 tests), e.g.:**
+  `for t in testing/mruby/*_test.rb; do echo "== $t"; DISPLAY=:1 ./<bin> "$t" || echo FAIL; done`
+  (`DISPLAY=:1` is required — the graphics/window tests need an X display.)
+- **Findings home:** record inline under each tool here, mirroring the
+  memory-audit item's style (tool · how invoked · what was found · fix · result).
+
+### The tools
+
+1. **[x] AddressSanitizer — done.** Findings live in the memory-audit item in §C
+   (the "ASan run" bullets). Summary: built with `make SANITIZE=1
+   BIN=$PWD/love_mrb_harness_asan`; ran all 23 `*_test.rb` under
+   `DISPLAY=:1 ASAN_OPTIONS=detect_leaks=0`. **No UAF / double-free /
+   heap-overflow in the binding layer.** One real (upstream) bug found + fixed:
+   `graphics::Mesh::~Mesh()` `new[]`/`delete` mismatch → `delete[]`. Re-run
+   command for regression: same as build above.
+
+2. **[x] LeakSanitizer — done.** Findings in the memory-audit item in §C (the
+   "LeakSanitizer run" bullet). Summary: same ASan binary, run with
+   `ASAN_OPTIONS=detect_leaks=1 LSAN_OPTIONS=suppressions=testing/mruby/leak_suppressions.txt`
+   (the suppression file mutes the uninstrumented GL/SDL/X11/ALSA driver leaks).
+   One binding leak found + fixed (`k_require`'s `std::string` held across a
+   longjmping `mrb_raisef`). Suite is leak-clean (0 residual blocks). Note: the
+   module singletons are also torn down on quit now (`mrbx_close_state`, §C).
+
+3. **[ ] UBSan** (`-fsanitize=undefined`, ideally also `integer,implicit-conversion`)
+   over the binding layer — signed/unsigned overflow, bad shifts, null/misaligned
+   derefs, bad enum/bool values, vptr type confusion. Cheapest of the pending
+   tools (reuses the `SANITIZE=` harness; generalize the knob first, then build
+   `SANITIZE=undefined BIN=$PWD/love_mrb_harness_ubsan` and run the suite under
+   `UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0`). Prime suspects: the
+   keyword-arg coercions (`mrbx_opt*`/`mrbx_check*`), the lstrlib `pack`/`unpack`
+   size/alignment math, and the 1-based↔0-based index conversions. **Findings:** _(none yet)_
+
+4. **[ ] TSan** (`-fsanitize=thread`) — the port has real concurrency the
+   single-threaded test scripts barely exercise: per-thread `mrb_state`s (thread
+   module), `Channel` round-trips, `perform_atomic`, the audio mix/stream pool,
+   the theora decode worker, and the `mrbx_*` global stores (typeClasses/userData/
+   objectWrappers/callbacks, keyed by `mrb_state*`). **Needs a thread-heavy test
+   written first** (spawn N threads pushing/popping channels + sharing wrappers) —
+   the existing suite won't surface races. Generalize the `SANITIZE=` knob
+   (`SANITIZE=thread`), build a separate binary, run the new test under it. High
+   value: data races are exactly what review + ASan won't find. **Findings:** _(none yet)_
+
+5. **[ ] Valgrind / memcheck** — catches uninitialized-value reads (which ASan
+   does not) and instruments the *uninstrumented* archives (box2d/gfx/glslang/
+   physfs) and mruby itself, complementing ASan's binding-layer focus. No rebuild
+   needed (run the normal `love_mrb_harness`), just slow — run a representative
+   subset of the suite under `valgrind --leak-check=full --track-origins=yes`.
+   Expect to need a Valgrind suppression file for the GL/SDL driver, analogous to
+   `leak_suppressions.txt`. **Findings:** _(none yet)_
+
+6. **[ ] Static analysis** — `scan-build` (clang analyzer) and/or GCC `-fanalyzer`
+   over the `wrap_*_mrb.cpp` + `mrb_runtime.cpp` TUs, for leak/null/use-after-free
+   paths the dynamic runs don't reach (error branches, rare kwarg combinations).
+   `cppcheck` as a cheap second opinion. No runtime; wrap the existing compile
+   (`scan-build make -C testing/mruby`). **Findings:** _(none yet)_
+
+7. **[ ] Fuzzing** the data-driven entry points — the `pack`/`unpack` format-string
+   engine, `require`'s path resolver, and the image/sound/font decoders (already
+   fed untrusted bytes) — with libFuzzer or AFL++ over a thin harness, run under
+   ASan+UBSan. Highest setup cost (each target needs its own fuzz harness), but
+   these are the parsers most exposed to malformed input. **Findings:** _(none yet)_
+
+8. **[~] Run the real `love` (CMake `build-mrb/`) under the sanitizers** — not just
+   the Makefile harness; exercises the full boot pipeline against a real game.
+   Partial: an ASan run of `build-mrb/love` on a quitting game already comes back
+   with 0 errors and 0 `love::` leak frames (only external dbus/nvidia driver
+   allocations remain), and module teardown on quit goes through `mrbx_close_state`
+   for both harness and exe (§C). Still pending: a broader-game pass for
+   shutdown-ordering UAFs, and re-running once UBSan/TSan exist so the exe gets the
+   same coverage as the harness. Build `build-mrb/` per `mruby-build-dir` memory;
+   wire the sanitizer flags into the CMake build (the Makefile knob doesn't cover
+   it). **Findings so far:** the one ASan run above; nothing further. **Findings:** _(continue here)_
