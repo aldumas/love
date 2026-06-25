@@ -372,11 +372,20 @@ $(WUFF_A): $(WUFF_OBJS)
 $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)
 
-# Build libmruby.a if it's missing. Requires a host Ruby on PATH.
+# The mruby build config is vendored here (canonical copy) so the build is
+# reproducible without the sibling mruby tree carrying its own. Install it into
+# the mruby tree, then build. Requires a host Ruby on PATH.
+MRUBY_CONFIG_SRC := $(HERE)mruby_love_config.rb
+
+# No prereq on the config: build only when libmruby.a is *missing*, so a plain
+# `make` (the harness) never triggers an expensive mruby rebuild. Re-run mruby
+# explicitly (`make mruby`) after changing the config.
 $(MRUBY_A):
+	cp $(MRUBY_CONFIG_SRC) $(MRUBY_DIR)/build_config/love.rb
 	cd $(MRUBY_DIR) && MRUBY_CONFIG=love ruby ./minirake
 
 mruby:
+	cp $(MRUBY_CONFIG_SRC) $(MRUBY_DIR)/build_config/love.rb
 	cd $(MRUBY_DIR) && MRUBY_CONFIG=love ruby ./minirake
 
 run: $(BIN)

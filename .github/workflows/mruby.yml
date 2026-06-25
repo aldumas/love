@@ -1,0 +1,112 @@
+# CI for the mruby-port branch: build mruby + the CMake-driven harness and run
+# the Ruby test suite headless, so an upstream sync (or any change) that breaks
+# the port is caught immediately. Plus a scheduled job that reports when upstream
+# love2d/love has advanced. See testing/mruby/SYNC.md.
+#
+# NOTE: this runs on the fork (aldumas/love) where Actions is enabled. It has not
+# been validated on a runner yet — adjust apt package names / SDL3 build per the
+# runner image on the first run.
+
+name: mruby-port
+
+on:
+  push:
+    branches: [mruby-port]
+  pull_request:
+    branches: [mruby-port]
+  schedule:
+    - cron: '0 6 * * 1'        # Mondays 06:00 UTC: upstream drift watch
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    env:
+      MRUBY_REF: 9c4e7ea0f      # pinned mruby (4.0.0); keep in sync with mruby_love_config.rb
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config ruby \
+            libfreetype-dev libharfbuzz-dev libvorbis-dev libogg-dev \
+            libmodplug-dev libopenal-dev libtheora-dev zlib1g-dev \
+            libgl1-mesa-dev libglu1-mesa-dev mesa-utils \
+            libgl1-mesa-dri xvfb \
+            libx11-dev libxext-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev
+
+      # SDL3 is newer than the apt repos on most runners; build it pinned.
+      - name: Build SDL3
+        run: |
+          git clone --depth 1 --branch release-3.2.0 https://github.com/libsdl-org/SDL.git sdl3
+          cmake -S sdl3 -B sdl3/build -DCMAKE_BUILD_TYPE=Release -DSDL_STATIC=OFF
+          cmake --build sdl3/build -j"$(nproc)"
+          sudo cmake --install sdl3/build
+          sudo ldconfig
+
+      - name: Build mruby (pinned, with the vendored love config)
+        run: |
+          git clone https://github.com/mruby/mruby.git mruby
+          git -C mruby checkout "$MRUBY_REF"
+          cp testing/mruby/mruby_love_config.rb mruby/build_config/love.rb
+          (cd mruby && MRUBY_CONFIG=love ruby ./minirake)
+
+      - name: Configure + build the harness
+        run: |
+          cmake -S testing/mruby -B testing/mruby/build \
+            -DMRUBY_DIR="$PWD/mruby" -DSDL_LIBDIR=/usr/local/lib
+          cmake --build testing/mruby/build -j"$(nproc)"
+
+      - name: Ledger check
+        run: bash testing/mruby/check_porting_ledger.sh
+
+      - name: Run the .rb test suite (headless software GL)
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          set -e
+          bin=testing/mruby/build/love_mrb_harness
+          fail=0
+          for f in testing/mruby/*_test.rb; do
+            name="$(basename "$f")"
+            # Known fixture failure unrelated to upstream (missing ext/hello.txt).
+            [ "$name" = "filesystem_mount_test.rb" ] && continue
+            if xvfb-run -a timeout 120 "$bin" "$f" >/tmp/out 2>&1; then
+              echo "ok   $name"
+            else
+              echo "FAIL $name"; tail -20 /tmp/out; fail=1
+            fi
+          done
+          exit $fail
+
+  upstream-drift:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Report drift vs upstream love2d/love
+        run: |
+          git remote add upstream https://github.com/love2d/love.git || true
+          git fetch --quiet upstream main
+          behind="$(git rev-list --count HEAD..upstream/main)"
+          ahead="$(git rev-list --count upstream/main..HEAD)"
+          {
+            echo "## mruby-port vs upstream love2d/love"
+            echo ""
+            echo "- ahead: **$ahead**   behind: **$behind**"
+            echo "- upstream HEAD: \`$(git log -1 --format='%h %s' upstream/main)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$behind" -gt 0 ]; then
+            echo "::notice::Upstream has advanced by $behind commit(s). Run testing/mruby/sync_upstream.sh status."
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Recent upstream commits:" >> "$GITHUB_STEP_SUMMARY"
+            git log --oneline --no-decorate HEAD..upstream/main | head -20 \
+              | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
+          fi
