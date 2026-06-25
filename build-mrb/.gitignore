@@ -1,0 +1,4 @@
+# Ignore all build artifacts in this directory; keep only the directory marker.
+*
+!.gitignore
+!.gitkeep
