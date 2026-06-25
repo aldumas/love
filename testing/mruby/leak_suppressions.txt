@@ -1,0 +1,39 @@
+# LeakSanitizer suppressions for the mruby-port ASan harness (make SANITIZE=1).
+#
+# The harness runs one script then mrb_close()s; it deliberately does NOT tear
+# down the window/graphics module singletons or the GL context (the real `love`
+# exe does that via module deinit on quit). So GL-driver / SDL / X11 allocations
+# tied to the live context + the compiled-in shader/program objects are reported
+# as leaks at exit. They are external (uninstrumented) code and not the port's to
+# free here; suppressing them lets a genuine binding-layer leak stand out.
+#
+# Format: `leak:<substr>` matches the substring against any frame (function name
+# or module path) in the allocation stack.
+
+# GL drivers (context, shader/program/buffer objects) — never freed because the
+# GL context outlives the script in this one-shot harness.
+leak:libnvidia-glcore
+leak:libnvidia-glsi
+leak:libnvidia-tls
+leak:libnvidia-glvkspirv
+leak:libGLX_nvidia
+leak:libGLX
+leak:libGLdispatch
+leak:libGL.so
+leak:libEGL
+leak:swrast
+leak:libdrm
+
+# SDL3 (video/GL/audio subsystem globals held for the process lifetime).
+leak:libSDL3
+
+# X11 client libraries.
+leak:libX11
+leak:libxcb
+leak:libXext
+leak:libXrandr
+leak:libXi
+
+# ALSA / OpenAL device globals (audio backend held for the process lifetime).
+leak:libasound
+leak:libopenal

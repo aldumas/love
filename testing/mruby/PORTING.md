@@ -672,8 +672,8 @@ them changes when we swap.
       object type, or feature is unported; the only deliberate omissions are a few
       obscure texture knobs (the `@2x`-filename dpiscale autodetection, texture
       views, the `viewformats`/`computewrite` settings) — see the graphics §B note.
-- [x] Memory audit (static pass + ASan error-detector run done; a suppression-
-      filtered leak run remains optional). Findings:
+- [x] Memory audit (static pass + ASan error-detector run + suppression-filtered
+      LeakSanitizer run all done). Findings:
       • **ASan run: clean across the whole binding surface.** Built an
         AddressSanitizer harness — `make SANITIZE=1 BIN=…love_mrb_harness_asan`
         (a new Makefile knob) instruments the directly-compiled binding layer
@@ -695,11 +695,25 @@ them changes when we swap.
         on both the ASan and the normal harness — it mounts `/tmp/lovefs_test`, a
         fixture nothing creates in this environment; a missing-fixture test gap,
         unrelated to the audit.
-      • **Optional remainder:** a full LeakSanitizer pass (`detect_leaks=1`) needs
-        a suppression file for the uninstrumented mruby/SDL/GL/OpenAL allocations
-        (they dominate the report and aren't the port's to fix); the port's own
-        retained-reference balance is already statically verified (below), so this
-        is hardening, not a known leak.
+      • **LeakSanitizer run: clean, one binding leak found + fixed.** Ran the
+        whole suite with `detect_leaks=1` and `LSAN_OPTIONS=suppressions=`
+        `leak_suppressions.txt` — a `leak:` file for the uninstrumented external
+        allocators (GL driver / SDL / X11 / ALSA-OpenAL), which leak context- and
+        device-lifetime state because this one-shot harness exits without tearing
+        down the window/graphics/audio module singletons (the real `love` exe does
+        that on quit). With those suppressed, exactly **one** genuine binding-layer
+        leak remained: `k_require` (`wrap_Filesystem_mrb.cpp`) constructed a
+        `std::string modulename`/`resolved` that was still alive when the
+        not-found / read-fail / raising-file paths called `mrb_raisef` — mruby's
+        longjmp skips the C++ destructor, leaking the string's heap buffer (24 B,
+        surfaced by `loader_test.rb`'s require-nonexistent case). Fixed by
+        resolving inside a no-longjmp scope and handing the path out as a
+        GC-managed mrb_value, so every raise happens after the std::string locals
+        are destroyed. After the fix the entire suite is leak-clean (0 residual
+        blocks with suppressions). General lesson recorded for future ports: never
+        hold a non-trivially-destructible C++ local across a longjmping mruby call
+        (raise/load) — the same RAII-vs-longjmp hazard `perform_atomic` guards
+        against with `mrb_protect_error`.
       • **Class (2) retained-reference balance: clean.** There are no
         `mrb_gc_register`/`unregister` calls outside `common/mrb_runtime.cpp` —
         all retention flows through the balanced helpers (`mrbx_set_userdata` /

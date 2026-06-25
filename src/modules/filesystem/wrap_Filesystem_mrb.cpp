@@ -886,11 +886,18 @@ static mrb_value k_require(mrb_state *mrb, mrb_value self)
 	(void) self;
 	const char *namez;
 	mrb_get_args(mrb, "z", &namez);
-	std::string modulename(namez);
-
-	std::string resolved = resolveRequire(modulename);
-	if (resolved.empty())
-		mrb_raisef(mrb, E_RUNTIME_ERROR, "cannot load such file -- %s", modulename.c_str());
+	// mruby's raise/load APIs longjmp, which skips C++ destructors — so no
+	// std::string may be alive when we call them. Resolve the name inside a scope
+	// that never longjmps, hand the result out as a GC-managed mrb_value, then do
+	// any raising once the std::string locals have been destroyed.
+	mrb_value resolvedv = mrb_nil_value();
+	{
+		std::string resolved = resolveRequire(std::string(namez));
+		if (!resolved.empty())
+			resolvedv = mrb_str_new(mrb, resolved.c_str(), resolved.size());
+	}
+	if (mrb_nil_p(resolvedv))
+		mrb_raisef(mrb, E_RUNTIME_ERROR, "cannot load such file -- %s", namez);
 
 	// Load-once tracking via $LOADED_FEATURES (Ruby's canonical registry).
 	mrb_sym lf = mrb_intern_lit(mrb, "$LOADED_FEATURES");
@@ -900,7 +907,6 @@ static mrb_value k_require(mrb_state *mrb, mrb_value self)
 		features = mrb_ary_new(mrb);
 		mrb_gv_set(mrb, lf, features);
 	}
-	mrb_value resolvedv = mrb_str_new(mrb, resolved.c_str(), resolved.size());
 	for (mrb_int i = 0; i < RARRAY_LEN(features); i++)
 	{
 		if (mrb_str_equal(mrb, mrb_ary_ref(mrb, features, i), resolvedv))
@@ -908,15 +914,15 @@ static mrb_value k_require(mrb_state *mrb, mrb_value self)
 	}
 
 	FileData *data = nullptr;
-	bool err = mrbx_catchexcept(mrb, [&]() { data = instance()->read(resolved.c_str()); });
+	bool err = mrbx_catchexcept(mrb, [&]() { data = instance()->read(RSTRING_PTR(resolvedv)); });
 	if (err || data == nullptr)
-		mrb_raisef(mrb, E_RUNTIME_ERROR, "cannot read file -- %s", resolved.c_str());
+		mrb_raisef(mrb, E_RUNTIME_ERROR, "cannot read file -- %s", RSTRING_PTR(resolvedv));
 
 	// Record before running so a circular require sees it as already loaded.
 	mrb_ary_push(mrb, features, resolvedv);
 
 	mrbc_context *c = mrbc_context_new(mrb);
-	mrbc_filename(mrb, c, resolved.c_str());
+	mrbc_filename(mrb, c, RSTRING_PTR(resolvedv));
 
 	// Run the file under mrb_protect_error: mrb_load can both longjmp and merely
 	// set mrb->exc depending on the nesting, so we normalize the exc-set path
