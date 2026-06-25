@@ -319,8 +319,12 @@ static const MrbReg channelFunctions[] =
 // ThreadModule self-registers in its constructor, so instance() still resolves.)
 extern "C" void mrb_love_thread_init(mrb_state *mrb)
 {
-	if (instance() == nullptr)
-		(new ThreadModule())->retain();
+	ThreadModule *inst = instance();
+	if (inst == nullptr)
+		inst = new ThreadModule();
+	else
+		inst->retain();
+	mrbx_track_module(mrb, inst); // released on state close (mrbx_close_state)
 
 	struct RClass *threadClass = mrbx_gettypeclass(mrb, LuaThread::type);
 

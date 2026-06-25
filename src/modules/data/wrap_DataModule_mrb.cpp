@@ -1055,7 +1055,9 @@ extern "C" void mrb_love_data_init(mrb_state *mrb)
 	DataModule *inst = instance();
 	if (inst == nullptr)
 		inst = new DataModule();
-	inst->retain(); // keep the instance alive for the binding's lifetime
+	else
+		inst->retain();
+	mrbx_track_module(mrb, inst); // released on state close (mrbx_close_state)
 
 	struct RClass *dataClass = mrbx_gettypeclass(mrb, love::Data::type);
 

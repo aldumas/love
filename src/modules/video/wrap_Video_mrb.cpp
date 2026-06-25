@@ -122,8 +122,12 @@ extern "C" void mrb_love_video_init(mrb_state *mrb)
 {
 	// Create the real theora decode backend; the Module base ctor registers it
 	// at M_VIDEO. graphics.new_video resolves it via Module::getInstance.
-	if (Module::getInstance<Video>(Module::M_VIDEO) == nullptr)
-		new theora::Video();
+	Video *inst = Module::getInstance<Video>(Module::M_VIDEO);
+	if (inst == nullptr)
+		inst = new theora::Video();
+	else
+		inst->retain();
+	mrbx_track_module(mrb, inst);
 
 	mrbx_register_type(mrb, VideoStream::type, videoStreamFunctions);
 }

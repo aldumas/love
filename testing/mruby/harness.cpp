@@ -249,6 +249,6 @@ int main(int argc, char **argv)
 		rc = run_file(mrb, path) ? 0 : 1;
 	}
 
-	mrb_close(mrb);
+	love::mrbx_close_state(mrb);
 	return rc;
 }

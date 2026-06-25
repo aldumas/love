@@ -100,8 +100,7 @@ void LuaThread::threadFunction()
 		haserror = true;
 	}
 
-	mrbx_forgetstate(mrb);
-	mrb_close(mrb);
+	mrbx_close_state(mrb);
 
 	if (haserror)
 		onError();

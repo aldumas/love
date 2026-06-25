@@ -647,8 +647,12 @@ static const MrbReg moduleFunctions[] =
 // the per-controller instance methods) — same trick the data/thread modules use.
 extern "C" void mrb_love_joystick_init(mrb_state *mrb)
 {
-	if (instance() == nullptr)
-		(new love::joystick::sdl::JoystickModule())->retain();
+	JoystickModule *inst = instance();
+	if (inst == nullptr)
+		inst = new love::joystick::sdl::JoystickModule();
+	else
+		inst->retain();
+	mrbx_track_module(mrb, inst); // released on state close (mrbx_close_state)
 
 	struct RClass *joystickClass = mrbx_gettypeclass(mrb, Joystick::type);
 

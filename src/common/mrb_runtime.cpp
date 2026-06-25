@@ -132,6 +132,10 @@ mrb_value mrbx_string(mrb_state *mrb, const std::string &s)
 // equal (==) — matching the Lua-era weak-valued userdata table.
 static std::map<std::pair<mrb_state *, love::Object *>, mrb_value> objectWrappers;
 
+// Module instances held by each state's bindings, in registration order. Each
+// entry is one binding reference, released (in reverse) by mrbx_close_state.
+static std::map<mrb_state *, std::vector<love::Object *>> moduleInstances;
+
 static void mrbx_object_free(mrb_state *mrb, void *p)
 {
 	if (p != nullptr)
@@ -326,6 +330,57 @@ void mrbx_forgetstate(mrb_state *mrb)
 	}
 }
 
+void mrbx_close_state(mrb_state *mrb)
+{
+	// Take this state's tracked module instances before closing the VM; the map
+	// key dangles once mrb is freed, so we must detach the list first.
+	std::vector<love::Object *> modules;
+	auto it = moduleInstances.find(mrb);
+	if (it != moduleInstances.end())
+	{
+		modules = std::move(it->second);
+		moduleInstances.erase(it);
+	}
+
+	// Drop this state's cached entries, then close the VM. mrb_close runs every
+	// object wrapper's free callback (mrbx_object_free), releasing the game
+	// objects -- so the modules they depend on are still alive while those
+	// destructors run (objects-before-modules, as in the Lua build's lua_close).
+	mrbx_forgetstate(mrb);
+	mrb_close(mrb);
+
+	// Now release the binding references, in reverse registration order. This
+	// tears down graphics before the window, so ~Graphics frees its GPU resources
+	// (and, via ~Window's cascade, runs) while the GL context the window owns is
+	// still alive -- matching the Lua build, where the window-owned graphics dies
+	// before the window's context does.
+	//
+	// One dependency can't be expressed by a single linear pass: the graphics
+	// module owns an internal default Font that is NOT a Ruby object, so it
+	// survives mrb_close and is destroyed inside ~Graphics. That Font's FreeType
+	// face uses the FT_Library owned by the font module by raw pointer (see
+	// modules/font/freetype/Font.cpp), so the font module must outlive graphics --
+	// but graphics is registered after font, so reverse order would free font
+	// first. Defer the font module past every other module to keep its FT_Library
+	// alive through the graphics teardown.
+	//
+	// A module shared with another live VM (a thread) only drops one ref here and
+	// is actually destroyed when the last VM releases it.
+	love::Object *fontModule = nullptr;
+	for (auto i = modules.rbegin(); i != modules.rend(); ++i)
+	{
+		love::Module *mod = dynamic_cast<love::Module *>(*i);
+		if (mod != nullptr && mod->getModuleType() == Module::M_FONT)
+		{
+			fontModule = *i;
+			continue;
+		}
+		(*i)->release();
+	}
+	if (fontModule != nullptr)
+		fontModule->release();
+}
+
 mrb_value mrbx_pushtype(mrb_state *mrb, love::Type &type, love::Object *object)
 {
 	if (object == nullptr)
@@ -509,10 +564,20 @@ Variant mrbx_checkvariant(mrb_state *mrb, mrb_value v)
 
 // --- Module registration -------------------------------------------------
 
+void mrbx_track_module(mrb_state *mrb, love::Object *module)
+{
+	if (module != nullptr)
+		moduleInstances[mrb].push_back(module);
+}
+
 void mrbx_register_module(mrb_state *mrb, const WrappedModule &m)
 {
-	if (m.module != nullptr)
-		m.module->retain();
+	// The caller's init already holds one reference for this binding (the `new`
+	// on first creation, or an inst->retain() on reuse); track it so the matching
+	// release happens in mrbx_close_state. No extra retain here -- that would
+	// leave the singleton at a nonzero refcount on quit, so its destructor (the
+	// window/graphics/audio teardown) would never run.
+	mrbx_track_module(mrb, m.module);
 
 	struct RClass *love = mrb_module_get(mrb, "Love");
 	struct RClass *mod = mrb_define_module_under(mrb, love, m.name);

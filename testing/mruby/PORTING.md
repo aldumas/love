@@ -636,6 +636,31 @@ them changes when we swap.
 
 ## C. Cross-cutting (whole-port infrastructure, no code site yet)
 
+- [x] Module-singleton teardown on quit. `mrbx_register_module` used to `retain()`
+      each module on top of the init's own `new`/`retain`, and the module was bound
+      to a plain Ruby module with no GC free-func — so `mrb_close` released nothing
+      and the Window/Graphics/Audio/Font singletons leaked on quit in BOTH the
+      harness and the real exe. (The Lua build releases them via the Proxy userdata
+      `__gc` on `lua_close`, `common/runtime.cpp`.) Fixed by tracking each state's
+      module instances (`moduleInstances` in `common/mrb_runtime.cpp`) and releasing
+      them in a single `mrbx_close_state(mrb)` — used everywhere a love `mrb_state`
+      is closed (`love_mrb.cpp`, `harness.cpp`, `LuaThread_mrb.cpp`) in place of a
+      bare `mrb_close`. It runs `mrbx_forgetstate`, then `mrb_close` (so Ruby objects
+      die first), then releases the modules in reverse registration order — which
+      tears down graphics before the window so `~Graphics` frees GPU state while the
+      GL context is alive. The one non-linear dependency: the graphics module owns an
+      internal default `Font` (not a Ruby object, so it outlives `mrb_close`) whose
+      FreeType face uses the `FT_Library` owned by the font module by raw pointer
+      (`font/freetype/Font.cpp`); since graphics is registered after font, reverse
+      order would free font first, so `mrbx_close_state` defers the font module past
+      every other module. `mrbx_register_module` no longer retains (it tracks); the
+      five name-collision modules that bypass it (data/thread/joystick/font/video)
+      normalized to one `if-null-new-else-retain` binding ref + `mrbx_track_module`.
+      Verified: real exe quits cleanly; ASan/LSan on a quitting game = 0 errors, 0
+      `love::` leak frames (only external dbus/nvidia driver allocations remain); the
+      `*_test.rb` suite is unchanged (22/22; `filesystem_mount_test` fixture gap
+      aside). Corrects the two notes in the Memory-audit / broader-bug-hunt items
+      that assumed the exe already tore modules down on quit.
 - [x] Object/proxy identity map: an mruby equivalent of Lua's weak-table map so
       the same C++ object always maps to the same Ruby object — done by the
       physics-slice work (see §A `#phys-identity`), but the mechanism is
@@ -699,9 +724,11 @@ them changes when we swap.
         whole suite with `detect_leaks=1` and `LSAN_OPTIONS=suppressions=`
         `leak_suppressions.txt` — a `leak:` file for the uninstrumented external
         allocators (GL driver / SDL / X11 / ALSA-OpenAL), which leak context- and
-        device-lifetime state because this one-shot harness exits without tearing
-        down the window/graphics/audio module singletons (the real `love` exe does
-        that on quit). With those suppressed, exactly **one** genuine binding-layer
+        device-lifetime state inside the driver. (At the time this note assumed the
+        love module singletons themselves were never torn down — "the real `love`
+        exe does that on quit" was wrong for the mruby exe too; both now tear them
+        down via `mrbx_close_state`. See the "Module-singleton teardown on quit"
+        item in §C.) With those suppressed, exactly **one** genuine binding-layer
         leak remained: `k_require` (`wrap_Filesystem_mrb.cpp`) constructed a
         `std::string modulename`/`resolved` that was still alive when the
         not-found / read-fail / raising-file paths called `mrb_raisef` — mruby's
@@ -785,9 +812,12 @@ them changes when we swap.
             decoders (already fed untrusted bytes) — with libFuzzer or AFL++ over
             a thin harness, run under ASan+UBSan.
       - [ ] **Run the real `love` (CMake `build-mrb/`) under the sanitizers**, not
-            just the Makefile harness — exercises the full boot pipeline + module
-            teardown on quit (which the one-shot harness skips), so it can surface
-            shutdown-ordering UAFs and the leaks the harness suppressions hide.
+            just the Makefile harness — exercises the full boot pipeline against a
+            real game. (Module teardown on quit is no longer harness-vs-exe specific:
+            both now go through `mrbx_close_state` — see the §C item. An ASan run of
+            `build-mrb/love` on a quitting game already comes back with 0 errors and
+            0 `love::` leak frames; only external dbus/nvidia driver allocations
+            remain. Still worth a broader-game pass for shutdown-ordering UAFs.)
       Record findings + fixes inline here (as the memory-audit item does) and tick
       each tool off as it's run.
 

@@ -175,7 +175,7 @@ static DoneAction runlove(const std::string &game, int &retval, bool nogame)
 	if (!nogame && !load_game_source(game, path, source))
 	{
 		fprintf(stderr, "could not read game: %s\n", game.c_str());
-		mrb_close(mrb);
+		love::mrbx_close_state(mrb);
 		retval = 1;
 		return DONE_QUIT;
 	}
@@ -209,7 +209,7 @@ static DoneAction runlove(const std::string &game, int &retval, bool nogame)
 	else
 		retval = 1;
 
-	mrb_close(mrb);
+	love::mrbx_close_state(mrb);
 	return done;
 }
 

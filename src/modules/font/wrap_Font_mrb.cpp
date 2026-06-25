@@ -482,7 +482,9 @@ extern "C" void mrb_love_font_init(mrb_state *mrb)
 	Font *inst = instance();
 	if (inst == nullptr)
 		inst = new love::font::freetype::Font();
-	inst->retain(); // keep the module alive for the binding's lifetime
+	else
+		inst->retain();
+	mrbx_track_module(mrb, inst); // released on state close (mrbx_close_state)
 
 	// Name collision: the love.font module and the graphics Font *type* both map
 	// to Love::Font. As with the data/thread/joystick module-name vs type-name

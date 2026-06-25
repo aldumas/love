@@ -194,6 +194,28 @@ struct RClass *mrbx_gettypeclass(mrb_state *mrb, const love::Type &type);
 void mrbx_forgetstate(mrb_state *mrb);
 
 /**
+ * Records a module instance as held by this state's bindings, so mrbx_close_state
+ * releases it (once) when the state closes. The caller must already own exactly
+ * one reference for this binding -- the `new` from first creation or an
+ * `inst->retain()` for a reuse on another VM. mrbx_register_module calls this
+ * for the modules it registers; the modules that bypass it (name-collision
+ * cases: data/thread/joystick/font/video) call it directly.
+ **/
+void mrbx_track_module(mrb_state *mrb, love::Object *module);
+
+/**
+ * Tears down a love mrb_state: drops this state's cached entries (mrbx_forgetstate),
+ * closes the VM (which releases every wrapped game object via its free callback),
+ * then releases the module instances this state's bindings held -- in reverse
+ * registration order, after the VM's objects are gone. This mirrors the Lua
+ * build's lua_close GC, where objects (marked later) finalize before the modules
+ * they depend on, and where releasing a module to a zero refcount runs its
+ * destructor (tearing down the window/graphics/audio singletons). Use everywhere
+ * a love mrb_state is closed, in place of a bare mrb_close.
+ **/
+void mrbx_close_state(mrb_state *mrb);
+
+/**
  * --- Per-object user data ------------------------------------------------
  *
  * Associates one arbitrary Ruby value with a love::Object, keyed by the C++
@@ -234,7 +256,9 @@ void mrbx_clear_callback(const void *key);
 
 /**
  * Registers a LÖVE module as Love::<Name> with its keyword-argument methods.
- * The module instance is retained and stored so wrapper functions can reach it.
+ * The instance is tracked (via mrbx_track_module) so mrbx_close_state releases
+ * it when the state closes; the caller's init owns the single binding reference
+ * (the `new` on first creation or an `inst->retain()` on reuse).
  **/
 void mrbx_register_module(mrb_state *mrb, const WrappedModule &m);
 
