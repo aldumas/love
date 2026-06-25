@@ -49,19 +49,43 @@ CXXFLAGS += -DLOVE_MRUBY_NO_VULKAN
 # helpers); LOVE_MRUBY guards those Lua-only sections out so the shared .cpp
 # files compile here, with the behaviour reimplemented in the _mrb wrapper.
 CXXFLAGS += -DLOVE_MRUBY
-# Optional AddressSanitizer build (memory audit). `make SANITIZE=1` instruments
+# Optional sanitizer build (memory/UB audit). `make SANITIZE=<kind>` instruments
 # the binding layer (the directly-compiled $(SRCS): wrap_*_mrb.cpp, mrb_runtime,
 # and the module engine .cpp). The prebuilt archives (gfx/glslang/box2d/physfs/
-# lz4/wuff/xxhash) and libmruby stay uninstrumented, so ASan focuses on the
-# port's own C++ — pair with ASAN_OPTIONS=detect_leaks=0 to mute the
-# non-instrumented mruby/SDL/GL allocations. Build to a separate binary, e.g.
-#   make SANITIZE=1 BIN=$(PWD)/love_mrb_harness_asan
+# lz4/wuff/xxhash) and libmruby stay uninstrumented, so the sanitizer focuses on
+# the port's own C++ — the runtime's global new/delete + malloc interceptors
+# still cover the archives so process-wide heap errors are caught. Build each to
+# a separate binary, e.g. `make SANITIZE=1 BIN=$(PWD)/love_mrb_harness_asan`.
+#
+# Accepted kinds (SANITIZE=1 is a legacy alias for address):
+#   address   -> AddressSanitizer  (pair with ASAN_OPTIONS=detect_leaks=0)
+#   undefined -> UndefinedBehaviorSanitizer (UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0)
+#   thread    -> ThreadSanitizer
 ifeq ($(SANITIZE),1)
-CXXFLAGS += -fsanitize=address -fno-omit-frame-pointer -g -O1
+SAN_KIND := address
+else
+SAN_KIND := $(SANITIZE)
+endif
+ifeq ($(SAN_KIND),address)
+SAN_FLAGS := -fsanitize=address
+else ifeq ($(SAN_KIND),undefined)
+# -fno-sanitize=vptr: the vptr (polymorphic-type-confusion) check needs typeinfo
+# for every instrumented class, but only the binding layer is instrumented here
+# (the archives/mruby stay uninstrumented, like the ASan build), so vptr both
+# fails to link (undefined `typeinfo for love::Reference`) and can't see across
+# the uninstrumented boundary anyway. The rest of UBSan still applies.
+SAN_FLAGS := -fsanitize=undefined -fno-sanitize=vptr
+else ifeq ($(SAN_KIND),thread)
+SAN_FLAGS := -fsanitize=thread
+else ifneq ($(SAN_KIND),)
+$(error Unknown SANITIZE kind '$(SAN_KIND)'; use address, undefined, or thread)
+endif
+ifneq ($(SAN_FLAGS),)
+CXXFLAGS += $(SAN_FLAGS) -fno-omit-frame-pointer -g -O1
 endif
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
-ifeq ($(SANITIZE),1)
-LDFLAGS  += -fsanitize=address
+ifneq ($(SAN_FLAGS),)
+LDFLAGS  += $(SAN_FLAGS)
 endif
 # The sound module's lullaby backend links system libvorbis + libmodplug (the
 # Wave/FLAC/MP3 decoders are bundled — Wuff and dr_flac/dr_mp3, built below).

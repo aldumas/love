@@ -827,9 +827,10 @@ them changes when we swap.
 
 - Broader bug-hunt beyond ASan — promoted to its own section so each tool is a
   self-contained, context-clear-safe run and the whole set is one roster to work
-  from. **See §E. Bug-hunt tool roster.** ASan + LeakSanitizer are done (findings
-  in the memory-audit item above); UBSan, TSan, Valgrind, static analysis,
-  fuzzing, and the real-exe sanitizer pass are pending there.
+  from. **See §E. Bug-hunt tool roster.** ASan, LeakSanitizer, and UBSan are done
+  (ASan/LSan findings in the memory-audit item above; UBSan findings in §E row 3);
+  TSan, Valgrind, static analysis, fuzzing, and the real-exe sanitizer pass are
+  pending there.
 
 ---
 
@@ -861,7 +862,7 @@ tasks), so they are untagged and the pre-commit hook ignores them.
 |---|------|---------|--------|
 | 1 | AddressSanitizer (ASan) | heap overflow · UAF · double-free · alloc/dealloc mismatch | ✅ done |
 | 2 | LeakSanitizer (LSan) | memory leaks | ✅ done |
-| 3 | UBSan | overflow · bad shift/enum/bool · null/misaligned deref · vptr confusion | ☐ pending |
+| 3 | UBSan | overflow · bad shift/enum/bool · null/misaligned deref · vptr confusion | ✅ done (suite clean; vptr excluded) |
 | 4 | ThreadSanitizer (TSan) | data races · lock-order issues across threads | ☐ pending |
 | 5 | Valgrind / memcheck | uninitialized reads + the *uninstrumented* archives & mruby | ☐ pending |
 | 6 | Static analysis (scan-build / `-fanalyzer` / cppcheck) | unreached error/rare-kwarg paths | ☐ pending |
@@ -876,12 +877,15 @@ tasks), so they are untagged and the pre-commit hook ignores them.
   box2d/physfs/lz4/wuff/xxhash) and libmruby stay uninstrumented. The sanitizer's
   global `operator new/delete` + malloc interceptors still cover those, so heap
   errors are caught process-wide while the noise from external libs is muted.
-- **Today the knob is ASan-only:** `ifeq ($(SANITIZE),1)` hardcodes
-  `-fsanitize=address` (CXXFLAGS `-fno-omit-frame-pointer -g -O1`, LDFLAGS
-  `-fsanitize=address`). **UBSan/TSan first require generalizing the knob** to
-  dispatch on the sanitizer kind — e.g. accept `SANITIZE=undefined` /
-  `SANITIZE=thread` and map to the matching `-fsanitize=` flag (a few lines;
-  do this as step 0 of rows 3–4). Build each to its own binary via `BIN=`.
+- **The knob now dispatches on kind (done 2026-06-25):** `SANITIZE=<kind>` maps
+  to a `-fsanitize=` flag — `address` (`SANITIZE=1` is a legacy alias),
+  `undefined`, or `thread`; anything else errors. It adds `-fno-omit-frame-pointer
+  -g -O1` and threads the same flag into LDFLAGS. The `undefined` kind also passes
+  `-fno-sanitize=vptr`: the vptr (type-confusion) check needs typeinfo for every
+  instrumented class, but only the binding layer is instrumented (archives/mruby
+  are not), so vptr both fails to link (`undefined reference to typeinfo for
+  love::Reference`) and can't see across the uninstrumented boundary anyway.
+  Build each kind to its own binary via `BIN=`. TSan (row 4) reuses this as-is.
 - **Run the whole suite (23 tests), e.g.:**
   `for t in testing/mruby/*_test.rb; do echo "== $t"; DISPLAY=:1 ./<bin> "$t" || echo FAIL; done`
   (`DISPLAY=:1` is required — the graphics/window tests need an X display.)
@@ -906,14 +910,33 @@ tasks), so they are untagged and the pre-commit hook ignores them.
    longjmping `mrb_raisef`). Suite is leak-clean (0 residual blocks). Note: the
    module singletons are also torn down on quit now (`mrbx_close_state`, §C).
 
-3. **[ ] UBSan** (`-fsanitize=undefined`, ideally also `integer,implicit-conversion`)
-   over the binding layer — signed/unsigned overflow, bad shifts, null/misaligned
-   derefs, bad enum/bool values, vptr type confusion. Cheapest of the pending
-   tools (reuses the `SANITIZE=` harness; generalize the knob first, then build
-   `SANITIZE=undefined BIN=$PWD/love_mrb_harness_ubsan` and run the suite under
-   `UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0`). Prime suspects: the
-   keyword-arg coercions (`mrbx_opt*`/`mrbx_check*`), the lstrlib `pack`/`unpack`
-   size/alignment math, and the 1-based↔0-based index conversions. **Findings:** _(none yet)_
+3. **[x] UBSan — done 2026-06-25.** Generalized the `SANITIZE=` knob (step 0,
+   see the shared-mechanism note above), built
+   `make SANITIZE=undefined BIN=$PWD/love_mrb_harness_ubsan`, and ran all 23
+   `*_test.rb` under `DISPLAY=:1 UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0`.
+   **Result: clean — 0 runtime errors across the whole suite, every test still
+   passing (rc=0).** Regression command: same build + run loop.
+   - **vptr excluded.** First link failed with `undefined reference to typeinfo
+     for love::Reference` — `-fsanitize=undefined` pulls in the vptr check, which
+     needs RTTI/typeinfo for every instrumented polymorphic class, but only the
+     binding layer is instrumented (the archives + mruby are not, by the same
+     design ASan uses). vptr can't see across that boundary regardless, so the
+     `undefined` knob compiles with `-fno-sanitize=vptr`. All other UBSan checks
+     (signed/unsigned overflow, shifts, null/misaligned deref, enum/bool,
+     bounds, alignment) are active and clean. vptr-class type confusion is
+     better covered by static analysis (row 6) under this partial-instrumentation
+     model.
+   - **Prime suspects all exercised and clean:** the keyword-arg coercions
+     (`mrbx_opt*`/`mrbx_check*`) run on every binding call across the suite; the
+     lstrlib `pack`/`unpack` size/alignment/shift math is hit directly by
+     `data_test.rb` (negative ints, mixed widths/endianness, `!4` alignment,
+     length-prefixed `s2`/`z` strings, and the 1-based offset conversion); the
+     1-based↔0-based index conversions are exercised by `mesh_test.rb`,
+     `loader_test.rb`, and the `unpack` offset path. None tripped UBSan.
+   - **Coverage caveat:** this is the standard 23-test suite, not adversarial
+     edge inputs — fuzzing (row 7) over `pack`/`unpack` + decoders is where
+     malformed-input-driven overflow/shift UB would surface, and remains pending.
+   **Findings:** no UB in the binding layer.
 
 4. **[ ] TSan** (`-fsanitize=thread`) — the port has real concurrency the
    single-threaded test scripts barely exercise: per-thread `mrb_state`s (thread
