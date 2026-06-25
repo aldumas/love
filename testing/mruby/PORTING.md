@@ -829,8 +829,8 @@ them changes when we swap.
   self-contained, context-clear-safe run and the whole set is one roster to work
   from. **See §E. Bug-hunt tool roster.** ASan, LeakSanitizer, and UBSan are done
   (ASan/LSan findings in the memory-audit item above; UBSan findings in §E row 3);
-  TSan, Valgrind, static analysis, fuzzing, and the real-exe sanitizer pass are
-  pending there.
+  TSan is done too (row 4: 2 races found + fixed). Valgrind, static analysis,
+  fuzzing, and the real-exe sanitizer pass are still pending there.
 
 ---
 
@@ -863,7 +863,7 @@ tasks), so they are untagged and the pre-commit hook ignores them.
 | 1 | AddressSanitizer (ASan) | heap overflow · UAF · double-free · alloc/dealloc mismatch | ✅ done |
 | 2 | LeakSanitizer (LSan) | memory leaks | ✅ done |
 | 3 | UBSan | overflow · bad shift/enum/bool · null/misaligned deref · vptr confusion | ✅ done (suite clean; vptr excluded) |
-| 4 | ThreadSanitizer (TSan) | data races · lock-order issues across threads | ☐ pending |
+| 4 | ThreadSanitizer (TSan) | data races · lock-order issues across threads | ✅ done (2 races found + fixed; suite clean) |
 | 5 | Valgrind / memcheck | uninitialized reads + the *uninstrumented* archives & mruby | ☐ pending |
 | 6 | Static analysis (scan-build / `-fanalyzer` / cppcheck) | unreached error/rare-kwarg paths | ☐ pending |
 | 7 | Fuzzing (libFuzzer / AFL++) | data-driven entry points (`pack`/`unpack`, loader, decoders) | ☐ pending |
@@ -886,9 +886,10 @@ tasks), so they are untagged and the pre-commit hook ignores them.
   are not), so vptr both fails to link (`undefined reference to typeinfo for
   love::Reference`) and can't see across the uninstrumented boundary anyway.
   Build each kind to its own binary via `BIN=`. TSan (row 4) reuses this as-is.
-- **Run the whole suite (23 tests), e.g.:**
+- **Run the whole suite (24 tests), e.g.:**
   `for t in testing/mruby/*_test.rb; do echo "== $t"; DISPLAY=:1 ./<bin> "$t" || echo FAIL; done`
   (`DISPLAY=:1` is required — the graphics/window tests need an X display.)
+  (TSan needs `setarch -R` too: `… setarch -R ./<bin> "$t" …`.)
 - **Findings home:** record inline under each tool here, mirroring the
   memory-audit item's style (tool · how invoked · what was found · fix · result).
 
@@ -938,15 +939,50 @@ tasks), so they are untagged and the pre-commit hook ignores them.
      malformed-input-driven overflow/shift UB would surface, and remains pending.
    **Findings:** no UB in the binding layer.
 
-4. **[ ] TSan** (`-fsanitize=thread`) — the port has real concurrency the
-   single-threaded test scripts barely exercise: per-thread `mrb_state`s (thread
-   module), `Channel` round-trips, `perform_atomic`, the audio mix/stream pool,
-   the theora decode worker, and the `mrbx_*` global stores (typeClasses/userData/
-   objectWrappers/callbacks, keyed by `mrb_state*`). **Needs a thread-heavy test
-   written first** (spawn N threads pushing/popping channels + sharing wrappers) —
-   the existing suite won't surface races. Generalize the `SANITIZE=` knob
-   (`SANITIZE=thread`), build a separate binary, run the new test under it. High
-   value: data races are exactly what review + ASan won't find. **Findings:** _(none yet)_
+4. **[x] TSan — done 2026-06-25.** Wrote the thread-heavy test
+   (`testing/mruby/thread_test.rb`): 8 worker `Love::Thread`s booting their own
+   `mrb_state` concurrently while hammering shared named `Channel`s
+   (push/demand/pop/peek/get_count/perform_atomic) and churning wrappers. Built
+   `make SANITIZE=thread BIN=$PWD/love_mrb_harness_tsan` and ran it under
+   `setarch -R` (TSan vs. this kernel's ASLR needs `setarch -R` to disable
+   randomization, else it aborts with `unexpected memory mapping`) with
+   `TSAN_OPTIONS=halt_on_error=0`. **Two real data races found and fixed; ~590
+   subsequent runs (incl. a 24-worker heavy variant) are TSan-clean.**
+   - **Race 1 — the global `mrbx_*` registries (the predicted big one).** 261
+     race reports, all on the unguarded `std::map`s in `common/mrb_runtime.cpp`
+     (`typeClasses`, `objectWrappers`, `userData`, `moduleInstances`,
+     `callbacks`), keyed by `mrb_state*` but **shared across every VM**. As N
+     thread VMs boot (register types → `typeClasses[k]=…`, mint wrappers →
+     `objectWrappers`/`mrbx_pushtype`, track modules), run, and tear down
+     (`mrbx_forgetstate`/`mrbx_close_state`), they mutate the same red-black trees
+     concurrently. Not just a TSan nag — it **segfaults even uninstrumented**
+     (tree corruption). Fix: one `std::recursive_mutex` (`g_runtimeMutex`)
+     serializing every access (recursive because the locked entry points nest —
+     `mrbx_gettypeclass` self-recurses on parent types, `mrbx_pushtype` →
+     `mrbx_gettypeclass`, `mrbx_close_state` → `mrbx_forgetstate`, and
+     `mrb_data_object_alloc` can trigger GC → `mrbx_object_free`, all same-thread;
+     mruby's GC is per-VM and grabs no other global lock, so no lock-order
+     inversion).
+   - **Race 2 — `mrb_love_filesystem_init` require-path write.** Every VM boot ran
+     `inst->getRequirePath() = {"?.rb","?/init.rb"}` on the **shared** Filesystem
+     singleton, so concurrent worker boots wrote the same `std::vector<string>`
+     (`wrap_Filesystem_mrb.cpp:1023`). Fix: do it once, inside the
+     `inst == nullptr` first-creation branch — also stops a later thread boot from
+     clobbering a game's customized `set_require_path`.
+   - **Checked-and-clean / not-applicable:** `love::Object` refcounting is already
+     `std::atomic<int>` with proper ordering (concurrent module `retain`/`release`
+     across VMs is safe); `ThreadModule::getChannel`'s named-channel registry is
+     already `namedChannelMutex`-guarded; `Channel`'s own ops are internally
+     locked. `love::Type`'s lazy id/`isa`/`init` (non-atomic `nextId++` in
+     `common/types.cpp`) **is** racy in principle but **dormant in the port** — the
+     mruby bindings type-check via Ruby's `mrb_obj_is_kind_of` and key maps by
+     `Type*` identity, and never call `Type::init/getId/isa` (those are only in the
+     Lua `runtime.cpp`); flagged here in case a future binding starts using them.
+   - **Regression command:** `make SANITIZE=thread BIN=$PWD/love_mrb_harness_tsan`
+     then `DISPLAY=:1 TSAN_OPTIONS=halt_on_error=0 setarch -R
+     ./love_mrb_harness_tsan thread_test.rb` (expect `ALL PASS`, 0 warnings).
+   **Findings:** 2 races (global binding registries; filesystem require-path) —
+   both fixed.
 
 5. **[ ] Valgrind / memcheck** — catches uninitialized-value reads (which ASan
    does not) and instruments the *uninstrumented* archives (box2d/gfx/glslang/

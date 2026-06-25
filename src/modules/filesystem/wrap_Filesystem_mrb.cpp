@@ -1004,7 +1004,17 @@ extern "C" void mrb_love_filesystem_init(mrb_state *mrb)
 {
 	Filesystem *inst = instance();
 	if (inst == nullptr)
+	{
 		inst = new physfs::Filesystem();
+
+		// The engine's default require path uses Lua extensions; a Ruby-scripted
+		// game wants Ruby ones. Override once, on first creation (the user can
+		// still set_require_path). Doing this only here -- rather than on every
+		// init -- keeps a later thread VM's boot from concurrently writing (data
+		// race) or clobbering a require path the game already customized: the
+		// module is a process-wide singleton shared across every VM.
+		inst->getRequirePath() = {"?.rb", "?/init.rb"};
+	}
 	else
 		inst->retain();
 
@@ -1017,10 +1027,6 @@ extern "C" void mrb_love_filesystem_init(mrb_state *mrb)
 	mrbx_register_module(mrb, w);
 	mrbx_register_type(mrb, File::type, f_functions);
 	mrbx_register_type(mrb, FileData::type, fd_functions);
-
-	// The engine's default require path uses Lua extensions; a Ruby-scripted
-	// game wants Ruby ones. Override here (the user can still set_require_path).
-	inst->getRequirePath() = {"?.rb", "?/init.rb"};
 
 	// Provide a global Ruby-style require backed by the virtual filesystem.
 	mrb_define_method(mrb, mrb->kernel_module, "require", k_require, MRB_ARGS_REQ(1));

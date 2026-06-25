@@ -25,6 +25,7 @@
 #include <map>
 #include <unordered_map>
 #include <utility>
+#include <mutex>
 
 namespace love
 {
@@ -123,6 +124,22 @@ mrb_value mrbx_string(mrb_state *mrb, const std::string &s)
 
 // --- Object <-> Ruby binding ---------------------------------------------
 
+// The registries below (objectWrappers, moduleInstances, typeClasses, userData,
+// callbacks) are process-global but keyed by mrb_state, and the thread module
+// runs each Love::Thread in its own mrb_state on its own OS thread. So several
+// VMs boot (registering types, minting wrappers, tracking modules), run, and
+// tear down (mrbx_forgetstate / mrbx_close_state) concurrently, all touching
+// these same std::maps. Without a lock those concurrent map mutations are a data
+// race that corrupts the tree (TSan-confirmed; it segfaults uninstrumented).
+// One recursive mutex serializes every access. Recursive because the locked
+// public entry points nest: mrbx_gettypeclass recurses on parent types,
+// mrbx_pushtype -> mrbx_gettypeclass, mrbx_close_state -> mrbx_forgetstate, and
+// mrb_data_object_alloc inside mrbx_pushtype can trigger GC -> mrbx_object_free,
+// all on the same thread. mruby's GC is per-VM and touches no other global lock,
+// so holding this across an allocation introduces no lock-order inversion.
+static std::recursive_mutex g_runtimeMutex;
+typedef std::lock_guard<std::recursive_mutex> RuntimeLock;
+
 // Identity registry: (mrb_state*, love::Object*) -> the one live Ruby wrapper
 // for that object in that VM. This is a *weak* map — it is not GC-protected, so
 // it never keeps a wrapper (or the C++ object the wrapper retains) alive. The
@@ -138,6 +155,7 @@ static std::map<mrb_state *, std::vector<love::Object *>> moduleInstances;
 
 static void mrbx_object_free(mrb_state *mrb, void *p)
 {
+	RuntimeLock lock(g_runtimeMutex);
 	if (p != nullptr)
 	{
 		// Drop the weak identity entry before releasing: this wrapper is gone, so
@@ -158,6 +176,7 @@ static std::map<std::pair<mrb_state *, const love::Type *>, RClass *> typeClasse
 
 struct RClass *mrbx_gettypeclass(mrb_state *mrb, const love::Type &type)
 {
+	RuntimeLock lock(g_runtimeMutex);
 	auto key = std::make_pair(mrb, &type);
 	auto it = typeClasses.find(key);
 	if (it != typeClasses.end())
@@ -200,6 +219,7 @@ static std::map<std::pair<mrb_state *, love::Object *>, mrb_value> userData;
 
 void mrbx_set_userdata(mrb_state *mrb, love::Object *object, mrb_value value)
 {
+	RuntimeLock lock(g_runtimeMutex);
 	auto key = std::make_pair(mrb, object);
 	auto it = userData.find(key);
 	if (it != userData.end())
@@ -218,12 +238,14 @@ void mrbx_set_userdata(mrb_state *mrb, love::Object *object, mrb_value value)
 
 mrb_value mrbx_get_userdata(mrb_state *mrb, love::Object *object)
 {
+	RuntimeLock lock(g_runtimeMutex);
 	auto it = userData.find(std::make_pair(mrb, object));
 	return it == userData.end() ? mrb_nil_value() : it->second;
 }
 
 void mrbx_clear_userdata(love::Object *object)
 {
+	RuntimeLock lock(g_runtimeMutex);
 	// Called from engine teardown without an mrb_state in hand, so drop the
 	// object's entry across every state, unregistering with each one's GC.
 	for (auto it = userData.begin(); it != userData.end(); )
@@ -249,6 +271,7 @@ static std::map<const void *, std::pair<mrb_state *, mrb_value>> callbacks;
 
 void mrbx_set_callback(mrb_state *mrb, const void *key, mrb_value callback)
 {
+	RuntimeLock lock(g_runtimeMutex);
 	auto it = callbacks.find(key);
 	if (it != callbacks.end())
 	{
@@ -267,6 +290,7 @@ void mrbx_set_callback(mrb_state *mrb, const void *key, mrb_value callback)
 
 bool mrbx_get_callback(const void *key, mrb_state **mrb_out, mrb_value *callback_out)
 {
+	RuntimeLock lock(g_runtimeMutex);
 	auto it = callbacks.find(key);
 	if (it == callbacks.end())
 		return false;
@@ -279,6 +303,7 @@ bool mrbx_get_callback(const void *key, mrb_state **mrb_out, mrb_value *callback
 
 void mrbx_clear_callback(const void *key)
 {
+	RuntimeLock lock(g_runtimeMutex);
 	auto it = callbacks.find(key);
 	if (it == callbacks.end())
 		return;
@@ -290,6 +315,7 @@ void mrbx_clear_callback(const void *key)
 // reusing the same address can't be handed a stale RClass. Call before mrb_close.
 void mrbx_forgetstate(mrb_state *mrb)
 {
+	RuntimeLock lock(g_runtimeMutex);
 	for (auto it = typeClasses.begin(); it != typeClasses.end(); )
 	{
 		if (it->first.first == mrb)
@@ -332,6 +358,7 @@ void mrbx_forgetstate(mrb_state *mrb)
 
 void mrbx_close_state(mrb_state *mrb)
 {
+	RuntimeLock lock(g_runtimeMutex);
 	// Take this state's tracked module instances before closing the VM; the map
 	// key dangles once mrb is freed, so we must detach the list first.
 	std::vector<love::Object *> modules;
@@ -386,6 +413,8 @@ mrb_value mrbx_pushtype(mrb_state *mrb, love::Type &type, love::Object *object)
 	if (object == nullptr)
 		return mrb_nil_value();
 
+	RuntimeLock lock(g_runtimeMutex);
+
 	// Return the existing wrapper for this object if one is still alive, so all
 	// Ruby handles to the same engine object are identical (==). See the
 	// objectWrappers note above for why this weak cache can't leak.
@@ -437,6 +466,7 @@ static love::Type *mrbx_typeof(mrb_state *mrb, mrb_value v)
 	if (mrb_data_check_get_ptr(mrb, v, &mrbx_object_data_type) == nullptr)
 		return nullptr;
 
+	RuntimeLock lock(g_runtimeMutex);
 	struct RClass *cls = mrb_obj_class(mrb, v);
 	for (const auto &pair : typeClasses)
 	{
@@ -566,6 +596,7 @@ Variant mrbx_checkvariant(mrb_state *mrb, mrb_value v)
 
 void mrbx_track_module(mrb_state *mrb, love::Object *module)
 {
+	RuntimeLock lock(g_runtimeMutex);
 	if (module != nullptr)
 		moduleInstances[mrb].push_back(module);
 }

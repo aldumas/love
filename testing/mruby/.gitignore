@@ -1,5 +1,6 @@
 love_mrb_harness
 love_mrb_harness_asan
 love_mrb_harness_ubsan
+love_mrb_harness_tsan
 .obj/
 build/
