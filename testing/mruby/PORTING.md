@@ -685,6 +685,49 @@ them changes when we swap.
       `CMAKE_MIGRATION.md`; nogame.rb, install rules, and the shared `liblove`
       one-symbol ABI are done.
 - [ ] FFI fast paths: re-implement the few wrappers that use LuaJIT FFI.
+- [ ] Fused-mode (self-contained executable). The Lua build can run "fused":
+      a `.love` archive is appended to the `love` executable to make one
+      self-contained binary that boots its own game (no separate game argument).
+      **Confirm this works for the port — currently unverified, and likely not
+      wired up.** State of play:
+      - The **C++/physfs machinery is ported and exercised:** `Filesystem::setFused`
+        / `isFused` (filesystem/physfs/Filesystem.cpp) and the fused special-cases
+        in `mount`/`unmount`/`getRealDirectory` (the `isFused() && sourceBase ==
+        archive` branches that mount the executable itself as the source archive,
+        skipping any non-archive prefix bytes) compile in the mruby build, and
+        `set_fused`/`fused?` are bound + covered by `filesystem_mount_test.rb`
+        (see §A filesystem `#fs-platform`).
+      - **CONFIRMED: it does NOT work for the port** (verified 2026-06-25 by
+        reading the exe's game-acquisition path, not just inferred). Two layers
+        are missing:
+        - *The exe never mounts an archive as the game.* `love_mrb.cpp`'s
+          `load_game_source` reads the game **directly off the host filesystem
+          via stdio** (`read_file`) — a single `.rb` file, or a directory's
+          `main.rb` — and hands the raw text to boot.rb as `$LOVE_GAME_SOURCE`
+          (a String it `eval`s). There is no physfs source mount, no `.love`
+          (zip) game container, and no reading of an archive appended to the
+          executable. The port doesn't even consume a plain `.love` as a game
+          yet, and fused mode is a strict superset of that.
+        - *The boot pipeline never drives fused.* `src/modules/love/boot.rb` (see
+          its own comment, "the source-detection dance of boot.lua collapses to
+          'use the working tree'") never calls `isFused`, never mounts the
+          executable as the source, never latches `set_fused`. Lua's boot.lua
+          instead detects a fused exe (its appended archive mounts), calls
+          `setFused(true)`, sets the source to the executable path, and derives
+          the identity from it. None of that exists here.
+        So appending a `.love` to `build-mrb/love` and running it with no game
+        argument would just hit the no-game screen (or error), not boot the
+        appended game. Only the isolated `fused?` latch is exercised by the unit
+        test; no end-to-end fused path exists.
+      To close this: (1) decide whether fused deployment (and `.love`-archive
+      games generally) are in scope for the port — the exe currently runs raw
+      `.rb`/`main.rb` source, so this is a sizeable feature, not a tweak;
+      (2) if so, teach the exe to mount a `.love` (and the self-appended archive)
+      as the physfs source and load `main.rb` through the virtual FS, and port
+      boot.lua's fused-detection + executable-self-mount + `set_fused` latch into
+      boot.rb; (3) verify end to end — `cat build-mrb/love game.love > fused &&
+      chmod +x fused && ./fused` boots the game with no argument. Record the
+      outcome here. No code site yet, so this item is untagged.
 - [x] Port the remaining `wrap_*.cpp` modules. All 21 LÖVE modules and every
       object type they expose are ported, including the low-level GPU `Buffer`
       (`GraphicsBuffer`) and `GraphicsReadback` types. Every per-type *method*
