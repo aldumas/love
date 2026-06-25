@@ -825,6 +825,36 @@ them changes when we swap.
       bounded by the result they hand back. Consider a leak run under
       valgrind/ASan once CMake replaces the harness Makefile.
 
+- [ ] Audit for **dormant functions** — code the port no longer reaches and
+  must deliberately decide about. The parallel-path port (Lua kept intact for
+  upstream-sync, see the CMake item) leaves shared `common/` primitives that the
+  Lua runtime calls but the mruby bindings never do. Dormant ≠ harmless: such a
+  function can carry a latent bug that nothing currently triggers, so it passes
+  every dynamic tool (ASan/UBSan/TSan) yet detonates the moment a future binding
+  starts calling it — with no test or reviewer expecting it. **Sweep for them and,
+  per function, record one disposition in this ledger:** (a) **Lua-only, leave
+  intact** — kept for upstream sync, just note it's dormant in the port so nobody
+  trusts a clean tool run over it; (b) **mruby scaffolding, now unused** — remove
+  it; (c) **shared primitive that could be reactivated** — either fix it to be
+  correct under the port's assumptions (e.g. its concurrency model) now, or add an
+  `assert`/comment that it must not be used from the mruby path until fixed.
+  - **How to find them:** functions declared in `common/` (and module headers)
+    whose only call sites are `common/runtime.cpp` / `wrap_*.cpp` (Lua) and never
+    the `_mrb` bindings — `grep` each suspect's name across `src` and check the
+    hits are all Lua-path. The `_mrb.cpp` / non-`_mrb.cpp` split is the main tell.
+  - **Seed (found in the §E row-4 TSan pass):** `love::Type::init()` / `getId()` /
+    `isa()` and the non-atomic `static uint32 nextId` in `common/types.cpp`.
+    Dormant in the port (bindings type-check via Ruby's `mrb_obj_is_kind_of` and
+    key maps by `Type*` identity; `init()` is only called from the Lua
+    `runtime.cpp`). It has a **real data race** (`nextId++` RMW + unsynchronized
+    `id`/`inited`/`bits` writes) and a worse correctness bug (two threads
+    first-touching a virgin type could assign it two different ids → broken
+    `isa`). Disposition (c): currently Lua-only so leave intact, but **if any
+    mruby binding ever starts using `Type::init/getId/isa`, make it thread-safe
+    first** (once-init under a mutex with a lock-free `inited` fast path) — the
+    port runs one `mrb_state` per OS thread, so first-touch from two thread VMs
+    would race immediately.
+
 - Broader bug-hunt beyond ASan — promoted to its own section so each tool is a
   self-contained, context-clear-safe run and the whole set is one roster to work
   from. **See §E. Bug-hunt tool roster.** ASan, LeakSanitizer, and UBSan are done
