@@ -1,0 +1,17 @@
+# Linker version script for the mruby liblove: a one-symbol ABI.
+#
+# love_mrb_main is the single entry point the `love` executable forwards to
+# (src/love_mrb_exe.cpp). Everything else -- the ported module openers
+# (mrb_love_*_init), the mruby C API, and every bundled static-archive symbol
+# -- is localized, so nothing leaks out of the shipped .so. `local: *` overrides
+# the per-symbol visibility attributes carried in from the static libraries,
+# which a `-fvisibility=hidden` preset alone cannot reach.
+#
+# The dev harness does NOT load through this .so; it links the engine objects
+# directly (love_mrb_objs in LoveMruby.cmake), so it still reaches the openers.
+{
+	global:
+		love_mrb_main;
+	local:
+		*;
+};

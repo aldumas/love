@@ -9,9 +9,11 @@
 # Lua-side CMake churn doesn't conflict (the parallel-path migration; see
 # testing/mruby/CMAKE_MIGRATION.md).
 #
-# Provides: the `love_mrb` static library + the seven bundled `mrbh_*` archives,
-# the `love` executable, and these variables for other includers:
-#   LOVE_MRB_LIBS              link list (love_mrb + archives + system libs)
+# Provides: the `love_mrb_objs` OBJECT library (engine modules + runtime) + the
+# seven bundled `mrbh_*` archives, the `liblove.so` shared library (one-symbol
+# ABI: love_mrb_main only) and the `love` executable, plus these variables for
+# other includers:
+#   LOVE_MRB_LIBS              harness link list (love_mrb_objs + engine deps)
 #   LOVE_MRB_EMBED_DIR         dir holding the generated <name>_rb.h headers
 #   LOVE_MRB_EMBEDDED_HEADERS  the generated headers (add to each exe's sources)
 #   LOVE_MRB_SDL_LIBDIR        SDL3 link dir (for BUILD_RPATH)
@@ -300,35 +302,62 @@ set(LOVE_MRB_MODULE_SRCS
 	${LOVE_SRC}/modules/physics/box2d/MotorJoint.cpp
 	${LOVE_SRC}/modules/physics/box2d/Contact.cpp)
 
-# --- liblove: the shared engine library ---------------------------------------
-# Every ported module + common runtime + the boot driver (src/love_mrb.cpp,
-# which exports love_mrb_main). The bundled archives + mruby + system libs are
-# linked PRIVATE (baked into the .so). The modules are *direct* sources (not an
-# archive), so the liblove<->gfx cycle (gfx pulls common/memory.cpp's alignUp)
-# resolves with all module objects present -- the same reason the OBJECT-library
-# form worked. Default visibility (no hidden preset): the dev harness drives
-# mruby and the module openers directly, so it needs those symbols exported.
-# Tightening to a hidden ABI (export only love_mrb_main) is a future cleanup.
-include(GNUInstallDirs)
-
-add_library(liblove SHARED
-	${LOVE_MRB_MODULE_SRCS}
-	${LOVE_SRC}/love_mrb.cpp
-	${LOVE_MRB_EMBEDDED_HEADERS})
-set_target_properties(liblove PROPERTIES PREFIX "" OUTPUT_NAME liblove)
-target_compile_definitions(liblove PUBLIC ${LOVE_MRB_DEFS})
-target_include_directories(liblove PUBLIC ${LOVE_MRB_INCS} ${LOVE_MRB_EMBED_DIR})
-target_link_libraries(liblove PRIVATE
+# --- engine deps shared by liblove and the harness ----------------------------
+# The bundled archives + mruby + system libs. Both the shipped liblove and the
+# dev harness embed the engine objects, so both need this exact link set.
+set(LOVE_MRB_ENGINE_DEPS
 	mrbh_physfs mrbh_lz4 mrbh_wuff mrbh_gfx mrbh_glslang mrbh_xxhash mrbh_box2d
 	${MRUBY_LIB}
 	SDL3 GL pthread m z
 	${FREETYPE_LIBRARIES} ${HARFBUZZ_LIBRARIES}
 	vorbisfile vorbis ogg modplug ${OPENAL_LIBRARIES} theoradec)
+
+# --- love_mrb_objs: the ported modules + common runtime, compiled once --------
+# An OBJECT library (every object is always pulled, like direct sources -- so the
+# gfx<->modules cycle, gfx pulling common/memory.cpp's alignUp, still resolves
+# with all module objects present). Built hidden so the objects carry no exported
+# symbols of their own; liblove then bakes them behind a love_mrb_main-only ABI,
+# while the dev harness links these objects DIRECTLY to reach the per-module
+# openers (mrb_love_*_init) and the shared mruby state -- no exported entry
+# points required. PUBLIC usage requirements flow to both consumers.
+add_library(love_mrb_objs OBJECT ${LOVE_MRB_MODULE_SRCS})
+target_compile_definitions(love_mrb_objs PUBLIC ${LOVE_MRB_DEFS})
+target_include_directories(love_mrb_objs PUBLIC ${LOVE_MRB_INCS} ${LOVE_MRB_EMBED_DIR})
+set_target_properties(love_mrb_objs PROPERTIES
+	C_VISIBILITY_PRESET hidden
+	CXX_VISIBILITY_PRESET hidden
+	VISIBILITY_INLINES_HIDDEN ON)
+
+# --- liblove: the shared engine library, one-symbol ABI -----------------------
+# The engine objects + the boot driver (src/love_mrb.cpp, which marks
+# love_mrb_main LOVE_EXPORT). Hidden presets keep our own code in; the version
+# script (cmake/liblove.map) localizes everything else -- including the mruby and
+# static-archive symbols that come in with default visibility -- so the only
+# symbol exported from liblove.so is love_mrb_main.
+include(GNUInstallDirs)
+
+set(LOVE_MRB_VERSION_SCRIPT ${LOVE_ROOT}/cmake/liblove.map)
+add_library(liblove SHARED
+	$<TARGET_OBJECTS:love_mrb_objs>
+	${LOVE_SRC}/love_mrb.cpp
+	${LOVE_MRB_EMBEDDED_HEADERS})
+set_target_properties(liblove PROPERTIES
+	PREFIX "" OUTPUT_NAME liblove
+	C_VISIBILITY_PRESET hidden
+	CXX_VISIBILITY_PRESET hidden
+	VISIBILITY_INLINES_HIDDEN ON)
+target_compile_definitions(liblove PRIVATE ${LOVE_MRB_DEFS})
+target_include_directories(liblove PRIVATE ${LOVE_MRB_INCS} ${LOVE_MRB_EMBED_DIR})
+target_link_libraries(liblove PRIVATE ${LOVE_MRB_ENGINE_DEPS})
+target_link_options(liblove PRIVATE
+	"LINKER:--version-script=${LOVE_MRB_VERSION_SCRIPT}")
+set_target_properties(liblove PROPERTIES LINK_DEPENDS ${LOVE_MRB_VERSION_SCRIPT})
 target_link_directories(liblove PRIVATE ${SDL_LIBDIR})
 set_target_properties(liblove PROPERTIES BUILD_RPATH ${SDL_LIBDIR})
 
-# Consumers (the love exe, the dev harness) link just liblove.
-set(LOVE_MRB_LIBS liblove)
+# The dev harness links the engine objects directly (the openers are hidden in
+# liblove.so), so it shares the module/runtime code and mruby explicitly.
+set(LOVE_MRB_LIBS love_mrb_objs ${LOVE_MRB_ENGINE_DEPS})
 
 # --- the thin love executable -------------------------------------------------
 # Forwards to liblove's love_mrb_main (mirrors the Lua src/love.cpp -> liblove).

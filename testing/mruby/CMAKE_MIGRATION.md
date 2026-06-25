@@ -98,18 +98,24 @@ The core migration is done — `-DLOVE_MRUBY=ON` builds a working `love`. Left:
   harness; point it at `-DLOVE_MRUBY=ON` once install/packaging lands).
 - **Stage 5**: the ASan memory audit (the other open §C item), now runnable since
   CMake controls the flags.
-- **Hidden-ABI cleanup** (optional): `liblove` currently uses default visibility
-  (exports module + mruby symbols) so the dev harness can drive mruby directly.
-  Tightening to export only `love_mrb_main` (hidden preset + `LOVE_EXPORT`) would
-  need the harness to go through exported entry points or share mruby explicitly.
 
-**Done since:** the **shared-`liblove` split** — `cmake/LoveMruby.cmake` now
+**Done since:** the **hidden-ABI cleanup** — `liblove.so` now exports a single
+symbol, `love_mrb_main`. The engine modules + runtime are compiled once into a
+hidden-visibility `love_mrb_objs` OBJECT library; `liblove` bakes those in and a
+version script (`cmake/liblove.map`, `local: *`) localizes everything else —
+including the mruby C API and bundled static-archive symbols that arrive with
+default visibility, which a `-fvisibility=hidden` preset alone can't reach. The
+dev harness no longer pulls openers out of the `.so`; it links `love_mrb_objs`
+(+ the engine deps) directly, so it still reaches `mrb_love_*_init` and shares
+mruby explicitly. Verified: `readelf --dyn-syms liblove.so` shows only
+`love_mrb_main` exported; the `love` exe and harness both still run.
+
+**Done before that:** the **shared-`liblove` split** — `cmake/LoveMruby.cmake`
 builds `liblove.so` (modules + runtime + the boot driver `src/love_mrb.cpp`,
 which exports `love_mrb_main`) and a thin `love` exe (`src/love_mrb_exe.cpp`,
 ~16 KB) that forwards to it, mirroring the Lua `src/love.cpp`→`liblove` layout.
 Both install (`bin/love`, `lib/liblove.so`; the installed `love` finds the lib
-via `$ORIGIN/../lib`). The dev harness links the same `liblove`. Plus the
-`love` **install rule**.
+via `$ORIGIN/../lib`). Plus the `love` **install rule**.
 
 > Maintenance note (sync): the **one** mruby source list lives in
 > `cmake/LoveMruby.cmake` (`LOVE_MRB_MODULE_SRCS`). When upstream adds a source
