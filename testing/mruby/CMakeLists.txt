@@ -343,3 +343,22 @@ target_link_libraries(love_mrb_harness PRIVATE
 	vorbisfile vorbis ogg modplug ${OPENAL_LIBRARIES} theoradec)
 target_link_directories(love_mrb_harness PRIVATE ${SDL_LIBDIR})
 set_target_properties(love_mrb_harness PROPERTIES BUILD_RPATH ${SDL_LIBDIR})
+
+# Second exe: the production mruby `love` entry (src/love_mrb.cpp), validated
+# here before folding into the main CMakeLists.txt (parallel-path migration).
+# Same module sources, with harness.cpp swapped for love_mrb.cpp; the boot
+# scripts are baked in (embedded headers), so it runs a game given on argv.
+set(LOVE_EXE_SRCS ${HARNESS_SRCS})
+list(REMOVE_ITEM LOVE_EXE_SRCS ${HERE}/harness.cpp)
+add_executable(love ${LOVE_SRC}/love_mrb.cpp ${LOVE_EXE_SRCS} ${EMBEDDED_HEADERS})
+target_compile_definitions(love PRIVATE ${LOVE_DEFS} LOVE_BUILD_EXE)
+target_include_directories(love PRIVATE ${LOVE_INCS} ${EMBED_DIR})
+target_compile_options(love PRIVATE -Wall)
+target_link_libraries(love PRIVATE
+	mrbh_physfs mrbh_lz4 mrbh_wuff mrbh_gfx mrbh_glslang mrbh_xxhash mrbh_box2d
+	${MRUBY_LIB}
+	SDL3 GL pthread m z
+	${FREETYPE_LIBRARIES} ${HARFBUZZ_LIBRARIES}
+	vorbisfile vorbis ogg modplug ${OPENAL_LIBRARIES} theoradec)
+target_link_directories(love PRIVATE ${SDL_LIBDIR})
+set_target_properties(love PROPERTIES BUILD_RPATH ${SDL_LIBDIR})

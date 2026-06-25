@@ -51,25 +51,36 @@ scripting layer (Lua→mruby) and the bindings (`wrap_*.cpp`→`wrap_*_mrb.cpp`)
   animated no-game screen with base64-embedded art). It's only the "no game
   provided" fallback, not needed to *run* a game; defer to a later pass and use a
   minimal placeholder for the first mruby `love` build.
-- Stages 1, 2, 4, 5 (main `CMakeLists.txt`): not started — see the open decision
-  below.
+- **Stage 3/4 boot entry: DONE (validated).** `src/love_mrb.cpp` is the
+  production `love` main (the mruby counterpart to `src/love.cpp`'s `runlove`):
+  opens mruby, registers every module (`open_love`), installs the thread VM
+  opener, resolves the game arg (a `.rb` file or a folder's `main.rb`), runs the
+  embedded arg/callbacks/boot pipeline + the `$LOVE_MAIN` Fiber loop, with
+  `--version`/`--help` and a restart loop. Validated by a second `love` target in
+  `testing/mruby/CMakeLists.txt`: `love --version` → "LOVE 12.0 [mruby]";
+  `love game.rb` and `love <dir>` both boot the demo game end-to-end. Uses
+  `LOVE_VERSION_STRING` (not the Lua-coupled `love_version()`).
+- **Architecture decided: parallel path (B).** Chosen for upstream-sync
+  friendliness (see `SYNC.md`): a separate `cmake/LoveMruby.cmake` keeps
+  `CMakeLists.txt` — the highest-conflict file — essentially untouched, vs. the
+  retrofit (A) which would conflict with every upstream CMake edit. The boot
+  entry, embedding, and source list above are all reused.
 
-## OPEN DECISION (needed before the main CMakeLists.txt work)
-How to structure the mruby build in the 2176-line `CMakeLists.txt`:
-- **(A) Retrofit** — add `option(LOVE_MRUBY)`; behind it, swap each module
-  group's `wrap_X.cpp`→`wrap_X_mrb.cpp`, `runtime.cpp`→`mrb_runtime.cpp`,
-  `LuaThread.cpp`→`LuaThread_mrb.cpp`, replace `lovedep::Lua` with mruby, exclude
-  lua53/luajit/socket/enet, and fork the boot in `love.cpp`/`love_mrb.cpp`.
-  Faithful to the ledger wording; one build system; but invasive across ~21
-  groups + boot + exe, and the Lua and mruby builds must both keep working.
-- **(B) Parallel path** — a dedicated `cmake/LoveMruby.cmake` (promoting the
-  proven harness source list) that builds `love`/`liblove` when
-  `-DLOVE_MRUBY=ON`, leaving the Lua machinery untouched. Lower risk,
-  self-contained, some source-list duplication.
-Recommendation: **(A)** for fidelity if the Lua build must stay first-class; **(B)**
-if the mruby build is the future and we want it isolated and low-risk. Either
-way the boot entry + embedding (done above) and the source list (from the
-harness) are reused.
+## What remains (Stages 1/2 wiring)
+The hard, uncertain pieces are all proven. What's left is mechanical:
+- **`cmake/LoveMruby.cmake`**: promote the validated harness CMake (the seven
+  sub-archives + the module source list + the `love` target from
+  `src/love_mrb.cpp`, swapping `delay_stub.cpp` for the real SDL-backed
+  `common/delay.cpp`) into a build of `love` (and optionally a `liblove` shared
+  lib).
+- **`CMakeLists.txt` hook**: `option(LOVE_MRUBY)`; when ON, after the common
+  prelude, `include(cmake/LoveMruby.cmake)` and skip the Lua module-group
+  machinery. Near-zero conflict surface.
+- **Exclusions** under the option: lua53/LuaJIT, luasocket, enet (unported).
+- **`nogame.rb`**: `src/scripts/nogame.lua` (3302 lines, animated, base64 art)
+  isn't ported; `love` currently requires a game arg (prints usage otherwise).
+  Port or use a minimal placeholder later — not needed to *run* a game.
+- **Stage 5**: run the `.rb` suite through the installed `love`; ASan memory audit.
 
 ## The CMake delta, staged
 
