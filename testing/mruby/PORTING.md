@@ -658,8 +658,8 @@ them changes when we swap.
       normalized to one `if-null-new-else-retain` binding ref + `mrbx_track_module`.
       Verified: real exe quits cleanly; ASan/LSan on a quitting game = 0 errors, 0
       `love::` leak frames (only external dbus/nvidia driver allocations remain); the
-      `*_test.rb` suite is unchanged (22/22; `filesystem_mount_test` fixture gap
-      aside). Corrects the two notes in the Memory-audit / broader-bug-hunt items
+      `*_test.rb` suite still passes (23/23, once `filesystem_mount_test` was made
+      hermetic). Corrects the two notes in the Memory-audit / broader-bug-hunt items
       that assumed the exe already tore modules down on quit.
 - [x] Object/proxy identity map: an mruby equivalent of Lua's weak-table map so
       the same C++ object always maps to the same Ruby object — done by the
@@ -716,10 +716,12 @@ them changes when we swap.
         1f9d98263, 2020); fixed here to `delete[]` (correct for both builds).
         `indexData` uses `realloc`/`free` (matched). After the fix the mesh
         report is gone and the graphics suite re-runs clean.
-      • **Out of scope (not a memory issue):** `filesystem_mount_test.rb` exits 1
-        on both the ASan and the normal harness — it mounts `/tmp/lovefs_test`, a
-        fixture nothing creates in this environment; a missing-fixture test gap,
-        unrelated to the audit.
+      • **Out of scope (not a memory issue):** `filesystem_mount_test.rb` exited 1
+        on both the ASan and the normal harness — it mounted `/tmp/lovefs_test`, a
+        fixture nothing created in this environment; a missing-fixture test gap,
+        unrelated to the audit. (Since fixed: the test is now hermetic — it
+        self-provisions a save-area subdir to mount and decodes an embedded base64
+        zip — so the suite runs 23/23 from a clean checkout.)
       • **LeakSanitizer run: clean, one binding leak found + fixed.** Ran the
         whole suite with `detect_leaks=1` and `LSAN_OPTIONS=suppressions=`
         `leak_suppressions.txt` — a `leak:` file for the uninstrumented external
