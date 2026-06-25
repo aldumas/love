@@ -327,3 +327,6 @@ target_compile_options(love PRIVATE -Wall)
 target_link_libraries(love PRIVATE ${LOVE_MRB_LIBS})
 target_link_directories(love PRIVATE ${SDL_LIBDIR})
 set_target_properties(love PROPERTIES BUILD_RPATH ${SDL_LIBDIR})
+
+include(GNUInstallDirs)
+install(TARGETS love RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
