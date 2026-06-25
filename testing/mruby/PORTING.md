@@ -656,8 +656,9 @@ them changes when we swap.
       and the LuaJIT path are **not** removed — deliberately: the parallel-path
       approach (chosen for upstream-sync friendliness, see `SYNC.md`) leaves the
       Lua build intact and simply doesn't reference lua53/LuaJIT/socket/enet in
-      the mruby path. Remaining polish (nogame.rb, install rules, optional shared
-      `liblove`, CI-on-real-runner) is tracked in `CMAKE_MIGRATION.md`.
+      the mruby path. Remaining polish (CI-on-real-runner) is tracked in
+      `CMAKE_MIGRATION.md`; nogame.rb, install rules, and the shared `liblove`
+      one-symbol ABI are done.
 - [ ] FFI fast paths: re-implement the few wrappers that use LuaJIT FFI.
 - [x] Port the remaining `wrap_*.cpp` modules. All 21 LÖVE modules and every
       object type they expose are ported, including the low-level GPU `Buffer`

@@ -104,7 +104,7 @@ set(LOVE_MODULE_DIR "${LOVE_SRC}/modules/love")
 set(LOVE_MRB_EMBED_DIR "${CMAKE_CURRENT_BINARY_DIR}/love_mrb_embedded")
 file(MAKE_DIRECTORY ${LOVE_MRB_EMBED_DIR})
 set(LOVE_MRB_EMBEDDED_HEADERS "")
-foreach(script arg callbacks boot)
+foreach(script arg callbacks boot nogame)
 	set(out "${LOVE_MRB_EMBED_DIR}/${script}_rb.h")
 	add_custom_command(
 		OUTPUT "${out}"

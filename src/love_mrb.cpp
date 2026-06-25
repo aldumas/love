@@ -47,6 +47,7 @@ extern "C" {
 #include "arg_rb.h"
 #include "callbacks_rb.h"
 #include "boot_rb.h"
+#include "nogame_rb.h"
 
 // Each ported module's C-accessible opener (defined in its wrap_*_mrb.cpp),
 // mirroring the luaopen_love_* table the Lua build uses.
@@ -154,8 +155,10 @@ static bool load_game_source(const std::string &game, std::string &path, std::st
 enum DoneAction { DONE_QUIT, DONE_RESTART };
 
 // One boot: open a VM, register modules, run the pipeline + Fiber loop. Returns
-// the action (quit/restart) and writes the exit code.
-static DoneAction runlove(const std::string &game, int &retval)
+// the action (quit/restart) and writes the exit code. With nogame=true there is
+// no game on the command line: the embedded nogame.rb is loaded and boot.rb
+// (seeing an empty $LOVE_GAME_SOURCE) installs the no-game screen's callbacks.
+static DoneAction runlove(const std::string &game, int &retval, bool nogame)
 {
 	mrb_state *mrb = mrb_open();
 	if (mrb == nullptr)
@@ -169,7 +172,7 @@ static DoneAction runlove(const std::string &game, int &retval)
 	love::thread::g_threadVMOpener = open_love;
 
 	std::string path, source;
-	if (!load_game_source(game, path, source))
+	if (!nogame && !load_game_source(game, path, source))
 	{
 		fprintf(stderr, "could not read game: %s\n", game.c_str());
 		mrb_close(mrb);
@@ -185,6 +188,7 @@ static DoneAction runlove(const std::string &game, int &retval)
 
 	if (run_embedded(mrb, arg_rb, "arg.rb")
 		&& run_embedded(mrb, callbacks_rb, "callbacks.rb")
+		&& (!nogame || run_embedded(mrb, nogame_rb, "nogame.rb"))
 		&& run_embedded(mrb, boot_rb, "boot.rb"))
 	{
 		mrb_value fiber = mrb_gv_get(mrb, mrb_intern_lit(mrb, "$LOVE_MAIN"));
@@ -232,17 +236,23 @@ extern "C" LOVE_EXPORT int love_mrb_main(int argc, char **argv)
 		printf("LOVE %s [mruby]\n", LOVE_VERSION_STRING);
 		return 0;
 	}
-	if (argc <= 1 || strcmp(argv[1], "--help") == 0)
+	if (argc > 1 && strcmp(argv[1], "--help") == 0)
 	{
 		print_usage();
-		return argc <= 1 ? 1 : 0;
+		return 0;
 	}
 
-	std::string game = argv[1];
+	// No game given: print usage (like the Lua build) and show the no-game
+	// screen instead of bailing out.
+	bool nogame = argc <= 1;
+	if (nogame)
+		print_usage();
+
+	std::string game = nogame ? std::string() : argv[1];
 	int retval = 0;
 	DoneAction done;
 	do {
-		done = runlove(game, retval);
+		done = runlove(game, retval, nogame);
 	} while (done == DONE_RESTART);
 
 	return retval;

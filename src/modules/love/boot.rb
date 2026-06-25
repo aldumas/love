@@ -71,7 +71,13 @@ module Love
     # defined before we read config. Real LÖVE loads conf.lua early and main.lua
     # last; the single-file demo game merges both, so we eval it up front.
     # mruby has no file-level Kernel#load, so the harness hands us the source.
-    eval($LOVE_GAME_SOURCE) if $LOVE_GAME_SOURCE && !$LOVE_GAME_SOURCE.empty?
+    if $LOVE_GAME_SOURCE && !$LOVE_GAME_SOURCE.empty?
+      eval($LOVE_GAME_SOURCE)
+    elsif respond_to?(:nogame)
+      # No game was given: install the no-game screen's callbacks (load/draw/...
+      # and conf), mirroring boot.lua's `require("love.nogame")()`.
+      Love.nogame
+    end
 
     c = default_config
     Love.conf(c) if Love.respond_to?(:conf)

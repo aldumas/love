@@ -192,6 +192,83 @@ static mrb_value w_rectangle(mrb_state *mrb, mrb_value self)
 	return mrb_nil_value();
 }
 
+// Parse a "fill"/"line" draw-mode string (shared by rectangle/circle/polygon).
+static Graphics::DrawMode check_draw_mode(mrb_state *mrb, mrb_value v)
+{
+	std::string mode = mrbx_checkstring(mrb, v);
+	if (mode == "fill")
+		return Graphics::DRAW_FILL;
+	if (mode == "line")
+		return Graphics::DRAW_LINE;
+	mrb_raisef(mrb, E_ARGUMENT_ERROR, "Invalid draw mode: %s (expected 'fill' or 'line')", mode.c_str());
+	return Graphics::DRAW_FILL; // unreachable
+}
+
+// Read a flat `[x0, y0, x1, y1, ...]` Array of numbers into Vector2s.
+static std::vector<Vector2> check_point_array(mrb_state *mrb, mrb_value arr, const char *what)
+{
+	if (!mrb_array_p(arr))
+		mrb_raisef(mrb, E_TYPE_ERROR, "expected an array of numbers for points:");
+	mrb_int n = RARRAY_LEN(arr);
+	if (n % 2 != 0)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Number of vertex components must be a multiple of two.");
+	std::vector<Vector2> pts;
+	pts.reserve(n / 2);
+	for (mrb_int i = 0; i + 1 < n; i += 2)
+		pts.emplace_back((float) mrb_as_float(mrb, mrb_ary_ref(mrb, arr, i)),
+			(float) mrb_as_float(mrb, mrb_ary_ref(mrb, arr, i + 1)));
+	if ((mrb_int) pts.size() < 2)
+		mrb_raisef(mrb, E_ARGUMENT_ERROR, "Need at least two vertices to draw a %s.", what);
+	return pts;
+}
+
+// line(points: [x0, y0, x1, y1, ...]) -- an open polyline through the points.
+static mrb_value w_line(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[1];
+	mrbx_get_kwargs(mrb, {"points"}, 1, v);
+	std::vector<Vector2> pts = check_point_array(mrb, v[0], "line");
+	mrbx_catchexcept(mrb, [&]() { instance()->polyline(pts.data(), pts.size()); });
+	return mrb_nil_value();
+}
+
+// circle(mode:, x:, y:, radius:, segments: <opt>).
+static mrb_value w_circle(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[5];
+	mrbx_get_kwargs(mrb, {"mode", "x", "y", "radius", "segments"}, 4, v);
+	Graphics::DrawMode drawmode = check_draw_mode(mrb, v[0]);
+	float x = mrbx_checkfloat(mrb, v[1]);
+	float y = mrbx_checkfloat(mrb, v[2]);
+	float radius = mrbx_checkfloat(mrb, v[3]);
+	if (mrb_undef_p(v[4]) || mrb_nil_p(v[4]))
+		mrbx_catchexcept(mrb, [&]() { instance()->circle(drawmode, x, y, radius); });
+	else
+	{
+		int points = mrbx_checkint(mrb, v[4]);
+		mrbx_catchexcept(mrb, [&]() { instance()->circle(drawmode, x, y, radius, points); });
+	}
+	return mrb_nil_value();
+}
+
+// polygon(mode:, points: [x0, y0, ...]) -- needs at least three vertices; the
+// loop is closed automatically (mirrors the Lua wrapper).
+static mrb_value w_polygon(mrb_state *mrb, mrb_value self)
+{
+	(void) self;
+	mrb_value v[2];
+	mrbx_get_kwargs(mrb, {"mode", "points"}, 2, v);
+	Graphics::DrawMode drawmode = check_draw_mode(mrb, v[0]);
+	std::vector<Vector2> pts = check_point_array(mrb, v[1], "polygon");
+	if (pts.size() < 3)
+		mrb_raise(mrb, E_ARGUMENT_ERROR, "Need at least three vertices to draw a polygon.");
+	pts.push_back(pts[0]); // close the loop
+	mrbx_catchexcept(mrb, [&]() { instance()->polygon(drawmode, pts.data(), pts.size()); });
+	return mrb_nil_value();
+}
+
 static mrb_value w_origin(mrb_state *mrb, mrb_value self)
 {
 	(void) self;
@@ -4583,6 +4660,9 @@ static const MrbReg functions[] =
 	{ "set_background_color", w_set_background_color, MRB_ARGS_KEY(4, 0) },
 	{ "get_background_color", w_get_background_color, MRB_ARGS_NONE() },
 	{ "rectangle",            w_rectangle,            MRB_ARGS_KEY(5, 0) },
+	{ "line",                 w_line,                 MRB_ARGS_KEY(1, 0) },
+	{ "circle",               w_circle,               MRB_ARGS_KEY(5, 0) },
+	{ "polygon",              w_polygon,              MRB_ARGS_KEY(2, 0) },
 	{ "origin",               w_origin,               MRB_ARGS_NONE() },
 	{ "push",                 w_push,                 MRB_ARGS_KEY(2, 0) },
 	{ "pop",                  w_pop,                  MRB_ARGS_NONE() },

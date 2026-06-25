@@ -89,9 +89,6 @@ is polish (Stage 5 + nogame + install rules).
 
 ## What remains (polish, not blockers)
 The core migration is done — `-DLOVE_MRUBY=ON` builds a working `love`. Left:
-- **`nogame.rb`**: `src/scripts/nogame.lua` (3302 lines, animated, base64 art)
-  isn't ported; `love` currently requires a game arg (prints usage otherwise).
-  Port or use a minimal placeholder — not needed to *run* a game.
 - **Other platforms**: Linux/OpenGL only (`LOVE_MRUBY_NO_VULKAN`); Windows/macOS
   /Android + Vulkan/Metal are separate efforts.
 - **CI**: validate `.github/workflows/mruby.yml` on a real runner (it builds the
@@ -99,7 +96,16 @@ The core migration is done — `-DLOVE_MRUBY=ON` builds a working `love`. Left:
 - **Stage 5**: the ASan memory audit (the other open §C item), now runnable since
   CMake controls the flags.
 
-**Done since:** the **hidden-ABI cleanup** — `liblove.so` now exports a single
+**Done since:** the **no-game screen** — `src/modules/love/nogame.lua` is ported
+to `src/modules/love/nogame.rb` (a fourth embedded boot script). `love` with no
+args now prints usage *and* boots the animated screen — the box2d Duckloon on a
+physics chain spelling "nogame" over parallax clouds — instead of bailing out.
+`love_mrb.cpp` runs the no-game pipeline (empty `$LOVE_GAME_SOURCE`), `boot.rb`
+calls `Love.nogame` to install the callbacks, and the base64 art is extracted
+verbatim by `tools/extract_nogame_art.py`. This also added the `line`/`circle`/
+`polygon` graphics primitives (the chain rope needs `line`).
+
+**Done before that:** the **hidden-ABI cleanup** — `liblove.so` now exports a single
 symbol, `love_mrb_main`. The engine modules + runtime are compiled once into a
 hidden-visibility `love_mrb_objs` OBJECT library; `liblove` bakes those in and a
 version script (`cmake/liblove.map`, `local: *`) localizes everything else —
