@@ -45,6 +45,17 @@ endif()
 
 include(LoveMacros)
 
+# --- mruby build (parallel path) ---------------------------------------------
+# When enabled, build `love` from the ported mruby bindings via a self-contained
+# module and skip the Lua machinery below. Kept separate so upstream Lua-side
+# edits to this file don't conflict on sync. See testing/mruby/CMAKE_MIGRATION.md
+# and testing/mruby/SYNC.md.
+option(LOVE_MRUBY "Build with mruby instead of Lua/LuaJIT" OFF)
+if(LOVE_MRUBY)
+	include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/LoveMruby.cmake)
+	return()
+endif()
+
 # Extract version.h contents.
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/src/common/version.h LOVE_VERSION_FILE_CONTENTS)
 

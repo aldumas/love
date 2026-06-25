@@ -32,7 +32,28 @@ authoritative recipe — the CMake build must reproduce its inputs:
 So the migration is **not** about new dependencies; it is about swapping the
 scripting layer (Lua→mruby) and the bindings (`wrap_*.cpp`→`wrap_*_mrb.cpp`).
 
-## Status
+## Status — the mruby `love` now builds from the main CMakeLists.
+
+`cmake -S . -B build -DLOVE_MRUBY=ON && cmake --build build` produces a `love`
+that boots Ruby games (`love game.rb` / `love <dir>`). The default build
+(`-DLOVE_MRUBY=OFF`) is the untouched Lua/LuaJIT build (verified it still
+configures with LuaJIT enabled). Stages 0–4 are done and validated; what's left
+is polish (Stage 5 + nogame + install rules).
+
+- **Stages 1/2/4 (main wiring): DONE.** `cmake/LoveMruby.cmake` is the single
+  source of truth for the mruby build: the `love_mrb` OBJECT library (every
+  ported binding + engine `.cpp` + `common/mrb_runtime.cpp` +
+  `LuaThread_mrb.cpp` + SDL-backed `common/delay.cpp`), the seven `mrbh_*`
+  bundled archives, the embedded boot scripts, and the `love` exe from
+  `src/love_mrb.cpp`. `CMakeLists.txt` gains `option(LOVE_MRUBY)` →
+  `include(cmake/LoveMruby.cmake)` + `return()`, a ~10-line hook that leaves the
+  Lua machinery untouched (the parallel path, for sync-friendliness).
+  `testing/mruby/CMakeLists.txt` is now a thin consumer of the same module (the
+  dev harness links the shared `love_mrb` objects), so there is **one** source
+  list to keep in step with upstream — no duplication. lua53/LuaJIT/socket/enet
+  are simply never referenced by this path. (love_mrb is an OBJECT library, not
+  STATIC, because it and the gfx archive reference each other — a cycle a single
+  static-link pass can't resolve.)
 - **Stage 0 (de-risk): DONE.** `testing/mruby/CMakeLists.txt` builds the harness
   under CMake against a prebuilt `libmruby.a`; all `*.rb` tests behave identically
   to the Makefile build (incl. the pre-existing `filesystem_mount_test.rb`
@@ -66,21 +87,27 @@ scripting layer (Lua→mruby) and the bindings (`wrap_*.cpp`→`wrap_*_mrb.cpp`)
   retrofit (A) which would conflict with every upstream CMake edit. The boot
   entry, embedding, and source list above are all reused.
 
-## What remains (Stages 1/2 wiring)
-The hard, uncertain pieces are all proven. What's left is mechanical:
-- **`cmake/LoveMruby.cmake`**: promote the validated harness CMake (the seven
-  sub-archives + the module source list + the `love` target from
-  `src/love_mrb.cpp`, swapping `delay_stub.cpp` for the real SDL-backed
-  `common/delay.cpp`) into a build of `love` (and optionally a `liblove` shared
-  lib).
-- **`CMakeLists.txt` hook**: `option(LOVE_MRUBY)`; when ON, after the common
-  prelude, `include(cmake/LoveMruby.cmake)` and skip the Lua module-group
-  machinery. Near-zero conflict surface.
-- **Exclusions** under the option: lua53/LuaJIT, luasocket, enet (unported).
+## What remains (polish, not blockers)
+The core migration is done — `-DLOVE_MRUBY=ON` builds a working `love`. Left:
 - **`nogame.rb`**: `src/scripts/nogame.lua` (3302 lines, animated, base64 art)
   isn't ported; `love` currently requires a game arg (prints usage otherwise).
-  Port or use a minimal placeholder later — not needed to *run* a game.
-- **Stage 5**: run the `.rb` suite through the installed `love`; ASan memory audit.
+  Port or use a minimal placeholder — not needed to *run* a game.
+- **Install rules**: `cmake/LoveMruby.cmake` builds `love` but adds no
+  `install()` rules yet (the Lua path's are skipped by the `return()`).
+- **A `liblove` shared lib** (optional): the mruby build currently produces a
+  single static-linked `love` exe (like the harness). Splitting out a shared
+  `liblove` can come later if needed; the OBJECT library makes that easy.
+- **Other platforms**: Linux/OpenGL only (`LOVE_MRUBY_NO_VULKAN`); Windows/macOS
+  /Android + Vulkan/Metal are separate efforts.
+- **CI**: validate `.github/workflows/mruby.yml` on a real runner (it builds the
+  harness; point it at `-DLOVE_MRUBY=ON` once install/packaging lands).
+- **Stage 5**: the ASan memory audit (the other open §C item), now runnable since
+  CMake controls the flags.
+
+> Maintenance note (sync): the **one** mruby source list lives in
+> `cmake/LoveMruby.cmake` (`LOVE_MRB_MODULE_SRCS`). When upstream adds a source
+> file to a ported module, add it there — a build error flags a miss, not a merge
+> conflict. See `SYNC.md`.
 
 ## The CMake delta, staged
 
