@@ -49,7 +49,20 @@ CXXFLAGS += -DLOVE_MRUBY_NO_VULKAN
 # helpers); LOVE_MRUBY guards those Lua-only sections out so the shared .cpp
 # files compile here, with the behaviour reimplemented in the _mrb wrapper.
 CXXFLAGS += -DLOVE_MRUBY
+# Optional AddressSanitizer build (memory audit). `make SANITIZE=1` instruments
+# the binding layer (the directly-compiled $(SRCS): wrap_*_mrb.cpp, mrb_runtime,
+# and the module engine .cpp). The prebuilt archives (gfx/glslang/box2d/physfs/
+# lz4/wuff/xxhash) and libmruby stay uninstrumented, so ASan focuses on the
+# port's own C++ — pair with ASAN_OPTIONS=detect_leaks=0 to mute the
+# non-instrumented mruby/SDL/GL allocations. Build to a separate binary, e.g.
+#   make SANITIZE=1 BIN=$(PWD)/love_mrb_harness_asan
+ifeq ($(SANITIZE),1)
+CXXFLAGS += -fsanitize=address -fno-omit-frame-pointer -g -O1
+endif
 LDFLAGS  := -L$(MRUBY_LIB) -L$(SDL_LIBDIR) -Wl,-rpath,$(SDL_LIBDIR)
+ifeq ($(SANITIZE),1)
+LDFLAGS  += -fsanitize=address
+endif
 # The sound module's lullaby backend links system libvorbis + libmodplug (the
 # Wave/FLAC/MP3 decoders are bundled — Wuff and dr_flac/dr_mp3, built below).
 # The audio module's real backend is OpenAL (system libopenal). The video

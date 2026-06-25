@@ -137,7 +137,7 @@ Mesh::Mesh(const std::vector<Mesh::BufferAttribute> &attributes, PrimitiveType d
 
 Mesh::~Mesh()
 {
-	delete vertexData;
+	delete[] vertexData;
 	if (indexData != nullptr)
 		free(indexData);
 }

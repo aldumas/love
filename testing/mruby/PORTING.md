@@ -672,8 +672,34 @@ them changes when we swap.
       object type, or feature is unported; the only deliberate omissions are a few
       obscure texture knobs (the `@2x`-filename dpiscale autodetection, texture
       views, the `viewformats`/`computewrite` settings) — see the graphics §B note.
-- [~] Memory audit (first pass done; a valgrind/ASan run still pending). Findings
-      so far:
+- [x] Memory audit (static pass + ASan error-detector run done; a suppression-
+      filtered leak run remains optional). Findings:
+      • **ASan run: clean across the whole binding surface.** Built an
+        AddressSanitizer harness — `make SANITIZE=1 BIN=…love_mrb_harness_asan`
+        (a new Makefile knob) instruments the directly-compiled binding layer
+        (`wrap_*_mrb.cpp` + `mrb_runtime` + the module engine `.cpp`) while the
+        prebuilt archives (gfx/glslang/box2d/physfs/…) and libmruby stay
+        uninstrumented; ASan's global `operator new/delete` + malloc interceptors
+        still cover those, so heap-overflow / use-after-free / double-free /
+        alloc-dealloc-mismatch are caught process-wide. Ran all 23 `*_test.rb`
+        under `DISPLAY=:1 ASAN_OPTIONS=detect_leaks=0` (leaks muted per the note
+        below). **No UAF, double-free, or heap-overflow in the binding layer.**
+      • **One real bug found + fixed (upstream, not the port):**
+        `graphics::Mesh::~Mesh()` freed `vertexData` (allocated with
+        `new uint8[]`) using scalar `delete` — a `new[]`/`delete` mismatch (UB),
+        flagged by ASan via `mesh_test.rb`. Pre-existing upstream (commit
+        1f9d98263, 2020); fixed here to `delete[]` (correct for both builds).
+        `indexData` uses `realloc`/`free` (matched). After the fix the mesh
+        report is gone and the graphics suite re-runs clean.
+      • **Out of scope (not a memory issue):** `filesystem_mount_test.rb` exits 1
+        on both the ASan and the normal harness — it mounts `/tmp/lovefs_test`, a
+        fixture nothing creates in this environment; a missing-fixture test gap,
+        unrelated to the audit.
+      • **Optional remainder:** a full LeakSanitizer pass (`detect_leaks=1`) needs
+        a suppression file for the uninstrumented mruby/SDL/GL/OpenAL allocations
+        (they dominate the report and aren't the port's to fix); the port's own
+        retained-reference balance is already statically verified (below), so this
+        is hardening, not a known leak.
       • **Class (2) retained-reference balance: clean.** There are no
         `mrb_gc_register`/`unregister` calls outside `common/mrb_runtime.cpp` —
         all retention flows through the balanced helpers (`mrbx_set_userdata` /
@@ -689,10 +715,10 @@ them changes when we swap.
         window file-dialog) are one-shot, not loops. Output-proportional builders
         (`get_bodies`, the per-step collision-callback argv) stay as-is (bounded
         by the result / by one physics step).
-      • **Still to do:** a leak/UAF run under valgrind or ASan (now possible —
-        `cmake -DLOVE_MRUBY=ON` controls the flags; build the bindings with
-        `-fsanitize=address`, `ASAN_OPTIONS=detect_leaks=0` to mute the
-        non-instrumented mruby/SDL/GL allocations and focus on C++-layer errors).
+      • **UAF/error run: done** (see the ASan summary at the top of this item —
+        the harness is `make SANITIZE=1`, run with
+        `ASAN_OPTIONS=detect_leaks=0`). The only remaining sliver is the
+        suppression-filtered leak pass noted above.
       The original guidance follows.
 
       Sweep the mruby bindings for allocation/deallocation correctness. Two
