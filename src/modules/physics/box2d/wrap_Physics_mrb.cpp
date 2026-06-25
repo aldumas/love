@@ -1547,8 +1547,15 @@ public:
 		Shape *s = (Shape *) (f->GetUserData().pointer);
 		if (s == nullptr)
 			throw love::Exception("A Shape has escaped Memoizer!");
+		// box2d calls this once per overlapping fixture; a wide query can touch
+		// many. Save/restore the GC arena per call so the transient Shape wrapper
+		// doesn't pin O(n) garbage for the whole query (the block has consumed it
+		// by the time the yield returns; a block that kept it roots it itself).
+		int arena = mrb_gc_arena_save(mrb);
 		mrb_value arg = pushShape(mrb, s);
-		return mrb_test(mrb_yield_argv(mrb, blk, 1, &arg));
+		bool keep = mrb_test(mrb_yield_argv(mrb, blk, 1, &arg));
+		mrb_gc_arena_restore(mrb, arena);
+		return keep;
 	}
 private:
 	mrb_state *mrb;
@@ -1565,6 +1572,8 @@ public:
 		if (s == nullptr)
 			throw love::Exception("A Shape has escaped Memoizer!");
 		b2Vec2 hp = Physics::scaleUp(point);
+		// Per-call arena hygiene, as in QueryBlock above: a ray can report many hits.
+		int arena = mrb_gc_arena_save(mrb);
 		mrb_value args[6] = {
 			pushShape(mrb, s),
 			mrbx_number(mrb, hp.x), mrbx_number(mrb, hp.y),
@@ -1574,7 +1583,9 @@ public:
 		mrb_value r = mrb_yield_argv(mrb, blk, 6, args);
 		if (!mrb_fixnum_p(r) && !mrb_float_p(r))
 			throw love::Exception("Raycast callback didn't return a number!");
-		return (float) mrb_as_float(mrb, r);
+		float frac = (float) mrb_as_float(mrb, r);
+		mrb_gc_arena_restore(mrb, arena);
+		return frac;
 	}
 private:
 	mrb_state *mrb;

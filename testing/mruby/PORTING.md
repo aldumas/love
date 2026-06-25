@@ -671,8 +671,31 @@ them changes when we swap.
       object type, or feature is unported; the only deliberate omissions are a few
       obscure texture knobs (the `@2x`-filename dpiscale autodetection, texture
       views, the `viewformats`/`computewrite` settings) — see the graphics §B note.
-- [ ] Memory audit (do once the port is otherwise complete): sweep the mruby
-      bindings for allocation/deallocation correctness. Two classes to look for:
+- [~] Memory audit (first pass done; a valgrind/ASan run still pending). Findings
+      so far:
+      • **Class (2) retained-reference balance: clean.** There are no
+        `mrb_gc_register`/`unregister` calls outside `common/mrb_runtime.cpp` —
+        all retention flows through the balanced helpers (`mrbx_set_userdata` /
+        `mrbx_set_callback`, each unregistering on replace/clear), and
+        `mrbx_forgetstate` drops a closing VM's entries across **all four** stores
+        (typeClasses, userData, objectWrappers, callbacks).
+      • **Class (1) arena hygiene: fixed the unbounded yield-in-loop sites.** The
+        physics `query_shapes_in_area` / `ray_cast` block callbacks
+        (`QueryBlock` / `RayCastBlock::ReportFixture`) pushed a transient Shape
+        wrapper per fixture with no arena restore — a wide query/long ray pinned
+        O(n) garbage; now save/restore the arena per call (the `map_pixel`
+        pattern). The other `mrb_yield*` sites (thread/data `perform_atomic`,
+        window file-dialog) are one-shot, not loops. Output-proportional builders
+        (`get_bodies`, the per-step collision-callback argv) stay as-is (bounded
+        by the result / by one physics step).
+      • **Still to do:** a leak/UAF run under valgrind or ASan (now possible —
+        `cmake -DLOVE_MRUBY=ON` controls the flags; build the bindings with
+        `-fsanitize=address`, `ASAN_OPTIONS=detect_leaks=0` to mute the
+        non-instrumented mruby/SDL/GL allocations and focus on C++-layer errors).
+      The original guidance follows.
+
+      Sweep the mruby bindings for allocation/deallocation correctness. Two
+      classes to look for:
       (1) **GC-arena hygiene** — high-iteration loops that create and discard heap
       `mrb_value`s (Arrays/Hashes/Strings/wrappers) without `mrb_gc_arena_save`/
       `restore` pin O(n) garbage for the whole call. `Image#map_pixel` was fixed
