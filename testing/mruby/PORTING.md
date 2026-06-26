@@ -905,7 +905,7 @@ tasks), so they are untagged and the pre-commit hook ignores them.
 | 5 | Valgrind / memcheck | uninitialized reads + the *uninstrumented* archives & mruby | ✅ done (5 bugs found + fixed: box2d uninit `m_u`, `~Event()` queue leak, 2 SDL array leaks, `mrbx_catchexcept` longjmp-in-catch exception leak; suite clean) |
 | 6 | Static analysis (clang analyzer / `-fanalyzer` / cppcheck) | unreached error/rare-kwarg paths | ✅ done (binding layer clean; root-caused + fixed a `mrb_noreturn` build quirk that was hiding the signal) |
 | 7 | Fuzzing (libFuzzer) | data-driven entry points (`pack`/`unpack`, loader, decoders) | ✅ done (1 UBSan int-overflow fixed across 4 image handlers; 2 alloc-amplification cases noted) |
-| 8 | Real `love` exe under sanitizers | full boot pipeline / shutdown ordering vs a real game | ☐ partial (one ASan run) |
+| 8 | Real `love` exe under sanitizers | full boot pipeline / shutdown ordering vs a real game | ✅ done (ASan+UBSan+TSan on the CMake exe; boot→restart→quit clean; 2 OpenAL/PipeWire-teardown races suppressed as external) |
 
 ### Shared harness mechanism (read once, applies to the sanitizer rows)
 
@@ -1238,13 +1238,70 @@ tasks), so they are untagged and the pre-commit hook ignores them.
    engine, require resolver, and sound/font decoders fuzzed memory-safety- and
    UB-clean.
 
-8. **[~] Run the real `love` (CMake `build-mrb/`) under the sanitizers** — not just
-   the Makefile harness; exercises the full boot pipeline against a real game.
-   Partial: an ASan run of `build-mrb/love` on a quitting game already comes back
-   with 0 errors and 0 `love::` leak frames (only external dbus/nvidia driver
-   allocations remain), and module teardown on quit goes through `mrbx_close_state`
-   for both harness and exe (§C). Still pending: a broader-game pass for
-   shutdown-ordering UAFs, and re-running once UBSan/TSan exist so the exe gets the
-   same coverage as the harness. Build `build-mrb/` per `mruby-build-dir` memory;
-   wire the sanitizer flags into the CMake build (the Makefile knob doesn't cover
-   it). **Findings so far:** the one ASan run above; nothing further. **Findings:** _(continue here)_
+8. **[x] Run the real `love` (CMake) under the sanitizers — done 2026-06-25.**
+   Not just the Makefile harness: the actual `love` exe + `liblove.so`, driven
+   through the full boot→shutdown pipeline against real games, under all three
+   sanitizers the harness rows used. **Result: the port's own code is clean under
+   ASan, UBSan, and TSan; the only findings are two data races wholly inside the
+   OpenAL/PipeWire audio backend (external, suppressed).**
+   - **Wired a sanitizer knob into the CMake build (the Makefile knob doesn't
+     reach the real exe).** `cmake/LoveMruby.cmake` now takes
+     `-DLOVE_MRB_SANITIZE=address|undefined|thread`, which instruments only the
+     port's OWN targets — `love_mrb_objs` (every common/module/wrap TU) +
+     `mrbh_gfx` + `liblove` + the thin `love` exe — and threads `-fsanitize=` into
+     both compile and link. The prebuilt archives (box2d/glslang/physfs/lz4/wuff/
+     xxhash) and libmruby stay uninstrumented, exactly the harness's
+     partial-instrumentation model (heap/race errors in them are still caught via
+     the global malloc/new/pthread interceptors). `undefined` also passes
+     `-fno-sanitize=vptr` for the same reason row 3 does (no typeinfo across the
+     uninstrumented boundary). Build each kind to its own dir
+     (`build-mrb-{address,undefined,thread}`, gitignored via `/build-mrb*/`).
+   - **Scenarios (both real games, run under each sanitizer):** `game.rb` — full
+     boot (conf → window → OpenGL → audio/openal → keyboard/mouse/event/timer),
+     600 update/draw frames, then `Event.quit`; and a new restart probe
+     (`testing/mruby/restart_probe.rb`, scratch-only) that calls `Love::Event.restart`
+     (`testing/mruby/restart_probe.rb`) so the C host runs a complete teardown
+     (`mrbx_close_state`) **and re-init of a fresh `mrb_state` in the same
+     process** before quitting — the shutdown/restart ordering surface this row
+     exists for. (No on-disk game folder needed; the exe takes a `.rb` path
+     directly.)
+   - **ASan — clean.** `LD_LIBRARY_PATH=build-mrb-address:… DISPLAY=:1
+     ASAN_OPTIONS=detect_leaks=1:halt_on_error=0
+     LSAN_OPTIONS=suppressions=testing/mruby/leak_suppressions.txt`. Both games
+     exit 0 with **0 ASan errors and 0 non-driver leaks** — the only leak-summary
+     entries are the suppressed `libnvidia-glcore`/`libSDL3`/`libopenal` driver
+     allocations (same external set as row 2). Note the real exe tears down module
+     singletons on quit, so even the GL/SDL leaks the harness saw mostly don't
+     appear here. The restart cycle (teardown + fresh re-init) is UAF/leak-clean.
+   - **UBSan — clean.** Built `-DLOVE_MRB_SANITIZE=undefined`,
+     `UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0`. **0 runtime errors** across
+     both games incl. the restart cycle (signed/unsigned overflow, shifts,
+     null/misaligned deref, enum/bool, bounds — vptr excluded as above).
+   - **TSan — the port is race-clean; 2 external audio-backend races found +
+     suppressed.** Built `-DLOVE_MRB_SANITIZE=thread`, run under `setarch -R`
+     (TSan vs ASLR, same as row 4) with `TSAN_OPTIONS=halt_on_error=0`. The first
+     pass reported 2 data races in `game.rb`, **both entirely inside
+     libopenal/libpipewire/libstdc++**: opening the audio device
+     (`mrb_love_audio_init` → `alcOpenDevice`, our only frame) makes OpenAL spawn a
+     PipeWire `PWEventThread`, and at device close/exit libopenal frees a device
+     object on the main thread that the PipeWire thread also wrote, without holding
+     the shared lock. **No LÖVE or binding frame participates in either racing
+     access** — it is the audio driver's own teardown, reachable only because we
+     open a device. Treated like the GL/dbus leak noise: added
+     `testing/mruby/tsan_suppressions.txt` (`race:libopenal.so`,
+     `race:libpipewire`, scoped to those uninstrumented libs). With it, 6 re-runs
+     (3× `game.rb` + 3× restart probe) report **0 unsuppressed warnings**, exit 0
+     (`print_suppressions=1` confirms `2 race:libopenal.so` matched). The binding
+     registries / filesystem require-path races from row 4 don't recur here (this
+     is single-VM, but their fixes are in).
+   - **Re-run commands** (from repo root; build each dir once with the matching
+     `-DLOVE_MRB_SANITIZE=`):
+     `cmake -S . -B build-mrb-<kind> -DLOVE_MRUBY=ON -DLOVE_MRB_SANITIZE=<kind> && cmake --build build-mrb-<kind> -j$(nproc)`,
+     then `DISPLAY=:1 LD_LIBRARY_PATH="$PWD/build-mrb-<kind>:/usr/local/lib"
+     [setarch -R, for thread] ./build-mrb-<kind>/love testing/mruby/game.rb` with
+     the per-kind options above (ASan adds `leak_suppressions.txt`; TSan adds
+     `tsan_suppressions.txt`).
+   **Findings:** no bug in the port — ASan/UBSan/TSan all clean on the real exe
+   across boot, a full restart (teardown + re-init), and quit. The only races are
+   two in the external OpenAL/PipeWire audio backend's own teardown (no port frame
+   involved), documented + suppressed in `tsan_suppressions.txt`.

@@ -72,6 +72,7 @@ stamp-h1
 .vscode/
 # CMake out-of-source build outputs
 /build/
+/build-mrb*/
 /dist/
 /prefix/
 /testing/output/*.xml

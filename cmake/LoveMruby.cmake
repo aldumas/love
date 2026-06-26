@@ -44,6 +44,36 @@ pkg_check_modules(OPENAL   REQUIRED openal)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# --- optional sanitizer instrumentation (§E bug-hunt row 8) -------------------
+# LOVE_MRB_SANITIZE=<address|undefined|thread> instruments the port's OWN TUs
+# (love_mrb_objs + mrbh_gfx + liblove + the thin exe), mirroring the dev
+# harness's SANITIZE knob and its partial-instrumentation model: the prebuilt
+# archives (box2d/glslang/physfs/lz4/wuff/xxhash) and libmruby stay
+# uninstrumented, but the sanitizer's global malloc/new + libc interceptors
+# still cover them process-wide. Empty (default) = no instrumentation; build
+# each kind to its own build dir. This lets row 8 run the REAL exe (full
+# boot->shutdown pipeline) under the same sanitizers the harness rows used.
+set(LOVE_MRB_SANITIZE "" CACHE STRING
+	"Sanitizer for the port's own TUs: address | undefined | thread (empty=off)")
+set(LOVE_MRB_SAN_COMPILE "")
+set(LOVE_MRB_SAN_LINK "")
+if(LOVE_MRB_SANITIZE)
+	if(NOT LOVE_MRB_SANITIZE MATCHES "^(address|undefined|thread)$")
+		message(FATAL_ERROR
+			"LOVE_MRB_SANITIZE must be address, undefined, or thread "
+			"(got '${LOVE_MRB_SANITIZE}')")
+	endif()
+	set(LOVE_MRB_SAN_COMPILE -fsanitize=${LOVE_MRB_SANITIZE} -fno-omit-frame-pointer -g -O1)
+	set(LOVE_MRB_SAN_LINK -fsanitize=${LOVE_MRB_SANITIZE})
+	if(LOVE_MRB_SANITIZE STREQUAL "undefined")
+		# vptr needs typeinfo for every instrumented polymorphic class, but the
+		# archives/mruby aren't instrumented, so it can't link / can't see across
+		# that boundary -- the same exclusion the harness uses (row 3).
+		list(APPEND LOVE_MRB_SAN_COMPILE -fno-sanitize=vptr)
+	endif()
+	message(STATUS "mruby port sanitizer: ${LOVE_MRB_SANITIZE}")
+endif()
+
 # Defines/includes for the love TUs (engine .cpp + _mrb bindings + gfx archive).
 #   LOVE_MRUBY            - guards Lua-only sections out
 #   LOVE_MRUBY_NO_VULKAN  - OpenGL-only renderer
@@ -373,3 +403,14 @@ set_target_properties(love PROPERTIES
 install(TARGETS love liblove
 	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+
+# --- apply the optional sanitizer flags to the port's own targets -------------
+# (see the LOVE_MRB_SANITIZE block near the top). Done here, after every target
+# exists, so one list covers them all. The bundled mrbh_* archives are left out
+# on purpose -- the partial-instrumentation model.
+if(LOVE_MRB_SANITIZE)
+	foreach(_san_target love_mrb_objs mrbh_gfx liblove love)
+		target_compile_options(${_san_target} PRIVATE ${LOVE_MRB_SAN_COMPILE})
+		target_link_options(${_san_target} PRIVATE ${LOVE_MRB_SAN_LINK})
+	endforeach()
+endif()

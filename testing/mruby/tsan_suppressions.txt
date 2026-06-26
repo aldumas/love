@@ -1,0 +1,21 @@
+# ThreadSanitizer suppressions for the real `love` exe (§E bug-hunt row 8,
+# built with -DLOVE_MRB_SANITIZE=thread).
+#
+# The TSan analogue of leak_suppressions.txt / valgrind_suppressions.txt: scoped
+# to external, *uninstrumented* libraries whose internal threading the port does
+# not own and cannot fix. Under the partial-instrumentation model only the
+# port's own TUs are instrumented, so a race wholly inside a third-party library
+# is reported with that library in every racing frame -- it is that library's
+# bug (or its own missed happens-before), not the bindings'.
+#
+# Format: `race:<substr>` suppresses a data-race report when the substring
+# matches the module/function of any frame in the report.
+
+# OpenAL + PipeWire audio backend. Opening an audio device (alcOpenDevice, our
+# only call -- audio/wrap_Audio_mrb.cpp) makes libopenal spawn a PipeWire
+# event thread ('PWEventThread'); at device close / process exit libopenal
+# frees device objects on the main thread that the PipeWire thread also touched,
+# without holding the same lock. Both racing accesses are inside
+# libopenal/libpipewire/libstdc++ -- no LÖVE or binding frame participates.
+race:libopenal.so
+race:libpipewire
