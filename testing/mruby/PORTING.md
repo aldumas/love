@@ -859,8 +859,9 @@ them changes when we swap.
   self-contained, context-clear-safe run and the whole set is one roster to work
   from. **See §E. Bug-hunt tool roster.** ASan, LeakSanitizer, and UBSan are done
   (ASan/LSan findings in the memory-audit item above; UBSan findings in §E row 3);
-  TSan is done too (row 4: 2 races found + fixed). Valgrind, static analysis,
-  fuzzing, and the real-exe sanitizer pass are still pending there.
+  TSan is done too (row 4: 2 races found + fixed), and Valgrind is done (row 5:
+  2 bugs found + fixed — box2d uninitialised `m_u`, `~Event()` queue leak). Static
+  analysis, fuzzing, and the real-exe sanitizer pass are still pending there.
 
 ---
 
@@ -894,7 +895,7 @@ tasks), so they are untagged and the pre-commit hook ignores them.
 | 2 | LeakSanitizer (LSan) | memory leaks | ✅ done |
 | 3 | UBSan | overflow · bad shift/enum/bool · null/misaligned deref · vptr confusion | ✅ done (suite clean; vptr excluded) |
 | 4 | ThreadSanitizer (TSan) | data races · lock-order issues across threads | ✅ done (2 races found + fixed; suite clean) |
-| 5 | Valgrind / memcheck | uninitialized reads + the *uninstrumented* archives & mruby | ☐ pending |
+| 5 | Valgrind / memcheck | uninitialized reads + the *uninstrumented* archives & mruby | ✅ done (2 bugs found + fixed: box2d uninit `m_u`, `~Event()` queue leak; suite clean) |
 | 6 | Static analysis (scan-build / `-fanalyzer` / cppcheck) | unreached error/rare-kwarg paths | ☐ pending |
 | 7 | Fuzzing (libFuzzer / AFL++) | data-driven entry points (`pack`/`unpack`, loader, decoders) | ☐ pending |
 | 8 | Real `love` exe under sanitizers | full boot pipeline / shutdown ordering vs a real game | ☐ partial (one ASan run) |
@@ -1014,13 +1015,53 @@ tasks), so they are untagged and the pre-commit hook ignores them.
    **Findings:** 2 races (global binding registries; filesystem require-path) —
    both fixed.
 
-5. **[ ] Valgrind / memcheck** — catches uninitialized-value reads (which ASan
-   does not) and instruments the *uninstrumented* archives (box2d/gfx/glslang/
-   physfs) and mruby itself, complementing ASan's binding-layer focus. No rebuild
-   needed (run the normal `love_mrb_harness`), just slow — run a representative
-   subset of the suite under `valgrind --leak-check=full --track-origins=yes`.
-   Expect to need a Valgrind suppression file for the GL/SDL driver, analogous to
-   `leak_suppressions.txt`. **Findings:** _(none yet)_
+5. **[x] Valgrind / memcheck — done 2026-06-25.** Ran all 24 `*_test.rb` under
+   Valgrind 3.22 memcheck on the normal `love_mrb_harness` (no rebuild) with
+   `DISPLAY=:1 valgrind --leak-check=full --track-origins=yes
+   --suppressions=testing/mruby/valgrind_suppressions.txt`. **Two real bugs found
+   and fixed; suite is now memcheck-clean (0 errors, 0 definite leaks).**
+   - **Suppression file added** (`testing/mruby/valgrind_suppressions.txt`, the
+     GL/SDL-driver analogue of `leak_suppressions.txt`): the NVIDIA GL driver
+     does `realloc(.,0)`/`posix_memalign(.,.,0)` at `dlopen`/`_dl_init` time
+     (ReallocZero/BadSize), and `libdbus` leaks a buffer in `dbus_bus_register`
+     (session-bus setup pulled in via SDL). All three suppressions are scoped to
+     the offending **driver/library object files** (`*libnvidia-glcore.so*`,
+     `*libdbus-1.so*`), so they can never mask a defect in LÖVE or the bindings —
+     LÖVE code never runs inside those libs.
+   - **Bug 1 — uninitialised read in box2d `b2DistanceJoint` (the kind of find
+     this row exists for: an uninstrumented archive, invisible to ASan).** Its
+     constructor zeroed the impulses but **not `m_u`** (the joint-axis unit
+     vector, otherwise only computed in `InitVelocityConstraints` during a world
+     step). `GetReactionForce()` reads `inv_dt * (m_impulse + m_lowerImpulse -
+     m_upperImpulse) * m_u`, so `joint:get_reaction_force` on a joint that has
+     never been in a world step reads uninitialised memory — reachable from the
+     public API and hit by `physics_test.rb:212` (4 "Conditional jump depends on
+     uninitialised value" reports, origin `b2BlockAllocator::Allocate` →
+     `DistanceJoint`). Fix: `m_u.SetZero()` in the ctor
+     (`src/libraries/box2d/dynamics/b2_distance_joint.cpp`), matching how the
+     impulses are already zeroed → deterministic `(0,0)` pre-step. 4 errors → 0.
+   - **Bug 2 — `Message` leak in `event::Event::~Event()`.** The destructor never
+     drained `queue`, so any Messages still queued at module teardown leaked
+     (refcount never hit 0 when the deque was destroyed) — a `clear()` method
+     already existed but wasn't called. Surfaced by `textbatch_test.rb` under
+     `--leak-check=full`: window focus/exposed/resize events were `Event.pump`'d
+     but never `poll`'d, leaving 6 `convertWindowEvent` Messages in the queue
+     (`src/modules/event/sdl/Event.cpp`). Why ASan/LSan (row 2) missed it: the
+     leak only bites once (a) the port tears down module singletons on quit
+     (`mrbx_close_state`, §C) so `~Event()` actually runs, and (b) the run is slow
+     enough (Valgrind ≈50×) for the WM to deliver those async window events during
+     `pump`. Fix: `~Event()` now calls `clear()`
+     (`src/modules/event/Event.cpp`). 6 definite-loss records → 0; verified
+     general (re-ran `event_test.rb` full-leak-clean too).
+   - **Everything else clean.** All other tests: 0 errors. The pack/unpack engine
+     (`data_test.rb`), require resolver (`loader_test.rb`), and the GL/glslang/
+     freetype/decoder/openal paths all came back uninitialised-read-clean.
+   - **Regression command:** `DISPLAY=:1 valgrind --leak-check=full
+     --track-origins=yes --suppressions=testing/mruby/valgrind_suppressions.txt
+     testing/mruby/love_mrb_harness testing/mruby/<test>.rb` (expect ERROR SUMMARY
+     0, definitely lost 0).
+   **Findings:** 2 bugs (box2d uninitialised `m_u`; `~Event()` queue leak) — both
+   fixed.
 
 6. **[ ] Static analysis** — `scan-build` (clang analyzer) and/or GCC `-fanalyzer`
    over the `wrap_*_mrb.cpp` + `mrb_runtime.cpp` TUs, for leak/null/use-after-free

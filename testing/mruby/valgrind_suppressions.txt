@@ -1,0 +1,39 @@
+# Valgrind/memcheck suppressions for the mruby LÖVE harness (§E roster, row 5).
+#
+# These mute benign noise from the *uninstrumented* GL/SDL graphics driver,
+# analogous to leak_suppressions.txt for LeakSanitizer. They are deliberately
+# scoped to the driver's own object files (libnvidia-*, libGLX_*), so they can
+# never hide a defect in LÖVE or the mruby bindings — LÖVE code never executes
+# inside those libraries.
+#
+# Usage:
+#   DISPLAY=:1 valgrind --leak-check=full --track-origins=yes \
+#       --suppressions=testing/mruby/valgrind_suppressions.txt \
+#       ./love_mrb_harness <test>.rb
+
+# The NVIDIA GL driver allocates with size 0 while initialising at dlopen /
+# _dl_init time: realloc(ptr, 0) and posix_memalign(.., .., 0). memcheck flags
+# these as ReallocZero / BadSize. Benign driver behaviour, not a LÖVE bug.
+{
+   nvidia-gl-driver-realloc-zero
+   Memcheck:ReallocZero
+   fun:realloc
+   obj:*libnvidia-glcore.so*
+}
+{
+   nvidia-gl-driver-posix-memalign-zero
+   Memcheck:BadSize
+   fun:posix_memalign
+   obj:*libnvidia-glcore.so*
+}
+
+# libdbus leaks a buffer during dbus_bus_register (session-bus connection setup,
+# pulled in transitively by SDL). Third-party library leak, not a LÖVE bug; the
+# same dbus allocations are muted in leak_suppressions.txt for LeakSanitizer.
+{
+   dbus-bus-register-leak
+   Memcheck:Leak
+   match-leak-kinds: definite
+   fun:calloc
+   obj:*libdbus-1.so*
+}

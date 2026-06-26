@@ -71,6 +71,13 @@ b2DistanceJoint::b2DistanceJoint(const b2DistanceJointDef* def)
 	m_lowerImpulse = 0.0f;
 	m_upperImpulse = 0.0f;
 	m_currentLength = 0.0f;
+
+	// m_u is the joint axis unit vector, otherwise only computed in
+	// InitVelocityConstraints() during a world step. GetReactionForce() reads
+	// it, so without this a reaction-force query before the first Step() reads
+	// uninitialised memory (caught by Valgrind). Zero it for a deterministic
+	// (0,0) result pre-step.
+	m_u.SetZero();
 }
 
 void b2DistanceJoint::InitVelocityConstraints(const b2SolverData& data)

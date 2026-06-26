@@ -47,6 +47,10 @@ Event::Event(const char *name)
 
 Event::~Event()
 {
+	// Release any Messages still queued at teardown; without this they leak
+	// (their refcount never reaches 0 when the deque is destroyed).
+	clear();
+
 	if (modalDrawData.cleanup != nullptr)
 		modalDrawData.cleanup(modalDrawData.context);
 
