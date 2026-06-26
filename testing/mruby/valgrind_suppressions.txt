@@ -27,13 +27,16 @@
    obj:*libnvidia-glcore.so*
 }
 
-# libdbus leaks a buffer during dbus_bus_register (session-bus connection setup,
-# pulled in transitively by SDL). Third-party library leak, not a LÖVE bug; the
-# same dbus allocations are muted in leak_suppressions.txt for LeakSanitizer.
+# libdbus leaks a buffer (and its child allocations) during dbus_bus_register
+# (session-bus connection setup, pulled in transitively by SDL). Third-party
+# library leak, not a LÖVE bug; the same dbus allocations are muted in
+# leak_suppressions.txt for LeakSanitizer. Scoped to libdbus frames, and to all
+# leak kinds because timing classifies the block as definite/indirect/possible
+# across runs. The leading "..." matches the allocator frame(s) above libdbus.
 {
-   dbus-bus-register-leak
+   dbus-leak
    Memcheck:Leak
-   match-leak-kinds: definite
-   fun:calloc
+   match-leak-kinds: definite,indirect,possible
+   ...
    obj:*libdbus-1.so*
 }

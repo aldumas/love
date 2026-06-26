@@ -860,8 +860,10 @@ them changes when we swap.
   from. **See §E. Bug-hunt tool roster.** ASan, LeakSanitizer, and UBSan are done
   (ASan/LSan findings in the memory-audit item above; UBSan findings in §E row 3);
   TSan is done too (row 4: 2 races found + fixed), and Valgrind is done (row 5:
-  2 bugs found + fixed — box2d uninitialised `m_u`, `~Event()` queue leak). Static
-  analysis, fuzzing, and the real-exe sanitizer pass are still pending there.
+  5 bugs found + fixed — box2d uninitialised `m_u`, `~Event()` queue leak, two
+  SDL return-array leaks, and the systemic `mrbx_catchexcept` longjmp-in-catch
+  exception-object leak). Static analysis, fuzzing, and the real-exe sanitizer
+  pass are still pending there.
 
 ---
 
@@ -895,7 +897,7 @@ tasks), so they are untagged and the pre-commit hook ignores them.
 | 2 | LeakSanitizer (LSan) | memory leaks | ✅ done |
 | 3 | UBSan | overflow · bad shift/enum/bool · null/misaligned deref · vptr confusion | ✅ done (suite clean; vptr excluded) |
 | 4 | ThreadSanitizer (TSan) | data races · lock-order issues across threads | ✅ done (2 races found + fixed; suite clean) |
-| 5 | Valgrind / memcheck | uninitialized reads + the *uninstrumented* archives & mruby | ✅ done (2 bugs found + fixed: box2d uninit `m_u`, `~Event()` queue leak; suite clean) |
+| 5 | Valgrind / memcheck | uninitialized reads + the *uninstrumented* archives & mruby | ✅ done (5 bugs found + fixed: box2d uninit `m_u`, `~Event()` queue leak, 2 SDL array leaks, `mrbx_catchexcept` longjmp-in-catch exception leak; suite clean) |
 | 6 | Static analysis (scan-build / `-fanalyzer` / cppcheck) | unreached error/rare-kwarg paths | ☐ pending |
 | 7 | Fuzzing (libFuzzer / AFL++) | data-driven entry points (`pack`/`unpack`, loader, decoders) | ☐ pending |
 | 8 | Real `love` exe under sanitizers | full boot pipeline / shutdown ordering vs a real game | ☐ partial (one ASan run) |
@@ -1017,17 +1019,27 @@ tasks), so they are untagged and the pre-commit hook ignores them.
 
 5. **[x] Valgrind / memcheck — done 2026-06-25.** Ran all 24 `*_test.rb` under
    Valgrind 3.22 memcheck on the normal `love_mrb_harness` (no rebuild) with
-   `DISPLAY=:1 valgrind --leak-check=full --track-origins=yes
-   --suppressions=testing/mruby/valgrind_suppressions.txt`. **Two real bugs found
-   and fixed; suite is now memcheck-clean (0 errors, 0 definite leaks).**
+   `DISPLAY=:1 valgrind --leak-check=full --show-leak-kinds=all
+   --track-origins=yes
+   --suppressions=testing/mruby/valgrind_suppressions.txt`. **Five real bugs found
+   and fixed; suite is now memcheck-clean (0 errors, 0 definite/possible leaks).**
+   - **Run `--leak-check=full` on _every_ test, not a subset.** The first pass ran
+     most tests with `--leak-check=no` (reasoning: LSan/row 2 already covered
+     leaks). That was wrong — valgrind catches leaks LSan can't (timing-dependent
+     ones, see bugs 2 + 5), and `--leak-check=full` only adds an exit-time heap
+     scan (the instrumentation cost is identical), so it buys coverage for almost
+     no time. The full-leak sweep found three more bugs (3–5) the subset missed.
+     Also pass `--show-leak-kinds=all`: the C++/longjmp leak (bug 5) shows as
+     *possibly* lost, not definite.
    - **Suppression file added** (`testing/mruby/valgrind_suppressions.txt`, the
      GL/SDL-driver analogue of `leak_suppressions.txt`): the NVIDIA GL driver
      does `realloc(.,0)`/`posix_memalign(.,.,0)` at `dlopen`/`_dl_init` time
-     (ReallocZero/BadSize), and `libdbus` leaks a buffer in `dbus_bus_register`
-     (session-bus setup pulled in via SDL). All three suppressions are scoped to
-     the offending **driver/library object files** (`*libnvidia-glcore.so*`,
-     `*libdbus-1.so*`), so they can never mask a defect in LÖVE or the bindings —
-     LÖVE code never runs inside those libs.
+     (ReallocZero/BadSize), and `libdbus` leaks a buffer + child allocations in
+     `dbus_bus_register` (session-bus setup pulled in via SDL). All suppressions
+     are scoped to the offending **driver/library object files**
+     (`*libnvidia-glcore.so*`, `*libdbus-1.so*`), so they can never mask a defect
+     in LÖVE or the bindings — LÖVE code never runs inside those libs. (The dbus
+     entry covers definite/indirect/possible since timing reclassifies it.)
    - **Bug 1 — uninitialised read in box2d `b2DistanceJoint` (the kind of find
      this row exists for: an uninstrumented archive, invisible to ASan).** Its
      constructor zeroed the impulses but **not `m_u`** (the joint-axis unit
@@ -1053,14 +1065,47 @@ tasks), so they are untagged and the pre-commit hook ignores them.
      `pump`. Fix: `~Event()` now calls `clear()`
      (`src/modules/event/Event.cpp`). 6 definite-loss records → 0; verified
      general (re-ran `event_test.rb` full-leak-clean too).
-   - **Everything else clean.** All other tests: 0 errors. The pack/unpack engine
-     (`data_test.rb`), require resolver (`loader_test.rb`), and the GL/glslang/
-     freetype/decoder/openal paths all came back uninitialised-read-clean.
+   - **Bug 3 — `SDL_GetJoysticks` array leak in `JoystickModule::checkGamepads`.**
+     SDL3's `SDL_GetJoysticks()` returns a malloc'd array the caller must
+     `SDL_free`; `checkGamepads` (`src/modules/joystick/sdl/JoystickModule.cpp`)
+     never did (other call sites in the same file do). Hit by `input_test.rb`
+     via `set_gamepad_mapping`. Fix: `SDL_free(sdlsticks)` at function end.
+   - **Bug 4 — `SDL_GetDisplays` array leak in `Mouse::getGlobalPosition`.** Same
+     SDL3 own-the-returned-array contract: `getGlobalPosition`
+     (`src/modules/mouse/sdl/Mouse.cpp`) leaked the `SDL_GetDisplays()` array.
+     Hit by `mouse_test.rb` via `get_global_position`. Fix: `SDL_free(displays)`
+     after the display-walk loop.
+   - **Bug 5 — every translated C++ exception leaked (systemic, the binding-wide
+     one).** `mrbx_catchexcept` (`src/common/mrb_runtime.h`) caught a C++
+     `std::exception` and called `mrb_raise` **inside the catch block**.
+     `mrb_raise` longjmps, so it jumps out of the handler without running
+     `__cxa_end_catch` → the in-flight C++ exception object (~168 B) and its
+     `love::Exception` message (~73 B) are never freed, and each one accumulates
+     on the thread's `caughtExceptions` list (so valgrind reports *possibly*
+     lost, via the interior eh-globals pointer). The original code comment
+     asserted the opposite ("mruby's exception model lets us raise directly
+     rather than relying on longjmp semantics") — that misconception was the bug.
+     Surfaced by `spritebatch_test.rb` (`add_layer` on a non-layered batch is the
+     one suite that drives a real `love::Exception` through the translator; most
+     error tests raise mruby-native errors directly and never throw C++). Fix:
+     copy the message into `thread_local` storage, let the catch unwind cleanly,
+     then `mrb_raise` *after* the catch block. Affects the whole binding layer;
+     full suite still 24/24 functional, exception-raising tests still pass.
+   - **Everything else clean.** Remaining `*_test.rb`: 0 errors, 0 definite/possible
+     leaks. The pack/unpack engine (`data_test.rb`), require resolver
+     (`loader_test.rb`), and the GL/glslang/freetype/decoder/openal paths all came
+     back uninitialised-read- and leak-clean. (The only residual LEAK-SUMMARY noise
+     is `indirectly lost` dbus children under the suppressed dbus parent — library
+     noise, not counted as errors.)
    - **Regression command:** `DISPLAY=:1 valgrind --leak-check=full
-     --track-origins=yes --suppressions=testing/mruby/valgrind_suppressions.txt
+     --show-leak-kinds=all --track-origins=yes
+     --errors-for-leak-kinds=definite,possible
+     --suppressions=testing/mruby/valgrind_suppressions.txt
      testing/mruby/love_mrb_harness testing/mruby/<test>.rb` (expect ERROR SUMMARY
-     0, definitely lost 0).
-   **Findings:** 2 bugs (box2d uninitialised `m_u`; `~Event()` queue leak) — both
+     0; definitely + possibly lost 0).
+   **Findings:** 5 bugs — box2d uninitialised `m_u`; `~Event()` queue leak;
+   `SDL_GetJoysticks`/`SDL_GetDisplays` array leaks; and `mrbx_catchexcept`
+   raising via longjmp inside a C++ catch (systemic exception-object leak) — all
    fixed.
 
 6. **[ ] Static analysis** — `scan-build` (clang analyzer) and/or GCC `-fanalyzer`

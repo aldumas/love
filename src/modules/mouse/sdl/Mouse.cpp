@@ -192,6 +192,8 @@ void Mouse::getGlobalPosition(double &x, double &y, int &displayindex) const
 	if (displayindex >= displaycount)
 		displayindex = 0;
 
+	SDL_free(displays);
+
 	x = (double)mx;
 	y = (double)my;
 }

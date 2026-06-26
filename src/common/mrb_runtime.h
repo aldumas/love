@@ -276,22 +276,30 @@ void mrbx_register_type(mrb_state *mrb, const love::Type &type, const MrbReg *fu
  * mruby RuntimeError. Returns true if an exception was caught and an mruby
  * error raised (in which case the caller should return mrb_nil_value()).
  *
- * Mirrors the Lua-era luax_catchexcept, but mruby's exception model lets us
- * raise directly rather than relying on longjmp semantics.
+ * mrb_raise does a longjmp, so it must be called *after* the catch block has
+ * exited: raising from inside the handler would skip __cxa_end_catch and leak
+ * the in-flight C++ exception object plus its message. We copy the message into
+ * thread_local storage (which survives the longjmp without a per-call leak, and
+ * preserves long messages such as shader compile logs) and raise once the catch
+ * has unwound cleanly.
  **/
 template <typename T>
 bool mrbx_catchexcept(mrb_state *mrb, const T &func)
 {
+	static thread_local std::string message;
+	bool caught = false;
 	try
 	{
 		func();
 	}
 	catch (const std::exception &e)
 	{
-		mrb_raise(mrb, mrb_class_get(mrb, "RuntimeError"), e.what());
-		return true;
+		message = e.what();
+		caught = true;
 	}
-	return false;
+	if (caught)
+		mrb_raise(mrb, mrb_class_get(mrb, "RuntimeError"), message.c_str());
+	return caught;
 }
 
 } // love

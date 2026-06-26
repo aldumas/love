@@ -391,6 +391,8 @@ void JoystickModule::checkGamepads(const std::string &guid) const
 				stick->openGamepad(sdlid);
 		}
 	}
+
+	SDL_free(sdlsticks);
 }
 
 std::string JoystickModule::getDeviceGUID(int64 deviceid) const
