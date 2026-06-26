@@ -240,7 +240,7 @@ love::filesystem::FileData *ImageData::encode(FormatHandler::EncodedFormat encod
 
 size_t ImageData::getSize() const
 {
-	return size_t(getWidth() * getHeight()) * getPixelSize();
+	return size_t(getWidth()) * size_t(getHeight()) * getPixelSize();
 }
 
 void *ImageData::getData() const

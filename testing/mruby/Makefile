@@ -343,8 +343,73 @@ MODULE_SRCS := \
 
 SRCS := $(CORE_SRCS) $(MODULE_SRCS)
 
+# --- Fuzzing (§E row 7) --------------------------------------------------
+# libFuzzer harnesses over the data-driven parsers (pack/unpack, the require
+# path resolver, the image/sound/font decoders). One source (fuzz/fuzz_targets.cpp)
+# is compiled once per target via -DFZ_<TARGET>; all share the same VM bring-up
+# and the same instrumented object set.
+#
+#   make fuzz                build all five fuzz binaries (fuzz/fuzz_<target>)
+#   make fuzz-clean          remove the fuzz objects + binaries
+#
+# libFuzzer is clang-only, so the fuzz build uses clang++ regardless of $(CXX).
+# The port's own TUs ($(SRCS), which include the lodepng/stb/dr_* decoder cpps)
+# are compiled with SanitizerCoverage + ASan + UBSan, so the parsers we target are
+# coverage-guided and fully checked. The prebuilt third-party archives
+# (gfx/glslang/box2d/physfs/lz4/wuff/xxhash) and libmruby/freetype stay
+# uninstrumented — same partial-instrumentation model the SANITIZE knob uses; the
+# sanitizer's global malloc/new interceptors still catch heap faults inside them.
+FUZZ_CXX      ?= clang++
+FUZZ_DIR      := $(HERE)fuzz
+FUZZ_OBJ_DIR  := $(FUZZ_DIR)/.obj
+FUZZ_DEFS     := -DLOVE_SRC_DIR='"$(LOVE_SRC)"' -DLOVE_MRUBY_NO_VULKAN -DLOVE_MRUBY
+# -fno-sanitize=vptr: only the binding layer is instrumented (archives/mruby are
+# not), so the polymorphic-type check both fails to link and can't see across the
+# boundary — exactly as the `undefined` SANITIZE kind documents.
+FUZZ_SAN      := -fsanitize=address,undefined -fno-sanitize=vptr
+FUZZ_CXXFLAGS := -std=$(CXXSTD) -g -O1 -fno-omit-frame-pointer $(FUZZ_SAN) $(FUZZ_DEFS)
+
+# Every port TU except harness.cpp (libFuzzer supplies main). delay_stub stays.
+FUZZ_SRCS     := $(filter-out %harness.cpp,$(SRCS))
+FUZZ_SRC_LOVE := $(filter $(LOVE_SRC)/%,$(FUZZ_SRCS))
+FUZZ_SRC_HERE := $(filter $(HERE)%,$(FUZZ_SRCS))
+FUZZ_OBJS     := $(patsubst $(LOVE_SRC)/%.cpp,$(FUZZ_OBJ_DIR)/src/%.o,$(FUZZ_SRC_LOVE)) \
+                 $(patsubst $(HERE)%.cpp,$(FUZZ_OBJ_DIR)/here/%.o,$(FUZZ_SRC_HERE))
+FUZZ_ARCHIVES := $(PHYSFS_A) $(LZ4_A) $(WUFF_A) $(GFX_A) $(GLSLANG_A) $(XXHASH_A) $(BOX2D_A)
+
+FUZZ_BINS     := $(FUZZ_DIR)/fuzz_data $(FUZZ_DIR)/fuzz_loader $(FUZZ_DIR)/fuzz_image \
+                 $(FUZZ_DIR)/fuzz_sound $(FUZZ_DIR)/fuzz_font
+
+fuzz: $(FUZZ_BINS)
+
+# Shared instrumented objects (built once, linked into every target).
+$(FUZZ_OBJ_DIR)/src/%.o: $(LOVE_SRC)/%.cpp | $(MRUBY_A)
+	@mkdir -p $(dir $@)
+	$(FUZZ_CXX) $(FUZZ_CXXFLAGS) -fsanitize=fuzzer-no-link $(INCLUDES) -c $< -o $@
+
+$(FUZZ_OBJ_DIR)/here/%.o: $(HERE)%.cpp | $(MRUBY_A)
+	@mkdir -p $(dir $@)
+	$(FUZZ_CXX) $(FUZZ_CXXFLAGS) -fsanitize=fuzzer-no-link $(INCLUDES) -c $< -o $@
+
+# Per-target binary: the driver TU (compiled inline with its -DFZ_<T>) links the
+# shared objects + the prebuilt archives, with full -fsanitize=fuzzer.
+define FUZZ_RULE
+$(FUZZ_DIR)/fuzz_$(2): $(FUZZ_DIR)/fuzz_targets.cpp $(FUZZ_OBJS) $(FUZZ_ARCHIVES)
+	$(FUZZ_CXX) $(FUZZ_CXXFLAGS) -fsanitize=fuzzer -DFZ_$(1) $(INCLUDES) \
+		$(FUZZ_DIR)/fuzz_targets.cpp $(FUZZ_OBJS) $(FUZZ_ARCHIVES) \
+		$(LDFLAGS) $(FUZZ_SAN) $(LDLIBS) -o $$@
+endef
+$(eval $(call FUZZ_RULE,DATA,data))
+$(eval $(call FUZZ_RULE,LOADER,loader))
+$(eval $(call FUZZ_RULE,IMAGE,image))
+$(eval $(call FUZZ_RULE,SOUND,sound))
+$(eval $(call FUZZ_RULE,FONT,font))
+
+fuzz-clean:
+	rm -rf $(FUZZ_OBJ_DIR) $(FUZZ_BINS)
+
 # --- Targets -------------------------------------------------------------
-.PHONY: all run mruby clean check-ledger install-hooks
+.PHONY: all run mruby clean check-ledger install-hooks fuzz fuzz-clean
 
 all: $(BIN)
 

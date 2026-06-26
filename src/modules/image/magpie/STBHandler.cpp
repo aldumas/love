@@ -87,13 +87,13 @@ FormatHandler::DecodedImage STBHandler::decode(Data *data)
 	if (stbi_is_hdr_from_memory(buffer, bufferlen))
 	{
 		img.data = (unsigned char *) stbi_loadf_from_memory(buffer, bufferlen, &img.width, &img.height, &comp, 4);
-		img.size = img.width * img.height * 4 * sizeof(float);
+		img.size = (size_t) img.width * img.height * 4 * sizeof(float);
 		img.format = PIXELFORMAT_RGBA32_FLOAT;
 	}
 	else
 	{
 		img.data = stbi_load_from_memory(buffer, bufferlen, &img.width, &img.height, &comp, 4);
-		img.size = img.width * img.height * 4;
+		img.size = (size_t) img.width * img.height * 4;
 		img.format = PIXELFORMAT_RGBA8_UNORM;
 	}
 

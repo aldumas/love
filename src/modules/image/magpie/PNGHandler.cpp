@@ -181,7 +181,7 @@ PNGHandler::DecodedImage PNGHandler::decode(Data *fdata)
 
 	img.width  = (int) width;
 	img.height = (int) height;
-	img.size   = width * height * (state.info_raw.bitdepth * 4 / 8);
+	img.size   = (size_t) width * height * (state.info_raw.bitdepth * 4 / 8);
 	img.format = state.info_raw.bitdepth == 16 ? PIXELFORMAT_RGBA16_UNORM : PIXELFORMAT_RGBA8_UNORM;
 
 	// LodePNG keeps raw 16 bit images stored as big-endian.

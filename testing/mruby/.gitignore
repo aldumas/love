@@ -4,3 +4,23 @@ love_mrb_harness_ubsan
 love_mrb_harness_tsan
 .obj/
 build/
+
+# Fuzzing (§E row 7): generated build outputs + working/evolved corpora. The
+# fuzz source, seed inputs (fuzz/seeds/), and crash reproducers (fuzz/findings/)
+# are tracked; the binaries, instrumented objects, and mutated corpora are not.
+fuzz/.obj/
+fuzz/fuzz_data
+fuzz/fuzz_loader
+fuzz/fuzz_image
+fuzz/fuzz_sound
+fuzz/fuzz_font
+fuzz/corpus_*/
+fuzz/crashes/
+fuzz/logs/
+fuzz/logs2/
+# stray libFuzzer artifacts if a run is launched without -artifact_prefix
+fuzz/oom-*
+fuzz/crash-*
+fuzz/slow-unit-*
+fuzz/leak-*
+fuzz/timeout-*

@@ -101,7 +101,7 @@ static T *readEXRChannels(int width, int height, T *rgba[4], T one)
 
 	try
 	{
-		data = new T[width * height * 4];
+		data = new T[(size_t) width * height * 4];
 	}
 	catch (std::exception &)
 	{

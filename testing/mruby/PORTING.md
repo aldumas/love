@@ -864,8 +864,11 @@ them changes when we swap.
   SDL return-array leaks, and the systemic `mrbx_catchexcept` longjmp-in-catch
   exception-object leak). Static analysis is done too (row 6: binding layer clean
   across clang-analyzer/cppcheck/`-fanalyzer`; root-caused + fixed a harness
-  `mrb_noreturn` build quirk that was masking the signal). Fuzzing and the
-  real-exe sanitizer pass are still pending there.
+  `mrb_noreturn` build quirk that was masking the signal). Fuzzing is done too
+  (row 7: five libFuzzer targets over the parsers under ASan+UBSan — found + fixed
+  a signed-int overflow miscomputing decoded-image size across four magpie
+  handlers, and documented two upstream allocation-amplification DoS surfaces).
+  The real-exe sanitizer pass (row 8) is still pending there.
 
 ---
 
@@ -901,7 +904,7 @@ tasks), so they are untagged and the pre-commit hook ignores them.
 | 4 | ThreadSanitizer (TSan) | data races · lock-order issues across threads | ✅ done (2 races found + fixed; suite clean) |
 | 5 | Valgrind / memcheck | uninitialized reads + the *uninstrumented* archives & mruby | ✅ done (5 bugs found + fixed: box2d uninit `m_u`, `~Event()` queue leak, 2 SDL array leaks, `mrbx_catchexcept` longjmp-in-catch exception leak; suite clean) |
 | 6 | Static analysis (clang analyzer / `-fanalyzer` / cppcheck) | unreached error/rare-kwarg paths | ✅ done (binding layer clean; root-caused + fixed a `mrb_noreturn` build quirk that was hiding the signal) |
-| 7 | Fuzzing (libFuzzer / AFL++) | data-driven entry points (`pack`/`unpack`, loader, decoders) | ☐ pending |
+| 7 | Fuzzing (libFuzzer) | data-driven entry points (`pack`/`unpack`, loader, decoders) | ✅ done (1 UBSan int-overflow fixed across 4 image handlers; 2 alloc-amplification cases noted) |
 | 8 | Real `love` exe under sanitizers | full boot pipeline / shutdown ordering vs a real game | ☐ partial (one ASan run) |
 
 ### Shared harness mechanism (read once, applies to the sanitizer rows)
@@ -1169,11 +1172,71 @@ tasks), so they are untagged and the pre-commit hook ignores them.
    quirk (strict `c++17` → `gnu++17`) that had been suppressing the analyzers'
    ability to see past `mrb_raise` guards.
 
-7. **[ ] Fuzzing** the data-driven entry points — the `pack`/`unpack` format-string
-   engine, `require`'s path resolver, and the image/sound/font decoders (already
-   fed untrusted bytes) — with libFuzzer or AFL++ over a thin harness, run under
-   ASan+UBSan. Highest setup cost (each target needs its own fuzz harness), but
-   these are the parsers most exposed to malformed input. **Findings:** _(none yet)_
+7. **[x] Fuzzing — done 2026-06-25.** Five libFuzzer harnesses over the
+   data-driven parsers, one per target, all built + run under **ASan+UBSan**.
+   Harness + build + seeds live in `testing/mruby/fuzz/` (see its README); one
+   source `fuzz_targets.cpp` is compiled per target via `-DFZ_<T>`, sharing one
+   mruby VM (every `Love::` module opened) and driving the target through the real
+   Ruby binding (`__fuzz(bytes)`, rescuing expected errors so only a memory/UB
+   fault stops the run). Built with `make fuzz` (clang — libFuzzer is clang-only);
+   the port's own TUs (incl. the lodepng/stb/dr_* decoder cpps) get
+   SanitizerCoverage+ASan+UBSan, so the parsers are coverage-guided and fully
+   checked, while the prebuilt archives + libmruby/freetype stay uninstrumented
+   (the same partial-instrumentation model the `SANITIZE` knob uses; heap faults
+   inside them are still caught via the global malloc/new interceptors).
+   - **Targets + coverage reached (full-length runs, ASan+UBSan):** `fuzz_data`
+     (`pack`/`unpack`/`get_packed_size`, the native lstrlib engine) 428k execs;
+     `fuzz_loader` (require-path resolver + `load`) 524k execs; `fuzz_image`
+     (`new_image_data`/`new_compressed_data`) cov ≈1.7k edges into lodepng/stb/
+     dds; `fuzz_sound` (`new_decoder`/`new_sound_data`) cov ≈1.7k into the
+     wave/flac/mp3/vorbis/modplug decoders; `fuzz_font` (freetype/BMFont
+     rasterizers) 136k execs. Seeded from real PNG/OGG/TTF fixtures +
+     valid `pack` format strings (`fuzz/seeds/`).
+   - **Bug — signed-int overflow computing decoded-image byte size (UBSan, fixed).**
+     `fuzz_image` found `STBHandler.cpp:96` `img.size = img.width * img.height * 4`
+     overflowing `int` (e.g. 52736×59676) — the multiply is done in `int` and only
+     *then* widened to the `size_t img.size`, so a crafted image makes `size` wrap
+     to a wrong (small/negative→huge) value while the real pixel buffer is a
+     different size: a heap-overflow primitive downstream, reachable straight from
+     `Love::Image.new_image_data`. It's the **same pattern in four magpie sites**,
+     so all were fixed by widening the first operand to `size_t` before the
+     multiply: `STBHandler.cpp` (the 8-bit line found + the HDR line above it),
+     `image/magpie/EXRHandler.cpp` (`new T[width*height*4]` — the *allocation*
+     size, so an under-allocation→OOB-write), `image/ImageData.cpp::getSize`
+     (`size_t(getWidth()*getHeight())` — the cast applied *after* the overflowing
+     `int` multiply), and `image/magpie/PNGHandler.cpp` (here `width`/`height` are
+     `unsigned`, so a defined wrap rather than UB, but still a wrong size — widened
+     for correctness). All four are shared upstream LÖVE code (no `LOVE_MRUBY`
+     guard), so the fix helps the Lua build too. The former crash input now
+     decodes/errors cleanly; suite still 24/24. Reproducer:
+     `fuzz/findings/image_int_overflow_size.bin`.
+   - **Noted (not a port defect) — single-input allocation amplification.** A tiny
+     input can drive a multi-hundred-MB/GB allocation: stb's TGA loader sizes the
+     pixel buffer straight from header dimensions
+     (`STBHandler::decode` → `stbi_load_from_memory`, no dimension cap), and
+     `pack`'s `cN` fixed-size field allocates N bytes from the format string. Both
+     are faithful to upstream LÖVE / Lua 5.3 `string.pack` (present in mainline,
+     unguarded by policy — stb exposes `STBI_MAX_DIMENSIONS`, LÖVE doesn't set it),
+     so they are documented as a malformed-asset DoS surface, not fixed here (an
+     upstream policy change affecting both builds). Reproducers:
+     `fuzz/findings/image_stb_tga_bomb.bin`, `data_pack_large_cN.bin`.
+   - **Harness note.** An early run reported *cumulative* OOMs on `fuzz_data`/
+     `fuzz_font`; root-caused to the harness GC cadence (a full GC only every 1024
+     inputs let large transient allocations pile up between sweeps), not a leak or
+     a port bug — fixed by sweeping after every input, which also makes any *real*
+     single-input amplification (above) the only OOM libFuzzer can now report.
+     Leak detection was kept **off** during fuzzing on purpose (rows 2/5 own
+     leaks; libFuzzer's per-run check is unreliable against a persistent GC VM).
+   - **Re-run:** `make fuzz`, then per the `fuzz/README.md` run block (seed a
+     `corpus_<t>/` from `seeds/<t>/` and run each `fuzz_<t>` under
+     `ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1`). Regression-check
+     the fix by replaying `fuzz/findings/image_int_overflow_size.bin` (expect no
+     UBSan report).
+   **Findings:** 1 real bug — signed-int overflow miscomputing decoded-image size,
+   fixed across all four magpie handlers that share the pattern; plus two
+   documented upstream allocation-amplification (DoS) surfaces. The `pack`/`unpack`
+   engine, require resolver, and sound/font decoders fuzzed memory-safety- and
+   UB-clean.
 
 8. **[~] Run the real `love` (CMake `build-mrb/`) under the sanitizers** — not just
    the Makefile harness; exercises the full boot pipeline against a real game.
