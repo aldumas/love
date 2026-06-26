@@ -855,6 +855,150 @@ them changes when we swap.
     port runs one `mrb_state` per OS thread, so first-touch from two thread VMs
     would race immediately.
 
+- [ ] Revisit how a game registers callbacks (`Love.load`/`update`/`draw`/…) —
+  is reopening the `Love` module idiomatic Ruby, or is there a better shape?
+  Today a game defines its callbacks as **public singleton methods on the `Love`
+  module** — `def Love.load(args, raw); end`, `def Love.update(dt); end`,
+  `def Love.draw; end`, etc. — and the run loop discovers them with
+  `Love.respond_to?(:name)` / `Love.send(name, …)` (see `callbacks.rb` and its
+  header comment). This is a faithful, near-literal port of Lua's "assign
+  functions onto the global `love` table" idiom, but Lua-on-a-table ≠ idiomatic
+  Ruby, and it has real friction:
+  - **Name collisions with `Kernel`.** `Love.load` shadows the private
+    `Kernel#load`; the code already documents that `respond_to?` only sees the
+    callback once the game defines a *public* `Love.load`. Other callback names
+    could collide similarly (`p`, `print`, `format`, …) and the framework can't
+    control the game's chosen names.
+  - **No separation between framework and game code** — the game monkeypatches
+    the framework's own module, so framework internals and game callbacks share
+    one namespace, with no encapsulation or per-instance state.
+  - Evaluate the Ruby-idiomatic alternatives and pick one (or deliberately keep
+    the current shape and record why):
+    (a) **a game base class** the user subclasses and overrides instance methods
+        on — `class MyGame < Love::Game; def load(args, raw); end; def draw; end;
+        end` — then boot instantiates it; clean encapsulation + per-game state,
+        the most conventional Ruby/OOP approach, but the biggest departure from
+        the LÖVE mental model;
+    (b) **a mixin/`Love::Callbacks` module** the game includes into its own
+        object;
+    (c) **block/DSL registration** — `Love.on(:load) { |args, raw| … }` or
+        `Love.load { … }` — no method-name collisions, explicit registry instead
+        of `respond_to?` probing;
+    (d) **keep singleton-methods-on-`Love`** but harden it (a dedicated callback
+        registry / `Love.callbacks` namespace rather than the bare module, to
+        dodge the `Kernel` collisions).
+  - Weigh against the **port's stated goals**: it already breaks from Lua on API
+    convention (keyword args, snake_case, `?`-predicates under `Love`), so a more
+    Ruby-idiomatic callback shape is in keeping — but it changes every game's
+    entry point, so document the migration and update `nogame.rb`, the
+    `testing/mruby/*.rb` games, and the README examples to match whatever is
+    chosen. No code-site marker yet (a design decision), so this item is untagged.
+
+- [ ] Audit DragonRuby's mruby fork for patches worth adopting — **clean-room**.
+  DragonRuby ships its own patched mruby (`https://github.com/DragonRuby/
+  mruby-patched`); they have shipped a commercial game engine on mruby for years
+  and have almost certainly hit — and patched — the same VM-level rough edges
+  this port keeps working around (GC arena/longjmp-vs-RAII hazards, the 31-bit
+  boxed-int literal cap noted in §A `#data-pack`, thread/`mrb_state` isolation,
+  performance/footprint tweaks, missing core methods). Determine **what** they
+  changed to upstream mruby and **whether** we should make an equivalent change
+  here. Deliverables:
+  - Identify each customization: what mruby version/commit they forked from, then
+    what diverges — diff against that upstream base and read their commit
+    history / changelog / build config (`build_config.rb`, gembox, any `mrbgems`
+    they bundle or patch). Group findings (correctness/VM fixes · core-method
+    additions · integer/float/boxing changes · GC/memory · build/footprint ·
+    platform shims).
+  - Per customization, record a disposition in this ledger: (a) **adopt** — it
+    fixes a real problem the port has or will have (cross-reference the relevant
+    §A/§C item, e.g. the int-literal cap, the longjmp/RAII hazards); (b) **N/A** —
+    DragonRuby-engine-specific, or already handled differently here (e.g. our
+    `mrbx_*` runtime, per-thread VM model); (c) **defer** — plausibly useful, not
+    now.
+  - **Hard constraint — do NOT copy any code from that repo.** Read it only to
+    learn *what* was changed and *why*; any patch we adopt must be **independently
+    reimplemented** against our own mruby from the public problem description /
+    upstream-mruby context, with no DragonRuby source pasted or transliterated.
+    Note their license terms in the writeup so the clean-room boundary is on
+    record. No code site yet, so this item is untagged.
+
+- [ ] Implement the **Vulkan and Metal** graphics backends (the port is
+  OpenGL-only today). The `#gfx-backend` swap (§B) brought up the real
+  `graphics::Graphics` via `Graphics::createInstance()`, but **only the OpenGL
+  backend** — Vulkan and Metal are compiled out: the build defines
+  `LOVE_MRUBY_NO_VULKAN` (`testing/mruby/Makefile:54`, and the CMake
+  `LOVE_MRB_DEFS` in `cmake/LoveMruby.cmake:81`) and links only `graphics/opengl`,
+  so neither `LOVE_GRAPHICS_VULKAN` nor `LOVE_GRAPHICS_METAL` is ever defined and
+  the renderer loop in `Graphics::createInstance` (`graphics/Graphics.cpp:165`)
+  can only resolve `opengl::createInstance()`. The abstract `love::graphics`
+  interface the Ruby bindings call through is renderer-agnostic, so — exactly like
+  the OpenGL swap — **no `wrap_*_mrb.cpp` change should be needed**; this is a
+  build/link + platform-integration job, not a binding job. Pieces:
+  - **Vulkan (cross-platform — Linux/Windows/Android; testable in this env).**
+    Build/link `src/modules/graphics/vulkan/*.cpp` and define
+    `LOVE_GRAPHICS_VULKAN` (drop it from the `NO_VULKAN` exclusion in both the
+    Makefile harness and `LoveMruby.cmake`). Wire its deps: the Vulkan loader/SDK
+    headers and the VMA (Vulkan Memory Allocator) the backend uses. **SPIR-V:**
+    glslang is already linked (it backs the OpenGL shader validation/reflection),
+    so confirm it is built with the SPIR-V target enabled and that
+    `graphics/vulkan` shader compilation path is reachable. **Window/surface:** the
+    SDL window backend currently creates a GL context — the Vulkan path needs a
+    `VK_KHR_surface` from the SDL window instead (`window/sdl/Window.cpp`
+    `setWindow`/context creation), under the renderer kind.
+  - **Metal (Apple-only — macOS/iOS; NOT testable in this Linux dev env).**
+    Build/link `src/modules/graphics/metal/*` (Objective-C++ `.mm` TUs), define
+    `LOVE_GRAPHICS_METAL`, link the Metal/QuartzCore frameworks, and create a
+    `CAMetalLayer`-backed surface from the SDL window. Shader path is
+    glslang→SPIR-V→SPIRV-Cross→MSL — confirm SPIRV-Cross is available/linked.
+    This can only be brought up and verified on Apple hardware, so it likely lands
+    as a separate, untested-here slice gated behind the Apple platform.
+  - **Renderer selection.** Once more than one backend exists, the
+    `getRenderers`/`setRenderers`/`rendererOrder` machinery (`graphics/Graphics.cpp`)
+    becomes live; decide whether to expose renderer choice / `get_renderer_info`
+    to Ruby and honor a `conf` renderer preference, and update the
+    `#gfx-backend` §B note (which currently states Vulkan/Metal are out of the
+    build) when this lands.
+  - **Verification.** Vulkan: run the `testing/mruby/*.rb` graphics games + the
+    graphics test suite against the Vulkan backend under `DISPLAY=:1` (and fold it
+    into the §E sanitizer rows). Metal: deferred to an Apple host. No code-site
+    marker yet (it un-excludes + links backends rather than guarding a tagged
+    deferral site), so this item is untagged.
+
+- [ ] Support compiling the port for **Windows** targets (it builds Linux-only
+  today). Upstream LÖVE's Lua build already ships on Windows, so the engine `src/`
+  is largely Windows-clean (the `LOVE_WINDOWS`/`_WIN32` guards and the win32-only
+  source paths already exist and the Lua build exercises them); the gap is the
+  **mruby parallel-path build plumbing**, which is currently Unix-only:
+  - **CMake (`cmake/LoveMruby.cmake`).** It assumes a Linux host throughout —
+    `find_package(PkgConfig REQUIRED)` + `pkg_check_modules` for freetype /
+    harfbuzz / openal (and the vorbis/ogg/modplug/theora system libs the modules
+    link), a hardcoded `SDL_LIBDIR=/usr/local/lib`, `.a`/`.so` artifacts, and an
+    implicit Linux platform define. For MSVC there is no pkg-config: source the
+    deps via vcpkg / `find_package` / prebuilt bundles (upstream uses its
+    "megasource" dep pack for Windows) instead, set `LOVE_WINDOWS`/`_WIN32`
+    appropriately, and emit `.exe` + `liblove.dll`/`.lib` (the one-symbol
+    `love_mrb_main` ABI carries over) with the Windows icon/manifest resource.
+  - **libmruby for Windows.** `libmruby.a` is built by the Unix
+    `make -C testing/mruby mruby` recipe against a host Ruby; Windows needs mruby
+    built with an MSVC/mingw `build_config.rb` (native on Windows, or a mingw-w64
+    cross-build from this Linux env).
+  - **Dev harness Makefile.** `testing/mruby/Makefile` is GNU-make + Unix tools
+    and the test run loop needs `DISPLAY=:1` (X11). Windows verification would go
+    through the CMake harness target (not the Makefile), with the X11 assumption
+    dropped; decide whether the Makefile harness stays Linux-only and CMake is the
+    cross-platform path (consistent with `CMAKE_MIGRATION.md`).
+  - **Decide the toolchain + what's testable here.** Native **MSVC** and/or
+    **mingw-w64**. Only a **mingw-w64 cross-compile from this Linux box** can be
+    built/smoke-tested without a Windows host; native MSVC + real-window runtime
+    verification needs a Windows machine, so that part likely lands as an
+    unverified-here slice. Renderer note: OpenGL works on Windows via WGL (no
+    extra work); the Vulkan/Metal item above is orthogonal (Metal is Apple-only).
+  - **Cross-references:** update `SYNC.md`/`CMAKE_MIGRATION.md` and the §B
+    `#gfx-backend`/build notes as platforms are added; this is the first step of a
+    broader "ship the port on all of upstream's platforms" effort (macOS, Android,
+    iOS would each be their own ledger items). No code-site marker (build/toolchain
+    plumbing, not a guarded deferral site), so this item is untagged.
+
 - Broader bug-hunt beyond ASan — promoted to its own section so each tool is a
   self-contained, context-clear-safe run and the whole set is one roster to work
   from. **See §E. Bug-hunt tool roster.** ASan, LeakSanitizer, and UBSan are done
@@ -930,6 +1074,46 @@ tasks), so they are untagged and the pre-commit hook ignores them.
   (TSan needs `setarch -R` too: `… setarch -R ./<bin> "$t" …`.)
 - **Findings home:** record inline under each tool here, mirroring the
   memory-audit item's style (tool · how invoked · what was found · fix · result).
+
+### Driver script (run the whole roster, emit a Claude-followable report)
+
+- [ ] Write one driver script (e.g. `testing/mruby/run_bug_hunt.sh`) that runs
+  the **entire §E roster** end to end and writes a single result file a fresh
+  Claude session can act on cold. Today each tool is run by hand from its row's
+  re-run command; this collapses them into one reproducible entry point.
+  - **Scope = every row, at full coverage.** ASan (row 1), LSan (row 2), UBSan
+    (row 3), TSan (row 4), Valgrind/memcheck (row 5), static analysis (row 6),
+    fuzzing (row 7), and the real-exe sanitizer pass (row 8). Each runs at **full
+    coverage across ALL tests / TUs**, never a subset or a cheaper mode — that is
+    the standing rule for this roster (it is why row 5 insists on
+    `--leak-check=full` on every test and row 6 on all 161 TUs). Drive each tool
+    from its row's documented build + re-run command so the script and the ledger
+    can't drift: the `SANITIZE=address|undefined|thread` Makefile harness, the
+    normal harness under Valgrind, the `clang++ --analyze`/cppcheck/`-fanalyzer`
+    passes, `make fuzz` + the `fuzz/README.md` run block, and the CMake
+    `-DLOVE_MRB_SANITIZE=` real-exe builds. Honor the shared prerequisites
+    (`DISPLAY=:1`; `setarch -R` for TSan; the per-tool suppression files).
+  - **Output: one structured result file** (e.g. `bug_hunt_report.md` under a
+    gitignored scratch/output dir, with a machine-parseable summary table plus a
+    per-finding section). For each tool record: invocation, pass/fail, the
+    suppression file used, wall-clock, and **per finding** the bug class, the
+    file:line + symbol, the sanitizer/origin stack (or a path to the saved raw
+    log), and the **exact repro/regression command** — i.e. everything the §E
+    rows capture by hand, so Claude can open the file after a context clear and
+    follow up on any bug without re-deriving how to reproduce it. Save each tool's
+    full raw log alongside the summary (referenced by path) rather than inlining
+    megabytes.
+  - **Robustness:** don't abort the whole run on the first tool's failure —
+    run them all (or take a `--only <tool>` / `--from <tool>` selector), capture
+    each result, and reflect partial completion in the report so a long run that
+    dies midway still yields actionable output. A tool with findings is a
+    successful *run* (exit 0 for the driver) but a non-clean *result* — make that
+    distinction explicit in the summary so "the script failed" and "the code has
+    a bug" never get conflated. Note that builds are the slow part: reuse the
+    per-kind binaries/build dirs across invocations where safe.
+  - **Keep it the single source of truth for "run all the tools":** when a future
+    row is added or a re-run command changes, update the script too. No port code
+    site, so this item is untagged.
 
 ### The tools
 
