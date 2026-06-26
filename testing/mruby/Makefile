@@ -31,7 +31,15 @@ SCRIPT ?= $(HERE)sample.rb
 # --- Toolchain -----------------------------------------------------------
 CC       ?= gcc
 CXX      ?= g++
-CXXSTD   ?= c++17
+# gnu++17 (not strict c++17) to match the real CMake build, which sets
+# CMAKE_CXX_STANDARD 17 with extensions left ON (CMake's default) and so compiles
+# with -std=gnu++17. The distinction matters: strict -std=c++17 defines
+# __STRICT_ANSI__, under which mruby's mrb_noreturn macro (mruby/common.h gates it
+# on __STDC_VERSION__ / !__STRICT_ANSI__) expands to nothing — so mrb_raise & co.
+# lose their noreturn attribute. That both diverges from shipped behaviour and
+# makes static analysis (§E row 6) emit spurious null-deref/div-by-zero reports on
+# the impossible paths after an mrb_raise error check.
+CXXSTD   ?= gnu++17
 CXXFLAGS ?= -std=$(CXXSTD) -O2 -Wall
 INCLUDES := -I$(LOVE_SRC) -I$(LOVE_SRC)/modules -I$(LOVE_SRC)/libraries -I$(MRUBY_INC) -I$(MRUBY_GEN)
 # freetype + harfbuzz headers for the font module (system-installed).

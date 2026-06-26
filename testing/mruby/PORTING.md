@@ -862,8 +862,10 @@ them changes when we swap.
   TSan is done too (row 4: 2 races found + fixed), and Valgrind is done (row 5:
   5 bugs found + fixed — box2d uninitialised `m_u`, `~Event()` queue leak, two
   SDL return-array leaks, and the systemic `mrbx_catchexcept` longjmp-in-catch
-  exception-object leak). Static analysis, fuzzing, and the real-exe sanitizer
-  pass are still pending there.
+  exception-object leak). Static analysis is done too (row 6: binding layer clean
+  across clang-analyzer/cppcheck/`-fanalyzer`; root-caused + fixed a harness
+  `mrb_noreturn` build quirk that was masking the signal). Fuzzing and the
+  real-exe sanitizer pass are still pending there.
 
 ---
 
@@ -898,7 +900,7 @@ tasks), so they are untagged and the pre-commit hook ignores them.
 | 3 | UBSan | overflow · bad shift/enum/bool · null/misaligned deref · vptr confusion | ✅ done (suite clean; vptr excluded) |
 | 4 | ThreadSanitizer (TSan) | data races · lock-order issues across threads | ✅ done (2 races found + fixed; suite clean) |
 | 5 | Valgrind / memcheck | uninitialized reads + the *uninstrumented* archives & mruby | ✅ done (5 bugs found + fixed: box2d uninit `m_u`, `~Event()` queue leak, 2 SDL array leaks, `mrbx_catchexcept` longjmp-in-catch exception leak; suite clean) |
-| 6 | Static analysis (scan-build / `-fanalyzer` / cppcheck) | unreached error/rare-kwarg paths | ☐ pending |
+| 6 | Static analysis (clang analyzer / `-fanalyzer` / cppcheck) | unreached error/rare-kwarg paths | ✅ done (binding layer clean; root-caused + fixed a `mrb_noreturn` build quirk that was hiding the signal) |
 | 7 | Fuzzing (libFuzzer / AFL++) | data-driven entry points (`pack`/`unpack`, loader, decoders) | ☐ pending |
 | 8 | Real `love` exe under sanitizers | full boot pipeline / shutdown ordering vs a real game | ☐ partial (one ASan run) |
 
@@ -1108,11 +1110,64 @@ tasks), so they are untagged and the pre-commit hook ignores them.
    raising via longjmp inside a C++ catch (systemic exception-object leak) — all
    fixed.
 
-6. **[ ] Static analysis** — `scan-build` (clang analyzer) and/or GCC `-fanalyzer`
-   over the `wrap_*_mrb.cpp` + `mrb_runtime.cpp` TUs, for leak/null/use-after-free
-   paths the dynamic runs don't reach (error branches, rare kwarg combinations).
-   `cppcheck` as a cheap second opinion. No runtime; wrap the existing compile
-   (`scan-build make -C testing/mruby`). **Findings:** _(none yet)_
+6. **[x] Static analysis — done 2026-06-25.** Ran three analyzers at full
+   coverage over the **port's own 161 directly-compiled TUs** (`$(SRCS)`: all
+   `wrap_*_mrb.cpp` + `mrb_runtime.cpp` + the native module/`common` impls — the
+   same scope the `SANITIZE` knob instruments; the prebuilt third-party archives
+   gfx/glslang/box2d/physfs/lz4/wuff/xxhash + libmruby are out of scope, as for
+   the sanitizer rows). `scan-build` isn't installed, so the clang analyzer was
+   driven directly (`clang++ --analyze`, which *is* scan-build's engine).
+   - **Tool 1 — clang static analyzer**, full production checker set
+     (`-analyzer-checker=core,cplusplus,deadcode,nullability,security,unix,optin`,
+     minus the noisy `optin.performance.Padding`), all 161 TUs.
+   - **Tool 2 — cppcheck 2.13** (`--enable=warning,performance,portability`,
+     `--platform=unix64`, `-DLOVE_LINUX -DLOVE_LITTLE_ENDIAN`), the 155
+     module/common TUs.
+   - **Tool 3 — GCC 13 `-fanalyzer`** (`+taint`) over the 22 binding-layer TUs
+     (`wrap_*_mrb` + `mrb_runtime` + `LuaThread_mrb`). C++ support is limited in
+     GCC 13, so a weaker signal, but clean.
+
+   **Result: no real defect in the port's binding layer.** Consistent with the
+   ASan/LSan/UBSan/TSan/Valgrind rows. cppcheck and `-fanalyzer` reported **zero**
+   findings in any `wrap_*_mrb.cpp` / `mrb_runtime.cpp`.
+
+   - **Root-caused a build quirk that was masking the analysis (fixed).** The
+     first clang pass produced ~17 reports in the wrap files — 15 "Called C++
+     object pointer is null" + 2 "Division by zero" — *all* on the path right
+     after an `if (!x) mrb_raise(...)` guard. `mrb_raise`/`mrb_raisef`/etc. are
+     declared `mrb_noreturn` (they longjmp), so those paths are unreachable. But
+     `mruby/common.h` gates `mrb_noreturn` on `__STDC_VERSION__` (a C-only macro)
+     then `__GNUC__ && !__STRICT_ANSI__` — and the harness Makefile compiled with
+     strict **`-std=c++17`**, which *defines* `__STRICT_ANSI__` and leaves
+     `__STDC_VERSION__` undefined, so `mrb_noreturn` expanded to **nothing**.
+     Re-running the analyzer with `-std=gnu++17` (noreturn active) collapsed all
+     17 to zero, confirming none hid a real bug. **Fix:** the real CMake build
+     already uses gnu++17 (`CMAKE_CXX_STANDARD 17` with extensions left ON, the
+     CMake default → `-std=gnu++17`), so the harness was the outlier; changed
+     `testing/mruby/Makefile` `CXXSTD` from `c++17` to `gnu++17` to match shipped
+     behaviour. This also keeps every future §E re-run's signal clean.
+   - **`wrap_DataModule_mrb.cpp:918` (`else num = u.n;`) — unreachable dead code,
+     not a bug.** Inherited from the Lua `lstrlib` `unpack` port. `union PkFtypes`
+     makes `d` and `n` both `double`, and `getdetails` only ever sets a float
+     `size` to `sizeof(float)`(4) or `sizeof(double)`(8), so the first two arms
+     always catch it; the `else` (for a distinct `lua_Number` width, which here
+     equals `double`) is never reached. Left as-is; optional cleanup.
+   - **Everything else is upstream LÖVE / bundled third-party, not port code, and
+     present in mainline** — out of scope, not fixed: `optin.cplusplus.VirtualCall`
+     in `File`/`NativeFile`/`Source`/`Event`/`Joystick`/`Mouse`/`ImageData` ctors
+     & dtors (the deliberate base-class pattern); dead stores (`offsetSeconds`,
+     `valend`); realloc-without-temp on OOM paths (`PNGHandler`, `SoundData`);
+     `Keyboard` enum-cast range; and all `libraries/*` noise (lodepng, tinyexr,
+     stb, dr_mp3, box2d, ddsparse).
+   - **Re-run command** (full coverage, from `testing/mruby/`): mirror the build
+     flags, then for each TU in `$(SRCS)` under `src/modules` + `src/common`:
+     `clang++ --analyze -Xclang -analyzer-output=text -std=gnu++17 <CXXFLAGS/INCLUDES>
+     -Xclang -analyzer-checker=core,cplusplus,deadcode,nullability,security,unix,optin
+     -Xclang -analyzer-disable-checker=optin.performance.Padding <tu> -o /dev/null`.
+     (With the Makefile now on gnu++17, the analyzer's flags already match.)
+   **Findings:** no binding-layer bugs; fixed the harness `mrb_noreturn` build
+   quirk (strict `c++17` → `gnu++17`) that had been suppressing the analyzers'
+   ability to see past `mrb_raise` guards.
 
 7. **[ ] Fuzzing** the data-driven entry points — the `pack`/`unpack` format-string
    engine, `require`'s path resolver, and the image/sound/font decoders (already
