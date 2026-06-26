@@ -999,6 +999,106 @@ them changes when we swap.
     iOS would each be their own ledger items). No code-site marker (build/toolchain
     plumbing, not a guarded deferral site), so this item is untagged.
 
+- [ ] **macOS** target. Like the Windows item, the engine `src/` already builds
+  on macOS for the Lua build (`LOVE_MACOS`/`LOVE_APPLE` guards, the Cocoa/`.mm`
+  source paths exist); the gap is the mruby parallel-path plumbing. CMake needs
+  the Apple toolchain path (frameworks instead of pkg-config for some deps —
+  OpenAL/CoreAudio, Cocoa, OpenGL/Metal), a macOS libmruby `build_config.rb`, an
+  `.app` bundle layout, and code-signing/notarization hooks for distribution.
+  Ties to the **Metal** backend item (the preferred renderer on Apple). Buildable
+  and verifiable only on Apple hardware, so unverified in this Linux env. Untagged.
+- [ ] **Android** target. The heaviest platform: NDK toolchain, the Gradle/APK
+  build, JNI activity glue, asset packing into the APK (physfs reads from the
+  APK), the Android save-storage routing (already bound — §A `#fs-platform`
+  `set_android_save_external`), GLES/Vulkan renderer selection, and a mruby
+  `build_config.rb` cross-compiled per ABI (arm64/armv7/x86_64). Mobile lifecycle
+  + touch/sensor (ported, §A) must be exercised on-device. Verifiable only on a
+  device/emulator. Untagged.
+- [ ] **iOS** target. Apple mobile: the Xcode project / `.ipa`, the iOS libmruby
+  cross-build, Metal renderer (ties to that item), the touch/sensor input family
+  (ported), App Store signing/provisioning. Verifiable only on Apple hardware.
+  Untagged.
+- [ ] **Port & run LÖVE's official testsuite under mruby** — the biggest
+  correctness gap. Upstream ships a comprehensive suite in `testing/`
+  (`testing/main.lua`, the `TestSuite`/`TestModule`/`TestMethod` classes in
+  `testing/classes/`, and `testing/tests/*.lua` — 21 files, **~364 test
+  functions**, e.g. ~444 assert/method sites in `graphics.lua` alone) with
+  **golden reference-image comparison** (`testing/output/`, `testing/resources/`).
+  The port currently has only **24 bespoke `testing/mruby/*_test.rb`**, and no
+  reference-image regression coverage at all. Port the harness + the per-module
+  tests to the Ruby keyword-arg API (or drive the assertions against the Ruby
+  bindings) and wire up the pixel-diff image comparison. This is functional
+  coverage, complementary to the §E bug-hunt roster (which is memory/UB/race
+  tooling, not feature correctness). Untagged.
+- [ ] **Render the real error screen** (stale deferral — precondition now met).
+  `src/modules/love/callbacks.rb#error_handler` only `puts` the message +
+  backtrace to stdout; its own comment says the blue graphics error screen is
+  "omitted until graphics is ported" — but graphics **is** ported now (§B
+  `#gfx-backend`). Port the full LÖVE error screen: render via `Love::Graphics`
+  (the blue screen + formatted message), format the Ruby exception/backtrace,
+  support copy-to-clipboard and restart/quit keys, and run its own mini event
+  loop, mirroring `callbacks.lua`'s `love.errorhandler`. Untagged.
+- [ ] **Complete and honor `love.conf`** (stale stub). `boot.rb#default_config`
+  is a 6-field stub (`title`/`identity`/`append_identity`/`window{width,height}`
+  + 6 of ~17 modules) and the code admits module enable/disable from conf isn't
+  actually applied ("we simply note which ones are present"). Port the full conf
+  surface from `boot.lua`: the complete window flag set (fullscreen + fullscreentype,
+  vsync, msaa, depth, stencil, resizable, borderless, centered, min width/height,
+  display, x/y, highdpi/usedpiscale, displayindex), `t.version`, `t.console`
+  (Windows), `t.identity`/`t.appendidentity`, `t.gammacorrect`, the `t.audio`
+  block (mic, mixwithsystem), `t.window.icon`, the full module table, and
+  `t.renderers`/`t.excluderenderers` (ties to the Vulkan/Metal renderer-selection
+  item) — and actually apply module enable/disable and renderer choice. Untagged.
+- [ ] **Formal API coverage matrix.** §B asserts "every module/type/feature
+  ported," but there is no systematic Lua-`wrap_*.cpp`-vs-`wrap_*_mrb.cpp` diff to
+  prove it. Build the matrix (every Lua-exposed module function + object method →
+  its mruby binding, with a semantics note) and record each **deliberate
+  omission** with a disposition: the texture knobs (`newTextureView`,
+  `viewformats`, `computewrite`, the `@2x`-filename dpiscale autodetection — see
+  the §B graphics note), the LuaJIT-FFI fast paths (also the standalone FFI item),
+  the legacy `{name,datatype,components}` mesh-format form, the `Source#queue`
+  raw-pointer form, etc. Goal: turn "we think it's complete" into a checkable
+  artifact. Untagged.
+- [ ] **Load a plain `.love` archive as the game.** Split out from the fused-mode
+  item, which notes it as a prerequisite: today `love_mrb.cpp#load_game_source`
+  reads a raw `.rb`/`main.rb` directly off disk via stdio — there is no physfs
+  source mount and the exe can't consume a `.love` (zip) game container. Teach the
+  exe to mount a `.love` (and a game directory) as the physfs source and load
+  `main.rb` through the virtual FS, deriving identity from it — the standard LÖVE
+  game-acquisition path. Fused mode (already tracked) is then a superset. Untagged.
+- [ ] **Packaging / distribution tooling.** A way to ship a finished game per
+  platform — the love-release analog: bundle the game `.love` with the runtime
+  into a distributable (Linux AppImage/tarball, Windows `.exe`+`liblove.dll` zip,
+  macOS `.app`, Android APK, iOS IPA), including fused-binary creation once that
+  works. Depends on the per-platform build items above. Untagged.
+- [ ] **CI matrix.** Automated build + test across platforms and renderers on
+  real runners (`CMAKE_MIGRATION.md` flags CI-on-real-runner as still pending):
+  build each platform target, run the ported official testsuite + the §E
+  bug-hunt roster (or a sanitizer subset), and gate merges on them. Untagged.
+- [ ] **Performance characterization vs Lua / LuaJIT.** mruby has no JIT and the
+  LuaJIT-FFI fast paths were intentionally dropped (Data/window pointer paths,
+  the SoundData per-object cache — see §A), so the port is expected to be slower;
+  quantify it. Benchmark representative games + hot paths (per-frame draw batching,
+  pixel/sample/vertex loops, channel/thread throughput) against the Lua build,
+  identify regressions, and decide on optimizations (incl. whether to revisit the
+  dropped FFI paths via a native fast path — ties to the FFI item). Untagged.
+- [ ] **API documentation / reference.** Every signature differs from the LÖVE
+  wiki (keyword args, snake_case, `?`-predicates under `Love`). Produce a Ruby-API
+  reference (generated from the bindings if practical, or hand-written) so the port
+  is usable without reverse-engineering the wrappers; at minimum document the
+  positional→keyword and naming conventions and the per-module method list. Untagged.
+- [ ] **UTF-8 / string-encoding parity.** The Lua build bundles and uses the
+  `utf8` library (e.g. for text input, `love.keyboard`/`love.graphics` string
+  handling). Audit where LÖVE relies on it and confirm Ruby's encoding-aware
+  Strings cover the same ground, or provide the equivalent helpers; verify the
+  port handles non-ASCII text input/rendering correctly end to end. Untagged.
+- [ ] **App-lifecycle & remaining callbacks audit.** Confirm the handler table in
+  `callbacks.rb#create_handlers` covers the full LÖVE callback set, especially the
+  mobile/lifecycle ones: `lowmemory`, `focus`/`mousefocus`/`visible`,
+  `displayrotated`, `filedropped`/`directorydropped`, `resize`, and the gamepad/
+  joystick add/remove events. Cross-check against `callbacks.lua`'s handler table
+  and add any missing forwards. Untagged.
+
 - Broader bug-hunt beyond ASan — promoted to its own section so each tool is a
   self-contained, context-clear-safe run and the whole set is one roster to work
   from. **See §E. Bug-hunt tool roster.** ASan, LeakSanitizer, and UBSan are done
